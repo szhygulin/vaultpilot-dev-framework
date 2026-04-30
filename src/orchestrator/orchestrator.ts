@@ -14,11 +14,17 @@ import {
   createWorktree,
   fetchOriginMain,
   removeWorktree,
-  targetRepoPath,
+  resolveTargetRepoPath,
   type WorktreeHandle,
 } from "../git/worktree.js";
 import type { Logger } from "../log/logger.js";
-import type { AgentRecord, IssueSummary, ResultEnvelope, RunState } from "../types.js";
+import type {
+  AgentRecord,
+  AgentRegistryFile,
+  IssueSummary,
+  ResultEnvelope,
+  RunState,
+} from "../types.js";
 
 export interface OrchestratorInput {
   state: RunState;
@@ -27,10 +33,11 @@ export interface OrchestratorInput {
   maxTicks: number;
   logger: Logger;
   dryRun: boolean;
+  targetRepoPath?: string;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
-  const repoPath = await targetRepoPath(input.state.targetRepo);
+  const repoPath = await resolveTargetRepoPath(input.state.targetRepo, input.targetRepoPath);
   await fetchOriginMain(repoPath);
 
   const issuesById = new Map(input.issues.map((i) => [i.id, i]));
@@ -50,6 +57,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       desiredParallelism: input.parallelism,
       state: input.state,
       pendingIssues: pending,
+      targetRepoPath: repoPath,
     });
 
     const idleAgents = summonedAgents.filter(
@@ -116,46 +124,75 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
   await saveRunState(input.state);
 }
 
+export interface PickAgentsInput {
+  reg: AgentRegistryFile;
+  pendingIssues: IssueSummary[];
+  desiredParallelism: number;
+}
+
+export interface PickedAgent {
+  agent: AgentRecord;
+  score: number;
+}
+
+export interface PickResult {
+  reusedAgents: PickedAgent[];
+  newAgentsToMint: number;
+}
+
+/** Pure scoring: no registry mutation, no file I/O. Reusable for setup preview + runtime. */
+export function pickAgents(input: PickAgentsInput): PickResult {
+  const scored = input.reg.agents
+    .map((a) => ({ agent: a, score: agentSetScore(a, input.pendingIssues) }))
+    .sort(
+      (p, q) =>
+        q.score - p.score || cmpDateDesc(p.agent.lastActiveAt, q.agent.lastActiveAt),
+    );
+
+  const reused: PickedAgent[] = [];
+  const takenIds = new Set<string>();
+
+  for (const s of scored) {
+    if (reused.length >= input.desiredParallelism) break;
+    if (s.score <= 0) break;
+    reused.push(s);
+    takenIds.add(s.agent.agentId);
+  }
+  if (reused.length < input.desiredParallelism) {
+    for (const s of scored) {
+      if (reused.length >= input.desiredParallelism) break;
+      if (takenIds.has(s.agent.agentId)) continue;
+      reused.push(s);
+      takenIds.add(s.agent.agentId);
+    }
+  }
+
+  const newAgentsToMint = Math.max(0, input.desiredParallelism - reused.length);
+  return { reusedAgents: reused, newAgentsToMint };
+}
+
 async function summonAgents(opts: {
   desiredParallelism: number;
   state: RunState;
   pendingIssues: IssueSummary[];
+  targetRepoPath: string;
 }): Promise<AgentRecord[]> {
   const minted: AgentRecord[] = [];
 
   const summoned = await mutateRegistry((reg) => {
-    const scored = reg.agents
-      .map((a) => ({ agent: a, score: agentSetScore(a, opts.pendingIssues) }))
-      .sort((p, q) => q.score - p.score || cmpDateDesc(p.agent.lastActiveAt, q.agent.lastActiveAt));
+    const pick = pickAgents({
+      reg,
+      pendingIssues: opts.pendingIssues,
+      desiredParallelism: opts.desiredParallelism,
+    });
+    const taken: AgentRecord[] = pick.reusedAgents.map((p) => p.agent);
 
-    const taken: AgentRecord[] = [];
-    const takenIds = new Set<string>();
-
-    for (const s of scored) {
-      if (taken.length >= opts.desiredParallelism) break;
-      if (s.score <= 0) break; // remaining all zero — stop and mint generals
-      taken.push(s.agent);
-      takenIds.add(s.agent.agentId);
-    }
-
-    // Reuse existing zero-score "general" agents before minting new ones.
-    if (taken.length < opts.desiredParallelism) {
-      for (const s of scored) {
-        if (taken.length >= opts.desiredParallelism) break;
-        if (takenIds.has(s.agent.agentId)) continue;
-        taken.push(s.agent);
-        takenIds.add(s.agent.agentId);
-      }
-    }
-
-    while (taken.length < opts.desiredParallelism) {
+    for (let i = 0; i < pick.newAgentsToMint; i++) {
       const fresh = createAgent(reg);
       taken.push(fresh);
-      takenIds.add(fresh.agentId);
       minted.push(fresh);
     }
 
-    // Reflect the summon in run state for transparency / status.
     for (const a of taken) {
       if (!opts.state.agents.some((s) => s.agentId === a.agentId)) {
         opts.state.agents.push({ agentId: a.agentId, status: "idle" });
@@ -164,9 +201,8 @@ async function summonAgents(opts: {
     return taken;
   });
 
-  // Fork CLAUDE.md for any newly minted agent before they get dispatched.
   for (const m of minted) {
-    await forkClaudeMd(m.agentId);
+    await forkClaudeMd(m.agentId, opts.targetRepoPath);
   }
   return summoned;
 }
@@ -221,8 +257,7 @@ async function runOneIssue(opts: {
 }): Promise<void> {
   let worktree: WorktreeHandle | null = null;
   try {
-    // Defense-in-depth: ensure the agent's CLAUDE.md exists before we build the prompt.
-    await forkClaudeMd(opts.agent.agentId);
+    await forkClaudeMd(opts.agent.agentId, opts.repoPath);
 
     worktree = await createWorktree({
       repoPath: opts.repoPath,
@@ -240,6 +275,7 @@ async function runOneIssue(opts: {
       agent: opts.agent,
       issueId: opts.issue.id,
       targetRepo: opts.state.targetRepo,
+      targetRepoPath: opts.repoPath,
       worktreePath: worktree.path,
       branchName: worktree.branch,
       dryRun: opts.dryRun,
@@ -263,7 +299,6 @@ async function runOneIssue(opts: {
         commentUrl: env.commentUrl,
       };
 
-      // Distill + append.
       const summary = await summarizeRun({
         agent: opts.agent,
         issue: opts.issue,
@@ -287,6 +322,7 @@ async function runOneIssue(opts: {
           outcome: env.decision,
           heading: summary.heading,
           body: summary.body,
+          targetRepoPath: opts.repoPath,
         });
         if (outcome.kind === "appended") {
           opts.logger.info("specialization.appended", {

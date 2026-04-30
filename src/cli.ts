@@ -11,14 +11,14 @@ import {
   writeCurrentRunId,
 } from "./state/runState.js";
 import { loadRegistry } from "./state/registry.js";
-import { parseRangeSpec } from "./github/range.js";
+import { parseRangeSpec, describeRange } from "./github/range.js";
 import { resolveRangeToIssues } from "./github/gh.js";
 import { runOrchestrator } from "./orchestrator/orchestrator.js";
+import { approveSetup, buildSetupPreview } from "./orchestrator/setup.js";
 import { Logger } from "./log/logger.js";
-import { pruneWorktrees, targetRepoPath } from "./git/worktree.js";
+import { pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
 import type { IssueRangeSpec } from "./types.js";
 
-const DEFAULT_TARGET_REPO = "szhygulin/vaultpilot-mcp";
 const DEFAULT_MAX_TICKS = 200;
 
 export function buildCli(): Command {
@@ -29,12 +29,14 @@ export function buildCli(): Command {
     .command("run")
     .description("Run agents against a range of GitHub issues")
     .requiredOption("--agents <n>", "Number of parallel coding agents", parsePositive)
+    .requiredOption("--target-repo <owner/repo>", "Target GitHub repo (e.g. octocat/hello-world)")
     .option("--issues <range>", "Issue range: 100-150, csv 100,103,108, or all-open")
-    .option("--target-repo <owner/repo>", "Target GitHub repo", DEFAULT_TARGET_REPO)
+    .option("--target-repo-path <path>", "Local clone path of the target repo (default: $HOME/dev/<repo-name>)")
     .option("--resume", "Resume the most recent unfinished run")
     .option("--dry-run", "Intercept comment / PR / push tools with synthetic responses")
     .option("--max-ticks <n>", "Safety cap on scheduling ticks", parsePositive, DEFAULT_MAX_TICKS)
     .option("--verbose", "Mirror a colorized subset of events to stderr")
+    .option("--yes", "Auto-approve the setup preview (required for non-TTY environments)")
     .action(async (opts) => {
       await cmdRun(opts);
     });
@@ -62,12 +64,14 @@ export function buildCli(): Command {
 
 interface RunOpts {
   agents: number;
-  issues?: string;
   targetRepo: string;
+  targetRepoPath?: string;
+  issues?: string;
   resume?: boolean;
   dryRun?: boolean;
   maxTicks: number;
   verbose?: boolean;
+  yes?: boolean;
 }
 
 async function cmdRun(opts: RunOpts): Promise<void> {
@@ -97,19 +101,35 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         process.exit(2);
       }
     } catch {
-      // current-run pointer is stale — ignore and start fresh
       await clearCurrentRunId();
     }
   }
 
   const range: IssueRangeSpec = parseRangeSpec(opts.issues);
+  const repoPath = await resolveTargetRepoPath(opts.targetRepo, opts.targetRepoPath);
+
   const { open, skippedClosed } = await resolveRangeToIssues(opts.targetRepo, range);
-  for (const id of skippedClosed) {
-    console.error(`INFO: skipping closed issue #${id}`);
-  }
   if (open.length === 0) {
     console.error("ERROR: no open issues in range.");
     process.exit(2);
+  }
+
+  const registry = await loadRegistry();
+  const preview = buildSetupPreview({
+    targetRepo: opts.targetRepo,
+    targetRepoPath: repoPath,
+    rangeLabel: describeRange(range),
+    openIssues: open,
+    closedSkipped: skippedClosed,
+    parallelism: opts.agents,
+    dryRun: !!opts.dryRun,
+    resume: false,
+    registry,
+  });
+  const approved = await approveSetup({ preview, yes: !!opts.yes });
+  if (!approved) {
+    process.stderr.write("Aborted by user.\n");
+    process.exit(1);
   }
 
   const runId = makeRunId();
@@ -129,6 +149,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   logger.info("run.started", {
     runId,
     targetRepo: opts.targetRepo,
+    targetRepoPath: repoPath,
     parallelism: opts.agents,
     range: opts.issues,
     issueCount: open.length,
@@ -136,7 +157,6 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   });
 
   try {
-    const repoPath = await targetRepoPath(opts.targetRepo);
     await pruneWorktrees(repoPath);
     await runOrchestrator({
       state,
@@ -145,6 +165,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       maxTicks: opts.maxTicks,
       logger,
       dryRun: !!opts.dryRun,
+      targetRepoPath: repoPath,
     });
     logger.info("run.completed", {
       runId,
@@ -168,16 +189,30 @@ async function runResume(opts: RunOpts): Promise<void> {
   downgradeInFlightToPending(state);
   await saveRunState(state);
 
-  const repoPath = await targetRepoPath(state.targetRepo);
+  const repoPath = await resolveTargetRepoPath(state.targetRepo, opts.targetRepoPath);
   await pruneWorktrees(repoPath);
 
   const { open, skippedClosed } = await resolveRangeToIssues(state.targetRepo, state.issueRange);
-  for (const id of skippedClosed) {
-    console.error(`INFO: skipping closed issue #${id}`);
-  }
-  // Filter to issues that are still tracked in run state.
   const tracked = new Set(Object.keys(state.issues).map(Number));
   const issues = open.filter((i) => tracked.has(i.id));
+
+  const registry = await loadRegistry();
+  const preview = buildSetupPreview({
+    targetRepo: state.targetRepo,
+    targetRepoPath: repoPath,
+    rangeLabel: describeRange(state.issueRange),
+    openIssues: issues,
+    closedSkipped: skippedClosed,
+    parallelism: state.parallelism,
+    dryRun: state.dryRun,
+    resume: true,
+    registry,
+  });
+  const approved = await approveSetup({ preview, yes: !!opts.yes });
+  if (!approved) {
+    process.stderr.write("Aborted by user.\n");
+    process.exit(1);
+  }
 
   const logger = new Logger({ runId, verbose: !!opts.verbose });
   await logger.open();
@@ -194,6 +229,7 @@ async function runResume(opts: RunOpts): Promise<void> {
       maxTicks: opts.maxTicks,
       logger,
       dryRun: state.dryRun,
+      targetRepoPath: repoPath,
     });
     logger.info("run.completed", {
       runId,

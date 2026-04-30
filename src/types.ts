@@ -62,8 +62,6 @@ export const ResultEnvelopeSchema = z.object({
   memoryUpdate: z.object({
     addTags: z.array(z.string()).default([]),
     removeTags: z.array(z.string()).optional(),
-    findingTitle: z.string().optional(),
-    findingBody: z.string().optional(),
   }),
 });
 

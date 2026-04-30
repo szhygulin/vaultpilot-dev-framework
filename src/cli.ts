@@ -76,8 +76,9 @@ interface RunOpts {
 
 async function cmdRun(opts: RunOpts): Promise<void> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    console.error("ERROR: ANTHROPIC_API_KEY is not set.");
-    process.exit(2);
+    process.stderr.write(
+      "INFO: ANTHROPIC_API_KEY is not set; falling back to Claude Code OAuth credentials at ~/.claude/credentials.json.\n",
+    );
   }
 
   if (opts.resume) {

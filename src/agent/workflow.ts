@@ -66,9 +66,7 @@ Wrap it in a fenced \`\`\`json block. Schema:
   "scopeNotes": "<optional, e.g. skill issue filed at vaultpilot-security-skill#NN>",
   "memoryUpdate": {
     "addTags": ["<lowercase domain tags this issue exercised>"],
-    "removeTags": ["<optional>"],
-    "findingTitle": "<optional, ≤80 chars>",
-    "findingBody": "<optional, the breakthrough or non-obvious lesson>"
+    "removeTags": ["<optional>"]
   }
 }
 \`\`\`

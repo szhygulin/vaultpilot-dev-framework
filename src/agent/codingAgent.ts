@@ -23,6 +23,7 @@ export interface CodingAgentResult {
   costUsd?: number;
   isError: boolean;
   errorReason?: string;
+  toolUseTrace: { tool: string; input: string }[];
 }
 
 const ALLOWED_NATIVE_TOOLS = ["Bash", "Read", "Edit", "Write", "Grep", "Glob"];
@@ -61,6 +62,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
   let isError = false;
   let errorReason: string | undefined;
   let costUsd: number | undefined;
+  const toolUseTrace: { tool: string; input: string }[] = [];
 
   try {
     const stream = query({
@@ -83,7 +85,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     });
 
     for await (const msg of stream) {
-      onMessage(msg, input);
+      onMessage(msg, input, toolUseTrace);
       if (msg.type === "assistant") {
         const text = extractText(msg.message.content);
         if (text) finalText = text;
@@ -113,6 +115,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     costUsd,
     isError,
     errorReason,
+    toolUseTrace,
   };
 
   input.logger.info("agent.completed", {
@@ -128,16 +131,22 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
   return result;
 }
 
-function onMessage(msg: SDKMessage, input: CodingAgentInput): void {
+function onMessage(
+  msg: SDKMessage,
+  input: CodingAgentInput,
+  trace: { tool: string; input: string }[],
+): void {
   if (msg.type === "assistant") {
     for (const block of msg.message.content as ContentBlock[]) {
       if (block.type === "tool_use") {
         const inputStr = JSON.stringify(block.input ?? {});
+        const truncated = inputStr.length > 500 ? inputStr.slice(0, 497) + "..." : inputStr;
+        trace.push({ tool: block.name ?? "unknown", input: truncated });
         input.logger.info("agent.tool_use", {
           agentId: input.agent.agentId,
           issueId: input.issueId,
           tool: block.name,
-          input: inputStr.length > 500 ? inputStr.slice(0, 497) + "..." : inputStr,
+          input: truncated,
         });
       } else if (block.type === "text") {
         const preview = (block.text || "").slice(0, 200).replace(/\s+/g, " ").trim();

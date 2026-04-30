@@ -4,10 +4,12 @@ import {
   pendingIssueIds,
   saveRunState,
 } from "../state/runState.js";
-import { loadRegistry, saveRegistry, createAgent, ensureAgent, mutateRegistry } from "../state/registry.js";
+import { createAgent, ensureAgent, mutateRegistry } from "../state/registry.js";
 import { dispatch } from "./dispatcher.js";
 import { runCodingAgent } from "../agent/codingAgent.js";
-import { applyMemoryUpdate } from "../memory/tagger.js";
+import { jaccard } from "./routing.js";
+import { appendBlock, forkClaudeMd } from "../agent/specialization.js";
+import { summarizeRun } from "../agent/summarizer.js";
 import {
   createWorktree,
   fetchOriginMain,
@@ -16,7 +18,7 @@ import {
   type WorktreeHandle,
 } from "../git/worktree.js";
 import type { Logger } from "../log/logger.js";
-import type { AgentRecord, IssueSummary, RunState } from "../types.js";
+import type { AgentRecord, IssueSummary, ResultEnvelope, RunState } from "../types.js";
 
 export interface OrchestratorInput {
   state: RunState;
@@ -40,18 +42,19 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
     input.state.lastTickAt = new Date().toISOString();
     await saveRunState(input.state);
 
-    const reg = await loadRegistry();
-    const idleAgents = await ensureIdleAgents({
-      desiredParallelism: input.parallelism,
-      state: input.state,
-      reg,
-    });
-    await saveRegistry(reg);
-    await saveRunState(input.state);
-
     const pending = pendingIssueIds(input.state)
       .map((id) => issuesById.get(id))
       .filter((i): i is IssueSummary => i !== undefined);
+
+    const summonedAgents = await summonAgents({
+      desiredParallelism: input.parallelism,
+      state: input.state,
+      pendingIssues: pending,
+    });
+
+    const idleAgents = summonedAgents.filter(
+      (a) => !isAgentInFlight(input.state, a.agentId),
+    );
 
     const cap = Math.min(idleAgents.length, pending.length, input.parallelism - inFlight.size);
 
@@ -66,12 +69,13 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         tick: input.state.tickCount,
         source: proposal.source,
         assignments: proposal.assignments,
+        summonedAgentIds: summonedAgents.map((a) => a.agentId),
       });
 
       for (const assignment of proposal.assignments) {
-        const agent = ensureAgent(reg, assignment.agentId);
+        const agent = summonedAgents.find((a) => a.agentId === assignment.agentId);
         const issue = issuesById.get(assignment.issueId);
-        if (!issue) continue;
+        if (!agent || !issue) continue;
 
         markInFlight(input.state, agent.agentId, assignment.issueId);
         await saveRunState(input.state);
@@ -96,11 +100,9 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         });
         inFlight.set(`${agent.agentId}:${issue.id}`, promise);
       }
-      await saveRegistry(reg);
     }
 
     if (inFlight.size === 0) {
-      // No work was scheduled and nothing is running — break to avoid infinite tick loop.
       input.logger.warn("orchestrator.no_progress", {
         tick: input.state.tickCount,
         pending: pendingIssueIds(input.state).length,
@@ -114,27 +116,77 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
   await saveRunState(input.state);
 }
 
-async function ensureIdleAgents(opts: {
+async function summonAgents(opts: {
   desiredParallelism: number;
   state: RunState;
-  reg: Awaited<ReturnType<typeof loadRegistry>>;
+  pendingIssues: IssueSummary[];
 }): Promise<AgentRecord[]> {
-  const inFlightAgents = new Set(
-    opts.state.agents.filter((a) => a.status === "in-flight").map((a) => a.agentId),
-  );
+  const minted: AgentRecord[] = [];
 
-  // Lazily create agents up to parallelism cap.
-  const knownIds = new Set(opts.reg.agents.map((a) => a.agentId));
-  for (const a of opts.state.agents) knownIds.add(a.agentId);
-  while (knownIds.size < opts.desiredParallelism) {
-    const fresh = createAgent(opts.reg);
-    knownIds.add(fresh.agentId);
-    if (!opts.state.agents.some((a) => a.agentId === fresh.agentId)) {
-      opts.state.agents.push({ agentId: fresh.agentId, status: "idle" });
+  const summoned = await mutateRegistry((reg) => {
+    const scored = reg.agents
+      .map((a) => ({ agent: a, score: agentSetScore(a, opts.pendingIssues) }))
+      .sort((p, q) => q.score - p.score || cmpDateDesc(p.agent.lastActiveAt, q.agent.lastActiveAt));
+
+    const taken: AgentRecord[] = [];
+    const takenIds = new Set<string>();
+
+    for (const s of scored) {
+      if (taken.length >= opts.desiredParallelism) break;
+      if (s.score <= 0) break; // remaining all zero — stop and mint generals
+      taken.push(s.agent);
+      takenIds.add(s.agent.agentId);
     }
-  }
 
-  return opts.reg.agents.filter((a) => !inFlightAgents.has(a.agentId));
+    // Reuse existing zero-score "general" agents before minting new ones.
+    if (taken.length < opts.desiredParallelism) {
+      for (const s of scored) {
+        if (taken.length >= opts.desiredParallelism) break;
+        if (takenIds.has(s.agent.agentId)) continue;
+        taken.push(s.agent);
+        takenIds.add(s.agent.agentId);
+      }
+    }
+
+    while (taken.length < opts.desiredParallelism) {
+      const fresh = createAgent(reg);
+      taken.push(fresh);
+      takenIds.add(fresh.agentId);
+      minted.push(fresh);
+    }
+
+    // Reflect the summon in run state for transparency / status.
+    for (const a of taken) {
+      if (!opts.state.agents.some((s) => s.agentId === a.agentId)) {
+        opts.state.agents.push({ agentId: a.agentId, status: "idle" });
+      }
+    }
+    return taken;
+  });
+
+  // Fork CLAUDE.md for any newly minted agent before they get dispatched.
+  for (const m of minted) {
+    await forkClaudeMd(m.agentId);
+  }
+  return summoned;
+}
+
+function agentSetScore(agent: AgentRecord, issues: IssueSummary[]): number {
+  if (issues.length === 0) return 0;
+  let best = 0;
+  for (const i of issues) {
+    const s = jaccard(agent.tags, i.labels) + 0.05 * Math.log(1 + agent.issuesHandled);
+    if (s > best) best = s;
+  }
+  return best;
+}
+
+function cmpDateDesc(a: string, b: string): number {
+  return Date.parse(b) - Date.parse(a);
+}
+
+function isAgentInFlight(state: RunState, agentId: string): boolean {
+  return state.agents.some((a) => a.agentId === agentId && a.status === "in-flight");
 }
 
 function markInFlight(state: RunState, agentId: string, issueId: number): void {
@@ -169,6 +221,9 @@ async function runOneIssue(opts: {
 }): Promise<void> {
   let worktree: WorktreeHandle | null = null;
   try {
+    // Defense-in-depth: ensure the agent's CLAUDE.md exists before we build the prompt.
+    await forkClaudeMd(opts.agent.agentId);
+
     worktree = await createWorktree({
       repoPath: opts.repoPath,
       agentId: opts.agent.agentId,
@@ -198,17 +253,7 @@ async function runOneIssue(opts: {
       else if (env.decision === "pushback") opts.agent.pushbackCount += 1;
       else opts.agent.errorCount += 1;
 
-      await applyMemoryUpdate({
-        agent: opts.agent,
-        envelope: env,
-        issueId: opts.issue.id,
-      });
-      opts.logger.info("memory.updated", {
-        agentId: opts.agent.agentId,
-        issueId: opts.issue.id,
-        addTags: env.memoryUpdate.addTags,
-        finding: env.memoryUpdate.findingTitle ?? null,
-      });
+      applyTagUpdate(opts.agent, env);
 
       opts.state.issues[String(opts.issue.id)] = {
         status: env.decision === "error" ? "failed" : "done",
@@ -217,6 +262,48 @@ async function runOneIssue(opts: {
         prUrl: env.prUrl,
         commentUrl: env.commentUrl,
       };
+
+      // Distill + append.
+      const summary = await summarizeRun({
+        agent: opts.agent,
+        issue: opts.issue,
+        envelope: env,
+        toolUseTrace: result.toolUseTrace,
+        finalText: result.finalText,
+        logger: opts.logger,
+      });
+
+      if (summary.skip || !summary.heading || !summary.body) {
+        opts.logger.info("specialization.skipped", {
+          agentId: opts.agent.agentId,
+          issueId: opts.issue.id,
+          reason: summary.skipReason ?? "no body",
+        });
+      } else {
+        const outcome = await appendBlock({
+          agentId: opts.agent.agentId,
+          runId: opts.state.runId,
+          issueId: opts.issue.id,
+          outcome: env.decision,
+          heading: summary.heading,
+          body: summary.body,
+        });
+        if (outcome.kind === "appended") {
+          opts.logger.info("specialization.appended", {
+            agentId: opts.agent.agentId,
+            issueId: opts.issue.id,
+            heading: summary.heading,
+            bytesAppended: outcome.bytesAppended,
+            totalBytes: outcome.totalBytes,
+          });
+        } else {
+          opts.logger.warn("specialization.cap", {
+            agentId: opts.agent.agentId,
+            issueId: opts.issue.id,
+            totalBytes: outcome.totalBytes,
+          });
+        }
+      }
     } else {
       opts.agent.errorCount += 1;
       opts.state.issues[String(opts.issue.id)] = {
@@ -245,14 +332,11 @@ async function runOneIssue(opts: {
   } finally {
     if (worktree) {
       const isImplement = opts.state.issues[String(opts.issue.id)]?.outcome === "implement";
-      // For pushback / error / no-envelope we delete the local branch (no remote tracking).
-      // For implement we keep the branch so the user can inspect or push if dry-run.
       await removeWorktree({
         repoPath: opts.repoPath,
         worktree,
         deleteBranch: !isImplement,
       });
-      // Best-effort cleanup of an empty worktree dir.
       try {
         await fs.rmdir(worktree.path);
       } catch {
@@ -260,4 +344,12 @@ async function runOneIssue(opts: {
       }
     }
   }
+}
+
+function applyTagUpdate(agent: AgentRecord, env: ResultEnvelope): void {
+  const tags = new Set(agent.tags);
+  for (const t of env.memoryUpdate.addTags) tags.add(t.toLowerCase());
+  for (const t of env.memoryUpdate.removeTags ?? []) tags.delete(t.toLowerCase());
+  if (tags.size === 0) tags.add("general");
+  agent.tags = [...tags].sort();
 }

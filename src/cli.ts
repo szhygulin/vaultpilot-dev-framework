@@ -60,6 +60,7 @@ export function buildCli(): Command {
     .option("--dry-run", "Intercept comment / PR / push tools with synthetic responses")
     .option("--verbose", "Mirror a colorized event subset to stderr")
     .option("--skip-summary", "Skip summarizer + CLAUDE.md append")
+    .option("--inspect-paths <csv>", "Comma-separated absolute paths the agent may inspect read-only (e.g. prior worktrees)")
     .action(async (opts) => {
       await cmdSpawn(opts);
     });
@@ -318,6 +319,7 @@ interface SpawnOpts {
   dryRun?: boolean;
   verbose?: boolean;
   skipSummary?: boolean;
+  inspectPaths?: string;
 }
 
 async function cmdSpawn(opts: SpawnOpts): Promise<void> {
@@ -355,6 +357,10 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
     await fetchOriginMain(repoPath);
     await pruneWorktrees(repoPath);
 
+    const inspectPaths = opts.inspectPaths
+      ? opts.inspectPaths.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
+      : undefined;
+
     const result = await runIssueCore({
       agent,
       issue,
@@ -364,6 +370,7 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       dryRun: !!opts.dryRun,
       logger,
       skipSummary: !!opts.skipSummary,
+      inspectPaths,
     });
 
     const out = {

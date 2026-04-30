@@ -14,6 +14,7 @@ export interface CodingAgentInput {
   dryRun: boolean;
   logger: Logger;
   abortController?: AbortController;
+  inspectPaths?: string[];
 }
 
 export interface CodingAgentResult {
@@ -39,6 +40,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       worktreePath: input.worktreePath,
       branchName: input.branchName,
       dryRun: input.dryRun,
+      inspectPaths: input.inspectPaths,
     },
     targetRepoPath: input.targetRepoPath,
   });
@@ -72,10 +74,15 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       options: {
         model: "claude-opus-4-7",
         cwd: input.worktreePath,
+        additionalDirectories: input.inspectPaths,
         systemPrompt,
         tools: ALLOWED_NATIVE_TOOLS,
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
+        // CRITICAL: do NOT use 'bypassPermissions' — that mode skips canUseTool
+        // entirely, so the dry-run interception and push-to-main blocks would
+        // never fire. 'default' + canUseTool routes every tool call through
+        // the callback. Bypass mode shipped a real comment to GitHub during
+        // a "dry run" before this was caught (#612 comment 4350831250).
+        permissionMode: "default",
         canUseTool,
         disallowedTools,
         env: process.env,

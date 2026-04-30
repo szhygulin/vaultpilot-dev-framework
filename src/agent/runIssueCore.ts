@@ -20,6 +20,7 @@ export interface RunIssueCoreInput {
   dryRun: boolean;
   logger: Logger;
   skipSummary?: boolean;
+  inspectPaths?: string[];
 }
 
 export interface RunIssueCoreResult {
@@ -64,6 +65,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       branchName: worktree.branch,
       dryRun: input.dryRun,
       logger: input.logger,
+      inspectPaths: input.inspectPaths,
     });
 
     envelope = result.envelope;

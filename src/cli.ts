@@ -10,14 +10,16 @@ import {
   saveRunState,
   writeCurrentRunId,
 } from "./state/runState.js";
-import { loadRegistry } from "./state/registry.js";
+import { createAgent, loadRegistry, mutateRegistry } from "./state/registry.js";
 import { parseRangeSpec, describeRange } from "./github/range.js";
-import { resolveRangeToIssues } from "./github/gh.js";
-import { runOrchestrator } from "./orchestrator/orchestrator.js";
+import { getIssue, resolveRangeToIssues } from "./github/gh.js";
+import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
 import { approveSetup, buildSetupPreview } from "./orchestrator/setup.js";
 import { Logger } from "./log/logger.js";
-import { pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
-import type { IssueRangeSpec } from "./types.js";
+import { fetchOriginMain, pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
+import { forkClaudeMd } from "./agent/specialization.js";
+import { runIssueCore } from "./agent/runIssueCore.js";
+import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
 
 const DEFAULT_MAX_TICKS = 200;
 
@@ -49,7 +51,21 @@ export function buildCli(): Command {
     });
 
   program
-    .command("agents")
+    .command("spawn")
+    .description("Run one coding agent on one issue (chat-orchestrator primitive)")
+    .requiredOption("--agent <id-or-new>", "Existing agent ID or 'new' to mint a fresh general")
+    .requiredOption("--issue <n>", "Issue number to work on", parsePositive)
+    .requiredOption("--target-repo <owner/repo>", "Target GitHub repo")
+    .option("--target-repo-path <path>", "Local clone path of the target repo")
+    .option("--dry-run", "Intercept comment / PR / push tools with synthetic responses")
+    .option("--verbose", "Mirror a colorized event subset to stderr")
+    .option("--skip-summary", "Skip summarizer + CLAUDE.md append")
+    .option("--inspect-paths <csv>", "Comma-separated absolute paths the agent may inspect read-only (e.g. prior worktrees)")
+    .action(async (opts) => {
+      await cmdSpawn(opts);
+    });
+
+  const agentsCmd = new Command("agents")
     .description("Agent management")
     .addCommand(
       new Command("list")
@@ -57,7 +73,20 @@ export function buildCli(): Command {
         .action(async () => {
           await cmdAgentsList();
         }),
+    )
+    .addCommand(
+      new Command("pick")
+        .description("Score the registry against a set of pending issues; print picks (no mutation)")
+        .requiredOption("--issues <csv>", "Issue numbers (comma-separated)")
+        .requiredOption("--target-repo <owner/repo>", "Target GitHub repo")
+        .requiredOption("--parallelism <n>", "Desired parallelism", parsePositive)
+        .option("--target-repo-path <path>", "Local clone path of the target repo")
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdAgentsPick(opts);
+        }),
     );
+  program.addCommand(agentsCmd);
 
   return program;
 }
@@ -76,8 +105,9 @@ interface RunOpts {
 
 async function cmdRun(opts: RunOpts): Promise<void> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    console.error("ERROR: ANTHROPIC_API_KEY is not set.");
-    process.exit(2);
+    process.stderr.write(
+      "INFO: ANTHROPIC_API_KEY is not set; falling back to Claude Code OAuth credentials at ~/.claude/credentials.json.\n",
+    );
   }
 
   if (opts.resume) {
@@ -279,6 +309,171 @@ async function cmdAgentsList(): Promise<void> {
     a.lastActiveAt,
   ]);
   printTable(headers, rows);
+}
+
+interface SpawnOpts {
+  agent: string;
+  issue: number;
+  targetRepo: string;
+  targetRepoPath?: string;
+  dryRun?: boolean;
+  verbose?: boolean;
+  skipSummary?: boolean;
+  inspectPaths?: string;
+}
+
+async function cmdSpawn(opts: SpawnOpts): Promise<void> {
+  const repoPath = await resolveTargetRepoPath(opts.targetRepo, opts.targetRepoPath);
+  const issue = await getIssue(opts.targetRepo, opts.issue);
+  if (!issue) {
+    process.stderr.write(`ERROR: issue #${opts.issue} not found in ${opts.targetRepo}.\n`);
+    process.exit(2);
+  }
+  if (issue.state === "closed") {
+    process.stderr.write(`ERROR: issue #${opts.issue} is closed.\n`);
+    process.exit(2);
+  }
+
+  const agent = await resolveOrMintAgent(opts.agent, repoPath);
+  if (!agent) {
+    process.stderr.write(`ERROR: agent '${opts.agent}' not found in registry. Pass --agent new to mint a fresh general.\n`);
+    process.exit(2);
+  }
+
+  const runId = `spawn-${new Date().toISOString().replace(/[:.]/g, "-")}-issue-${opts.issue}`;
+  const logger = new Logger({ runId, verbose: !!opts.verbose });
+  await logger.open();
+  logger.info("spawn.started", {
+    runId,
+    agentId: agent.agentId,
+    issueId: opts.issue,
+    targetRepo: opts.targetRepo,
+    targetRepoPath: repoPath,
+    dryRun: !!opts.dryRun,
+    skipSummary: !!opts.skipSummary,
+  });
+
+  try {
+    await fetchOriginMain(repoPath);
+    await pruneWorktrees(repoPath);
+
+    const inspectPaths = opts.inspectPaths
+      ? opts.inspectPaths.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
+      : undefined;
+
+    const result = await runIssueCore({
+      agent,
+      issue,
+      targetRepo: opts.targetRepo,
+      targetRepoPath: repoPath,
+      runId,
+      dryRun: !!opts.dryRun,
+      logger,
+      skipSummary: !!opts.skipSummary,
+      inspectPaths,
+    });
+
+    const out = {
+      runId,
+      agentId: agent.agentId,
+      agentTags: agent.tags,
+      issueId: opts.issue,
+      envelope: result.envelope ?? null,
+      isError: result.isError,
+      errorReason: result.errorReason ?? null,
+      parseError: result.parseError ?? null,
+      durationMs: result.durationMs,
+      costUsd: result.costUsd ?? null,
+      appendOutcome: result.appendOutcome ?? null,
+      summarySkipReason: result.summarySkipReason ?? null,
+    };
+    process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+  } finally {
+    await logger.close();
+  }
+}
+
+async function resolveOrMintAgent(spec: string, repoPath: string): Promise<AgentRecord | null> {
+  if (spec === "new") {
+    const fresh = await mutateRegistry((reg) => createAgent(reg));
+    await forkClaudeMd(fresh.agentId, repoPath);
+    return fresh;
+  }
+  const reg = await loadRegistry();
+  const found = reg.agents.find((a) => a.agentId === spec);
+  return found ?? null;
+}
+
+interface PickOpts {
+  issues: string;
+  targetRepo: string;
+  parallelism: number;
+  targetRepoPath?: string;
+  json?: boolean;
+}
+
+async function cmdAgentsPick(opts: PickOpts): Promise<void> {
+  const ids = opts.issues
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((s) => parsePositive(s));
+
+  const issues: IssueSummary[] = [];
+  const closed: number[] = [];
+  const missing: number[] = [];
+  for (const id of ids) {
+    const issue = await getIssue(opts.targetRepo, id);
+    if (!issue) missing.push(id);
+    else if (issue.state === "closed") closed.push(id);
+    else issues.push(issue);
+  }
+
+  const reg = await loadRegistry();
+  const result = pickAgents({
+    reg,
+    pendingIssues: issues,
+    desiredParallelism: opts.parallelism,
+  });
+
+  if (opts.json) {
+    const payload = {
+      targetRepo: opts.targetRepo,
+      parallelism: opts.parallelism,
+      issues: issues.map((i) => ({ id: i.id, title: i.title, labels: i.labels })),
+      missing,
+      closed,
+      reusedAgents: result.reusedAgents.map((p) => ({
+        agentId: p.agent.agentId,
+        tags: p.agent.tags,
+        issuesHandled: p.agent.issuesHandled,
+        score: p.score,
+      })),
+      newAgentsToMint: result.newAgentsToMint,
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write(`Picks for ${opts.targetRepo} (parallelism=${opts.parallelism}):\n`);
+  process.stdout.write(`  open issues:    ${issues.length}\n`);
+  if (closed.length) process.stdout.write(`  closed skipped: ${closed.length} (${closed.join(",")})\n`);
+  if (missing.length) process.stdout.write(`  not found:      ${missing.length} (${missing.join(",")})\n`);
+  process.stdout.write("\n");
+
+  if (result.reusedAgents.length === 0) {
+    process.stdout.write("  (no agents in registry)\n");
+  } else {
+    for (const p of result.reusedAgents) {
+      const tagStr = p.agent.tags.length > 0 ? p.agent.tags.join(",") : "general";
+      process.stdout.write(
+        `  ${p.agent.agentId}  tags=[${tagStr}]  issuesHandled=${p.agent.issuesHandled}  score=${p.score.toFixed(3)}\n`,
+      );
+    }
+  }
+  if (result.newAgentsToMint > 0) {
+    process.stdout.write(`  + ${result.newAgentsToMint} fresh general agent(s) needed\n`);
+  }
 }
 
 function printTable(headers: string[], rows: string[][]): void {

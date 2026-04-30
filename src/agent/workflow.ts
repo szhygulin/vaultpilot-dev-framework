@@ -4,6 +4,7 @@ export interface WorkflowVars {
   worktreePath: string;
   branchName: string;
   dryRun: boolean;
+  inspectPaths?: string[];
 }
 
 export function renderWorkflow(v: WorkflowVars): string {
@@ -11,10 +12,18 @@ export function renderWorkflow(v: WorkflowVars): string {
     ? "\n\nDRY-RUN: gh issue comment / gh pr create / git push are intercepted and return synthetic responses. All read paths run for real. Make real edits and commits in your worktree — the human inspects them post-run.\n"
     : "";
 
+  const inspectNote = v.inspectPaths && v.inspectPaths.length > 0
+    ? `\n\n## Prior attempts (read-only inspection)
+The following paths contain previous agent work on this or a related issue. You MAY \`Read\`, \`Grep\`, or \`Glob\` them for inspiration or to learn from a prior attempt. You MUST NOT edit them — they live OUTSIDE your worktree at ${v.worktreePath}. Treat them as read-only reference material.
+
+${v.inspectPaths.map((p) => `- \`${p}\``).join("\n")}
+`
+    : "";
+
   return `# Workflow
 
 You are an autonomous coding agent working on a single GitHub issue in ${v.targetRepo}.
-Your worktree is ${v.worktreePath} on branch ${v.branchName}. Stay inside it. Never push to main.${dryNote}
+Your worktree is ${v.worktreePath} on branch ${v.branchName}. Stay inside it. Never push to main.${dryNote}${inspectNote}
 
 ## Step 1 — Read the issue and ALL comments
 Run BOTH:

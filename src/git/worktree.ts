@@ -10,12 +10,20 @@ export interface WorktreeHandle {
   branch: string;
 }
 
-export async function targetRepoPath(targetRepo: string): Promise<string> {
-  // Convention from CLAUDE.md: target repo lives at /home/szhygulin/dev/<name>
+export async function resolveTargetRepoPath(
+  targetRepo: string,
+  explicit?: string,
+): Promise<string> {
+  if (explicit) {
+    const resolved = path.resolve(explicit);
+    await fs.access(resolved);
+    return resolved;
+  }
   const name = targetRepo.split("/").pop() ?? targetRepo;
-  const candidate = path.resolve("/home/szhygulin/dev", name);
-  await fs.access(candidate);
-  return candidate;
+  const home = process.env.HOME ?? "/home";
+  const conventional = path.resolve(home, "dev", name);
+  await fs.access(conventional);
+  return conventional;
 }
 
 export async function fetchOriginMain(repoPath: string): Promise<void> {

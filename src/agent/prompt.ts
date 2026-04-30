@@ -5,8 +5,9 @@ import type { AgentRecord } from "../types.js";
 export async function buildAgentSystemPrompt(opts: {
   agent: AgentRecord;
   workflow: WorkflowVars;
+  targetRepoPath: string;
 }): Promise<string> {
-  const claudeMd = await readAgentClaudeMd(opts.agent.agentId);
+  const claudeMd = await readAgentClaudeMd(opts.agent.agentId, opts.targetRepoPath);
   const workflow = renderWorkflow(opts.workflow);
 
   return [

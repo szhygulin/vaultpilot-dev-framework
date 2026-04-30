@@ -4,6 +4,8 @@
   "description": "LLM-driven development session: sonnet orchestrator dispatches issues to N parallel opus coding agents.",
   "type": "module",
   "private": true,
+  "license": "MIT",
+  "author": "Viacheslav Zhygulin",
   "bin": {
     "vp-dev": "dist/bin/vp-dev.js"
   },

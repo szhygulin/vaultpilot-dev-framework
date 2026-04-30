@@ -8,6 +8,7 @@ export interface CodingAgentInput {
   agent: AgentRecord;
   issueId: number;
   targetRepo: string;
+  targetRepoPath: string;
   worktreePath: string;
   branchName: string;
   dryRun: boolean;
@@ -39,6 +40,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       branchName: input.branchName,
       dryRun: input.dryRun,
     },
+    targetRepoPath: input.targetRepoPath,
   });
 
   const userPrompt = `Work on issue #${input.issueId} in ${input.targetRepo} per the workflow above. Emit the JSON envelope as your final message.`;

@@ -1,4 +1,10 @@
-import { query, type CanUseTool, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  type CanUseTool,
+  type PermissionResult,
+  type SDKMessage,
+  type SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { buildAgentSystemPrompt } from "./prompt.js";
 import { extractEnvelope } from "./parseResult.js";
 import type { AgentRecord, ResultEnvelope } from "../types.js";
@@ -68,20 +74,37 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
   let costUsd: number | undefined;
   const toolUseTrace: { tool: string; input: string }[] = [];
 
+  // CRITICAL: canUseTool is delivered via stdio control messages and only
+  // works when the prompt is an AsyncIterable (streaming input mode). With
+  // a plain string prompt, the SDK closes stdin after sending the user
+  // message, so the bridge can never deliver permission requests back to
+  // the callback — the dry-run interception and push-to-main blocks
+  // silently miss every tool call. Two real comments hit issue #612 during
+  // "dry runs" before this was diagnosed.
+  let closeInputStream: () => void = () => {};
+  const inputClosed = new Promise<void>((resolve) => {
+    closeInputStream = resolve;
+  });
+  async function* makeUserStream(): AsyncIterable<SDKUserMessage> {
+    yield {
+      type: "user",
+      message: { role: "user", content: userPrompt },
+      parent_tool_use_id: null,
+    };
+    // Keep stdin open so the bridge can deliver canUseTool requests until
+    // the result message arrives and we close it from the consumer side.
+    await inputClosed;
+  }
+
   try {
     const stream = query({
-      prompt: userPrompt,
+      prompt: makeUserStream(),
       options: {
         model: "claude-opus-4-7",
         cwd: input.worktreePath,
         additionalDirectories: input.inspectPaths,
         systemPrompt,
         tools: ALLOWED_NATIVE_TOOLS,
-        // CRITICAL: do NOT use 'bypassPermissions' — that mode skips canUseTool
-        // entirely, so the dry-run interception and push-to-main blocks would
-        // never fire. 'default' + canUseTool routes every tool call through
-        // the callback. Bypass mode shipped a real comment to GitHub during
-        // a "dry run" before this was caught (#612 comment 4350831250).
         permissionMode: "default",
         canUseTool,
         disallowedTools,
@@ -107,11 +130,16 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
           errorReason = (msg as { errors?: string[] }).errors?.join("; ") ?? msg.subtype;
           costUsd = msg.total_cost_usd;
         }
+        // Result arrived — let the input iterator drain so the SDK can
+        // close cleanly without hanging on `await inputClosed`.
+        closeInputStream();
       }
     }
   } catch (err) {
     isError = true;
     errorReason = (err as Error).message;
+  } finally {
+    closeInputStream();
   }
 
   const durationMs = Date.now() - start;
@@ -198,7 +226,16 @@ interface CanUseOpts {
 }
 
 function makeCanUseTool(opts: CanUseOpts): CanUseTool {
-  return async (toolName, toolInput) => evaluate(toolName, toolInput, opts);
+  return async (toolName, toolInput) => {
+    const result = evaluate(toolName, toolInput, opts);
+    opts.logger.info("permission.evaluated", {
+      agentId: opts.agentId,
+      issueId: opts.issueId,
+      tool: toolName,
+      behavior: result.behavior,
+    });
+    return result;
+  };
 }
 
 function evaluate(
@@ -232,6 +269,8 @@ function evaluate(
   }
 
   if (opts.dryRun) {
+    const compoundDeny = denyCompoundDryRun(cmd);
+    if (compoundDeny) return compoundDeny;
     const intercept = dryRunIntercept(cmd, opts);
     if (intercept) return intercept;
   }
@@ -242,9 +281,44 @@ function evaluate(
   return { behavior: "deny", message: `Bash command not in allowlist: ${truncate(cmd, 160)}` };
 }
 
-const PUSH_TO_MAIN_RE = /\bgit\s+push\b[^\n]*\bmain\b/;
-const PLAIN_FORCE_PUSH_RE = /\bgit\s+push\b[^\n]*--force(?!\s*-with-lease)/;
+// PUSH_TO_MAIN_RE uses [\s\S]* to match across newlines (heredocs etc.)
+// so a `git push origin main` smuggled inside a heredoc body or after a
+// newline still gets caught.
+const PUSH_TO_MAIN_RE = /\bgit\s+push\b[\s\S]*?\bmain\b/;
+const PLAIN_FORCE_PUSH_RE = /\bgit\s+push\b[\s\S]*?--force(?!\s*-with-lease)/;
 const NO_VERIFY_RE = /(--no-verify\b|--no-gpg-sign\b)/;
+
+// Dry-run-sensitive subcommands. We anchor the canonical intercept regexes
+// at start-of-line in dryRunIntercept (so the rewrite-to-echo replaces
+// exactly those leading commands). To prevent compound smuggling, we also
+// scan for the same patterns ANYWHERE in the command and refuse the call
+// when they appear in a non-leading position — the agent is expected to
+// invoke them as separate top-level Bash calls so the intercept can act
+// on each in isolation.
+const DRY_RUN_SENSITIVE_PATTERNS: { re: RegExp; label: string }[] = [
+  { re: /\bgh\s+issue\s+comment\b/, label: "gh issue comment" },
+  { re: /\bgh\s+pr\s+create\b/, label: "gh pr create" },
+  { re: /\bgit\s+push\b/, label: "git push" },
+];
+const DRY_RUN_SENSITIVE_LEADING: RegExp[] = [
+  /^gh\s+issue\s+comment\b/,
+  /^gh\s+pr\s+create\b/,
+  /^git\s+push\b/,
+];
+
+function denyCompoundDryRun(cmd: string): PermissionResult | null {
+  for (let i = 0; i < DRY_RUN_SENSITIVE_PATTERNS.length; i++) {
+    const { re, label } = DRY_RUN_SENSITIVE_PATTERNS[i];
+    const leading = DRY_RUN_SENSITIVE_LEADING[i];
+    if (re.test(cmd) && !leading.test(cmd)) {
+      return {
+        behavior: "deny",
+        message: `Refusing: dry-run requires \`${label}\` to be a standalone top-level Bash call so the interception can rewrite it cleanly. Compound (\`&&\`, \`||\`, \`;\`, heredoc-chained, etc.) commands smuggle the call past the gate. Re-issue \`${label}\` as its own Bash invocation.`,
+      };
+    }
+  }
+  return null;
+}
 
 const ALLOW_PATTERNS: RegExp[] = [
   /^pwd\b/,

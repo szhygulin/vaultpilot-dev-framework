@@ -60,8 +60,13 @@ export interface ParsedSection {
 // the file — sections in the seed (target repo's CLAUDE.md) lack the
 // provenance comment, so they never match here. That's the right behavior:
 // only summarizer-appended lessons are attributable to a specific issue.
+//
+// `ts:` value is an ISO-8601 timestamp containing hyphens (`2026-05-01T...`),
+// so the terminator must look for the literal `-->` rather than excluding
+// hyphens. Section body terminates at the next provenance comment OR at
+// EOF — the summarizer always re-emits the comment per appended block.
 const SECTION_RE =
-  /<!--\s*run:(\S+)\s+issue:#(\d+)\s+outcome:(\S+)\s+ts:[^-]+-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|\n## (?!.*?<!-- run)|$)/g;
+  /<!--\s*run:(\S+)\s+issue:#(\d+)\s+outcome:(\S+)\s+ts:\S+\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
 
 export function parseClaudeMdSections(md: string): ParsedSection[] {
   const out: ParsedSection[] = [];
@@ -96,14 +101,21 @@ export interface SplitProposal {
   notes?: string;
 }
 
+// Per-field caps. The Zod schema's max is the hard ceiling; clampClusterFields
+// (called pre-validate) trims overshoots so a slightly-verbose rationale
+// doesn't discard the entire proposal — same belt-and-suspenders pattern as
+// the summarizer.
+const RATIONALE_MAX = 1000;
+const NAME_MAX = 60;
+
 const ProposalSchema = z.object({
   clusters: z
     .array(
       z.object({
-        proposedName: z.string().min(1).max(40),
+        proposedName: z.string().min(1).max(NAME_MAX),
         proposedTags: z.array(z.string().min(1)).min(1).max(20),
         sectionIds: z.array(z.string().min(1)).min(1),
-        rationale: z.string().min(1).max(400),
+        rationale: z.string().min(1).max(RATIONALE_MAX),
       }),
     )
     .min(2)
@@ -111,6 +123,26 @@ const ProposalSchema = z.object({
   unclusteredSectionIds: z.array(z.string()).default([]),
   notes: z.string().optional(),
 });
+
+function clampClusterFields(json: unknown): unknown {
+  if (!json || typeof json !== "object") return json;
+  const obj = json as Record<string, unknown>;
+  const clusters = obj.clusters;
+  if (!Array.isArray(clusters)) return obj;
+  const next = clusters.map((c) => {
+    if (!c || typeof c !== "object") return c;
+    const cluster = c as Record<string, unknown>;
+    const out: Record<string, unknown> = { ...cluster };
+    if (typeof cluster.rationale === "string" && cluster.rationale.length > RATIONALE_MAX) {
+      out.rationale = cluster.rationale.slice(0, RATIONALE_MAX - 16) + "\n[…truncated]";
+    }
+    if (typeof cluster.proposedName === "string" && cluster.proposedName.length > NAME_MAX) {
+      out.proposedName = cluster.proposedName.slice(0, NAME_MAX - 3) + "...";
+    }
+    return out;
+  });
+  return { ...obj, clusters: next };
+}
 
 export interface ProposeSplitInput {
   agent: AgentRecord;
@@ -161,7 +193,8 @@ export async function proposeSplit(
 
   const json = parseJsonLoose(raw);
   if (!json) throw new Error(`split clusterer output not valid JSON: ${raw.slice(0, 200)}`);
-  const parsed = ProposalSchema.safeParse(json);
+  const clamped = clampClusterFields(json);
+  const parsed = ProposalSchema.safeParse(clamped);
   if (!parsed.success) {
     throw new Error(
       `split clusterer schema invalid: ${parsed.error.message.replace(/\s+/g, " ").slice(0, 400)}`,

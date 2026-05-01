@@ -25,6 +25,13 @@ export interface AgentRecord {
   // names, agent dir paths, log events, lock keys, and the agent's own
   // prompt header.
   name?: string;
+  // Set true once an agent has been split into children. Routing skips
+  // archived agents but their history survives in the registry. Optional
+  // for back-compat with pre-split records.
+  archived?: boolean;
+  // Parent agentId, populated on a child minted by `vp-dev agents split`.
+  // Optional for back-compat.
+  parentAgentId?: string;
 }
 
 export interface AgentRegistryFile {

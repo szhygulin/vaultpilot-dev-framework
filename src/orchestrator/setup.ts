@@ -1,6 +1,11 @@
 import { createInterface } from "node:readline/promises";
 import type { AgentRegistryFile, IssueSummary } from "../types.js";
 import { pickAgents, type PickedAgent } from "./orchestrator.js";
+import {
+  detectOverload,
+  readAgentClaudeMdBytes,
+  type OverloadVerdict,
+} from "../agent/split.js";
 
 export interface SetupPreview {
   targetRepo: string;
@@ -17,6 +22,7 @@ export interface SetupPreview {
   planned: number;
   specialistCount: number;
   generalCount: number;
+  overloadWarnings: OverloadVerdict[];
 }
 
 export interface BuildPreviewInput {
@@ -31,12 +37,21 @@ export interface BuildPreviewInput {
   registry: AgentRegistryFile;
 }
 
-export function buildSetupPreview(input: BuildPreviewInput): SetupPreview {
+export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
   const pick = pickAgents({
     reg: input.registry,
     pendingIssues: input.openIssues,
     maxParallelism: input.parallelism,
   });
+  // Surface overload warnings for any picked agent that has crossed the
+  // split threshold. Cheap (one fs.readFile per picked agent) and runs
+  // before the y/N gate, so the user can decide whether to split first.
+  const overloadWarnings: OverloadVerdict[] = [];
+  for (const r of pick.reusedAgents) {
+    const { bytes } = await readAgentClaudeMdBytes(r.agent.agentId);
+    const verdict = detectOverload(r.agent, bytes);
+    if (verdict) overloadWarnings.push(verdict);
+  }
   return {
     targetRepo: input.targetRepo,
     targetRepoPath: input.targetRepoPath,
@@ -52,6 +67,7 @@ export function buildSetupPreview(input: BuildPreviewInput): SetupPreview {
     planned: pick.planned,
     specialistCount: pick.specialistCount,
     generalCount: pick.generalCount,
+    overloadWarnings,
   };
 }
 
@@ -94,6 +110,15 @@ export function formatSetupPreview(p: SetupPreview): string {
     lines.push(`  + ${p.newAgentsToMint} fresh general agent(s) to fill remaining slot(s)`);
   }
   lines.push("");
+
+  if (p.overloadWarnings.length > 0) {
+    lines.push("Overload warnings:");
+    for (const w of p.overloadWarnings) {
+      lines.push(`  WARNING: ${w.agentId} crossed split threshold — ${w.reasons.join(", ")}`);
+      lines.push(`    Run \`vp-dev agents split ${w.agentId}\` to view a split proposal.`);
+    }
+    lines.push("");
+  }
 
   lines.push("Issues to address:");
   const ids = p.openIssues.map((i) => i.id);

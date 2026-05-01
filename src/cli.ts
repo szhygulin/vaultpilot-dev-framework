@@ -20,6 +20,12 @@ import { fetchOriginMain, pruneStaleAgentBranches, pruneWorktrees, resolveTarget
 import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
 import { promises as fs } from "node:fs";
 import { runIssueCore } from "./agent/runIssueCore.js";
+import {
+  detectOverload,
+  formatProposal,
+  proposeSplit,
+  readAgentClaudeMdBytes,
+} from "./agent/split.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
 
 const DEFAULT_MAX_TICKS = 200;
@@ -95,6 +101,16 @@ export function buildCli(): Command {
         .action(async (opts) => {
           await cmdAgentsSpecialties(opts);
         }),
+    )
+    .addCommand(
+      new Command("split")
+        .description("Detect overload + emit a proposed split into 2-3 sub-specialists. Read-only — does NOT mutate (--apply not yet supported).")
+        .argument("<agentId>", "Agent to inspect (e.g. agent-d396)")
+        .option("--json", "Print machine-readable JSON")
+        .option("--force", "Run the proposal even if the agent has not crossed an overload threshold")
+        .action(async (agentId, opts) => {
+          await cmdAgentsSplit(agentId, opts);
+        }),
     );
   program.addCommand(agentsCmd);
 
@@ -155,7 +171,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   }
 
   const registry = await loadRegistry();
-  const preview = buildSetupPreview({
+  const preview = await buildSetupPreview({
     targetRepo: opts.targetRepo,
     targetRepoPath: repoPath,
     rangeLabel: describeRange(range),
@@ -238,7 +254,7 @@ async function runResume(opts: RunOpts): Promise<void> {
   const issues = open.filter((i) => tracked.has(i.id));
 
   const registry = await loadRegistry();
-  const preview = buildSetupPreview({
+  const preview = await buildSetupPreview({
     targetRepo: state.targetRepo,
     targetRepoPath: repoPath,
     rangeLabel: describeRange(state.issueRange),
@@ -401,6 +417,56 @@ function extractSummarizerLessons(md: string): string[] {
   const out: string[] = [];
   for (const m of md.matchAll(SUMMARIZER_LESSON_RE)) out.push(m[1].trim());
   return out;
+}
+
+interface AgentsSplitOpts {
+  json?: boolean;
+  force?: boolean;
+}
+
+async function cmdAgentsSplit(agentId: string, opts: AgentsSplitOpts): Promise<void> {
+  const reg = await loadRegistry();
+  const agent = reg.agents.find((a) => a.agentId === agentId);
+  if (!agent) {
+    process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+    process.exit(2);
+  }
+  const { md, bytes } = await readAgentClaudeMdBytes(agentId);
+  const verdict = detectOverload(agent, bytes);
+  if (!verdict && !opts.force) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ agentId, overloaded: false, claudeMdBytes: bytes }, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write(
+      `${agentId} has not crossed the overload threshold (issuesHandled=${agent.issuesHandled}, tags=${agent.tags.length}, CLAUDE.md=${(bytes / 1024).toFixed(1)}KB). Pass --force to propose a split anyway.\n`,
+    );
+    return;
+  }
+
+  process.stdout.write(`Generating split proposal for ${agentId}...\n`);
+  const proposal = await proposeSplit({ agent, claudeMd: md });
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          agentId,
+          overloaded: !!verdict,
+          overloadReasons: verdict?.reasons ?? [],
+          proposal,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
+
+  if (verdict) {
+    process.stdout.write(`\nOverload verdict: ${verdict.reasons.join(", ")}\n\n`);
+  }
+  process.stdout.write(formatProposal(proposal) + "\n");
 }
 
 async function cmdAgentsList(): Promise<void> {

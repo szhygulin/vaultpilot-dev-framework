@@ -18,6 +18,45 @@ export interface WorktreeHandle {
 const VP_DEV_BRANCH_PATTERN = "vp-dev/agent-*/issue-*";
 const VP_DEV_BRANCH_RE = /^vp-dev\/(agent-[a-z0-9]+)\/issue-(\d+)$/;
 
+// Per-target-repo serialization for `git worktree add`.
+//
+// `git worktree add` writes upstream-tracking config into the target repo's
+// `.git/config` during creation. Two parallel adds against the SAME repo race
+// on the lock file `.git/config.lock` and one fails with `error: could not
+// lock config file .git/config: File exists`. Observed 2026-05-01 in a
+// 5-agent dry run on issue #608 — the failure surfaced as
+// `error.agent.uncaught` and the issue was silently dropped.
+//
+// Different target repos have independent `.git/config` files, so we key on
+// repoPath and let cross-repo adds run in parallel.
+//
+// The map stores each caller's "tail" promise (resolves when its fn
+// completes). The next caller awaits the prior tail, so the chain serializes
+// per-key. Cleanup checks `Map.get(key) === tail` and drops the entry if no
+// later caller has chained on — keeps the map from leaking across many runs.
+const worktreeAddLocks = new Map<string, Promise<void>>();
+
+async function withRepoLock<T>(
+  repoPath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prior = worktreeAddLocks.get(repoPath) ?? Promise.resolve();
+  let release!: () => void;
+  const tail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  worktreeAddLocks.set(repoPath, tail);
+  try {
+    await prior;
+    return await fn();
+  } finally {
+    release();
+    if (worktreeAddLocks.get(repoPath) === tail) {
+      worktreeAddLocks.delete(repoPath);
+    }
+  }
+}
+
 export async function resolveTargetRepoPath(
   targetRepo: string,
   explicit?: string,
@@ -52,11 +91,17 @@ export async function createWorktree(opts: {
 
   // CLAUDE.md: cd <repoPath> BEFORE worktree add — execFile with cwd does that explicitly.
   await execFile("git", ["fetch", "origin", "main"], { cwd: opts.repoPath });
+  // Serialize the worktree-add against this target repo to avoid the
+  // `.git/config` lock race when multiple agents spawn in the same tick
+  // (see worktreeAddLocks comment above). Fetch is read-mostly and runs
+  // outside the lock to maximize parallelism.
   try {
-    await execFile(
-      "git",
-      ["worktree", "add", path.join(".claude", "worktrees", `${opts.agentId}-issue-${opts.issueId}`), "-b", branch, "origin/main"],
-      { cwd: opts.repoPath },
+    await withRepoLock(opts.repoPath, () =>
+      execFile(
+        "git",
+        ["worktree", "add", path.join(".claude", "worktrees", `${opts.agentId}-issue-${opts.issueId}`), "-b", branch, "origin/main"],
+        { cwd: opts.repoPath },
+      ),
     );
   } catch (err) {
     const msg = (err as { stderr?: string }).stderr ?? String(err);
@@ -131,7 +176,10 @@ export async function pruneStaleAgentBranches(
     });
     return { pruned: 0, kept: 0 };
   }
-  if (branches.length === 0) return { pruned: 0, kept: 0 };
+  if (branches.length === 0) {
+    logger?.info("worktree.stale_branches_swept", { pruned: 0, kept: 0 });
+    return { pruned: 0, kept: 0 };
+  }
 
   let pruned = 0;
   let kept = 0;

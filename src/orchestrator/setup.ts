@@ -13,6 +13,10 @@ export interface SetupPreview {
   resume: boolean;
   reusedAgents: PickedAgent[];
   newAgentsToMint: number;
+  authorized: number;
+  planned: number;
+  specialistCount: number;
+  generalCount: number;
 }
 
 export interface BuildPreviewInput {
@@ -31,7 +35,7 @@ export function buildSetupPreview(input: BuildPreviewInput): SetupPreview {
   const pick = pickAgents({
     reg: input.registry,
     pendingIssues: input.openIssues,
-    desiredParallelism: input.parallelism,
+    maxParallelism: input.parallelism,
   });
   return {
     targetRepo: input.targetRepo,
@@ -44,6 +48,10 @@ export function buildSetupPreview(input: BuildPreviewInput): SetupPreview {
     resume: input.resume,
     reusedAgents: pick.reusedAgents,
     newAgentsToMint: pick.newAgentsToMint,
+    authorized: pick.authorized,
+    planned: pick.planned,
+    specialistCount: pick.specialistCount,
+    generalCount: pick.generalCount,
   };
 }
 
@@ -58,7 +66,14 @@ export function formatSetupPreview(p: SetupPreview): string {
     `  Open issues:    ${p.openIssues.length}` +
       (p.closedSkipped.length > 0 ? `  (closed skipped: ${p.closedSkipped.length})` : ""),
   );
-  lines.push(`  Parallelism:    ${p.parallelism}`);
+  lines.push(`  Authorized:     ${p.authorized} (--agents)`);
+  // The "planned" line is the single most informative cost-surface number
+  // — it's what will actually consume API budget, vs. the headroom the user
+  // authorized. Kept on its own line so eyes lock on it before y/N.
+  const freshNote = p.newAgentsToMint > 0 ? ` + ${p.newAgentsToMint} fresh` : "";
+  lines.push(
+    `  Planned:        ${p.planned} (${p.specialistCount} specialist, ${p.generalCount} general${freshNote})`,
+  );
   lines.push(`  Dry run:        ${p.dryRun ? "yes" : "no"}`);
   lines.push(`  Resume:         ${p.resume ? "yes" : "no"}`);
   lines.push("");
@@ -71,7 +86,7 @@ export function formatSetupPreview(p: SetupPreview): string {
       const tagStr = r.agent.tags.length > 0 ? r.agent.tags.join(",") : "general";
       const label = r.agent.name ? `${r.agent.name} (${r.agent.agentId})` : r.agent.agentId;
       lines.push(
-        `  ${label}  tags=[${tagStr}]  issuesHandled=${r.agent.issuesHandled}  score=${r.score.toFixed(3)}`,
+        `  ${label}  rationale=${r.rationale}  tags=[${tagStr}]  issuesHandled=${r.agent.issuesHandled}  score=${r.score.toFixed(3)}`,
       );
     }
   }

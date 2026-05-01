@@ -546,7 +546,7 @@ async function cmdAgentsPick(opts: PickOpts): Promise<void> {
   const result = pickAgents({
     reg,
     pendingIssues: issues,
-    desiredParallelism: opts.parallelism,
+    maxParallelism: opts.parallelism,
   });
 
   if (opts.json) {

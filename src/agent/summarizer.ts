@@ -5,11 +5,14 @@ import type { Logger } from "../log/logger.js";
 
 const SUMMARIZER_MODEL = "claude-sonnet-4-6";
 
+const HEADING_MAX = 120;
+const BODY_MAX = 2000;
+
 export const SummarizerOutputSchema = z.object({
   skip: z.boolean(),
   skipReason: z.string().optional(),
-  heading: z.string().min(3).max(120).optional(),
-  body: z.string().min(3).max(800).optional(),
+  heading: z.string().min(3).max(HEADING_MAX).optional(),
+  body: z.string().min(3).max(BODY_MAX).optional(),
 });
 export type SummarizerOutput = z.infer<typeof SummarizerOutputSchema>;
 
@@ -64,16 +67,61 @@ export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOu
 
   const json = parseJsonLoose(raw);
   if (!json) {
+    input.logger.warn("summarizer.malformed_payload", {
+      agentId: input.agent.agentId,
+      issueId: input.issue.id,
+      raw: raw.slice(0, 4000),
+    });
     return { skip: true, skipReason: "summarizer output not valid JSON" };
   }
-  const parsed = SummarizerOutputSchema.safeParse(json);
+
+  // Post-parse safety net: clamp oversize heading/body BEFORE schema
+  // validation so the entire summary isn't discarded just because the LLM
+  // ignored the prompt's length directive. The schema's max bounds still
+  // act as a hard ceiling — clamping happens against those same constants.
+  const clamped = clampLengths(json, input);
+
+  const parsed = SummarizerOutputSchema.safeParse(clamped);
   if (!parsed.success) {
-    return { skip: true, skipReason: `summarizer schema invalid: ${parsed.error.message}` };
+    input.logger.warn("summarizer.malformed_payload", {
+      agentId: input.agent.agentId,
+      issueId: input.issue.id,
+      raw: raw.slice(0, 4000),
+      zodError: parsed.error.message.replace(/\s+/g, " "),
+    });
+    return { skip: true, skipReason: `summarizer schema invalid: ${parsed.error.message.replace(/\s+/g, " ").slice(0, 400)}` };
   }
   if (!parsed.data.skip && (!parsed.data.heading || !parsed.data.body)) {
     return { skip: true, skipReason: "missing heading or body" };
   }
   return parsed.data;
+}
+
+function clampLengths(json: unknown, input: SummarizerInput): unknown {
+  if (!json || typeof json !== "object") return json;
+  const obj = json as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...obj };
+  if (typeof obj.heading === "string" && obj.heading.length > HEADING_MAX) {
+    out.heading = obj.heading.slice(0, HEADING_MAX - 3) + "...";
+    input.logger.warn("summarizer.clamped", {
+      agentId: input.agent.agentId,
+      issueId: input.issue.id,
+      field: "heading",
+      originalLength: obj.heading.length,
+      max: HEADING_MAX,
+    });
+  }
+  if (typeof obj.body === "string" && obj.body.length > BODY_MAX) {
+    out.body = obj.body.slice(0, BODY_MAX - 16) + "\n[…truncated]";
+    input.logger.warn("summarizer.clamped", {
+      agentId: input.agent.agentId,
+      issueId: input.issue.id,
+      field: "body",
+      originalLength: obj.body.length,
+      max: BODY_MAX,
+    });
+  }
+  return out;
 }
 
 const SUMMARIZER_SYSTEM_PROMPT = `You are a distillation agent. After a coding agent has finished work on a single GitHub issue, your job is to extract any GENERALIZABLE rule that should bind the agent's behavior on FUTURE similar issues — and append it to the agent's evolving CLAUDE.md.
@@ -84,7 +132,7 @@ Hard rules:
 - If there is no GENERALIZABLE lesson — only a one-off fix, a routine implementation, a trivial pushback — return {"skip": true, "skipReason": "<one short sentence>"}. Empty learnings beat noisy ones.
 - If the agent failed (decision="error"), default to skip unless there's a clear lesson about the failure mode itself.
 - Heading: ≤ 120 chars, no trailing colon, no markdown prefix (no leading "##"). The append step prepends "##".
-- Body: ≤ 800 chars. 2–6 short lines. No prose paragraphs.
+- Body: ≤ 2000 chars. 2–8 short lines. No prose paragraphs.
 - Do NOT mention the specific issue number, PR number, or run id — that's in the provenance comment. Talk about the class of situation, not this instance.
 
 Output: a single JSON object, no fences, no prose. Schema:

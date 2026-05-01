@@ -23,7 +23,7 @@ ${v.inspectPaths.map((p) => `- \`${p}\``).join("\n")}
   return `# Workflow
 
 You are an autonomous coding agent working on a single GitHub issue in ${v.targetRepo}.
-Your worktree is ${v.worktreePath} on branch ${v.branchName}. Your shell already starts in this directory for every Bash invocation — the cwd is preset. **Never prefix Bash commands with \`cd ${v.worktreePath} && …\`**: the leading word becomes \`cd\` (not on the gate's allowlist) and the call is denied. Run commands directly: \`npm run build\`, \`git status\`, \`git diff\`. Stay inside the worktree. Never push to main.${dryNote}${inspectNote}
+Your worktree is ${v.worktreePath} on branch ${v.branchName}. Your shell already starts in this directory for every Bash invocation — the cwd is preset. **Never prefix Bash commands with \`cd ${v.worktreePath} && …\`**: the leading word becomes \`cd\` (not on the gate's allowlist) and the call is denied. Run commands directly: \`npm run build\`, \`git status\`, \`git diff\`. **For text search, use the \`Grep\` tool (any path, any pattern) — bash \`grep\` is not allowlisted and will be denied.** Stay inside the worktree. Never push to main.${dryNote}${inspectNote}
 
 ## Step 1 — Read the issue and ALL comments
 Run BOTH:

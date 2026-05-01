@@ -17,7 +17,8 @@ import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
 import { approveSetup, buildSetupPreview } from "./orchestrator/setup.js";
 import { Logger } from "./log/logger.js";
 import { fetchOriginMain, pruneStaleAgentBranches, pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
-import { forkClaudeMd } from "./agent/specialization.js";
+import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
+import { promises as fs } from "node:fs";
 import { runIssueCore } from "./agent/runIssueCore.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
 
@@ -84,6 +85,15 @@ export function buildCli(): Command {
         .option("--json", "Print machine-readable JSON")
         .action(async (opts) => {
           await cmdAgentsPick(opts);
+        }),
+    )
+    .addCommand(
+      new Command("specialties")
+        .description("Print per-agent specialties: counts, distinctive tags, summarizer-appended lessons from each agent's CLAUDE.md")
+        .option("--top-tags <n>", "Number of distinctive tags to show per agent", parsePositive, 12)
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdAgentsSpecialties(opts);
         }),
     );
   program.addCommand(agentsCmd);
@@ -292,6 +302,98 @@ async function cmdStatus(): Promise<void> {
   for (const a of state.agents) {
     process.stdout.write(`  agent ${a.agentId}: ${a.status}\n`);
   }
+}
+
+interface AgentsSpecialtiesOpts {
+  topTags: number;
+  json?: boolean;
+}
+
+async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> {
+  const reg = await loadRegistry();
+  if (reg.agents.length === 0) {
+    process.stdout.write("No agents in registry yet.\n");
+    return;
+  }
+
+  // Tag distinctiveness: count how many agents in the fleet carry each tag.
+  // A tag is "distinctive" to an agent if it appears in at most ~1/3 of the
+  // fleet — rarer tags carry more signal about what makes this agent unique.
+  const tagFleetFreq = new Map<string, number>();
+  for (const a of reg.agents) for (const t of a.tags) tagFleetFreq.set(t, (tagFleetFreq.get(t) ?? 0) + 1);
+  const distinctiveCutoff = Math.max(2, Math.ceil(reg.agents.length / 3));
+
+  type Profile = {
+    agentId: string;
+    issuesHandled: number;
+    implementCount: number;
+    pushbackCount: number;
+    errorCount: number;
+    lastActiveAt: string;
+    distinctiveTags: string[];
+    novelLessons: string[];
+  };
+
+  const profiles: Profile[] = [];
+  for (const a of reg.agents) {
+    let agentMd = "";
+    try {
+      agentMd = await fs.readFile(agentClaudeMdPath(a.agentId), "utf-8");
+    } catch {
+      // Per-agent CLAUDE.md not yet forked or removed — no summarizer history.
+    }
+    const distinctiveTags = a.tags
+      .filter((t) => (tagFleetFreq.get(t) ?? 0) <= distinctiveCutoff)
+      .slice(0, opts.topTags);
+    profiles.push({
+      agentId: a.agentId,
+      issuesHandled: a.issuesHandled,
+      implementCount: a.implementCount,
+      pushbackCount: a.pushbackCount,
+      errorCount: a.errorCount,
+      lastActiveAt: a.lastActiveAt,
+      distinctiveTags,
+      novelLessons: extractSummarizerLessons(agentMd),
+    });
+  }
+
+  // Order: most-active first.
+  profiles.sort((x, y) => y.issuesHandled - x.issuesHandled);
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ profiles }, null, 2) + "\n");
+    return;
+  }
+
+  for (const p of profiles) {
+    process.stdout.write(
+      `\n=== ${p.agentId}  handled=${p.issuesHandled}  impl=${p.implementCount}  pb=${p.pushbackCount}  err=${p.errorCount}  lastActive=${p.lastActiveAt}\n`,
+    );
+    process.stdout.write(
+      `Distinctive tags (in ≤${distinctiveCutoff}/${reg.agents.length} agents): ${p.distinctiveTags.length > 0 ? p.distinctiveTags.join(", ") : "(none — all tags are widely shared)"}\n`,
+    );
+    if (p.novelLessons.length === 0) {
+      process.stdout.write(`Summarizer-appended lessons: (none — agent hasn't accumulated specialization yet)\n`);
+    } else {
+      process.stdout.write(`Summarizer-appended lessons (${p.novelLessons.length}):\n`);
+      for (const h of p.novelLessons) process.stdout.write(`  - ${h}\n`);
+    }
+  }
+}
+
+// Summarizer prepends each appended section with a provenance comment of the
+// form `<!-- run:... issue:#N outcome:... ts:... -->` before the `## heading`
+// (see appendBlock in src/agent/specialization.ts). Inherited / hand-written
+// sections have no such marker, so this regex isolates exactly what the
+// summarizer added across runs — robust against the target-repo seed
+// changing shape after agents were forked.
+const SUMMARIZER_LESSON_RE = /<!--\s*run:[^>]*?-->\s*\n## (.+)/g;
+
+function extractSummarizerLessons(md: string): string[] {
+  if (!md) return [];
+  const out: string[] = [];
+  for (const m of md.matchAll(SUMMARIZER_LESSON_RE)) out.push(m[1].trim());
+  return out;
 }
 
 async function cmdAgentsList(): Promise<void> {

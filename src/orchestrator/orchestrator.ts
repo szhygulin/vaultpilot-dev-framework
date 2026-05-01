@@ -48,7 +48,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       .filter((i): i is IssueSummary => i !== undefined);
 
     const summonedAgents = await summonAgents({
-      desiredParallelism: input.parallelism,
+      maxParallelism: input.parallelism,
       state: input.state,
       pendingIssues: pending,
       targetRepoPath: repoPath,
@@ -121,21 +121,34 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
 export interface PickAgentsInput {
   reg: AgentRegistryFile;
   pendingIssues: IssueSummary[];
-  desiredParallelism: number;
+  /** User-authorized maximum: hard cap on team size. */
+  maxParallelism: number;
 }
 
 export interface PickedAgent {
   agent: AgentRecord;
   score: number;
+  /** Why this agent was picked: matched a specialty, or fills a generalist seat. */
+  rationale: "specialist" | "general" | "fresh-general";
 }
 
 export interface PickResult {
   reusedAgents: PickedAgent[];
   newAgentsToMint: number;
+  /** Authorized cap (input.maxParallelism). Surfaced in the setup preview. */
+  authorized: number;
+  /** Derived team size: reusedAgents.length + newAgentsToMint, ≤ authorized. */
+  planned: number;
+  specialistCount: number;
+  generalCount: number;
 }
 
 /** Pure scoring: no registry mutation, no file I/O. Reusable for setup preview + runtime. */
 export function pickAgents(input: PickAgentsInput): PickResult {
+  const cap = input.maxParallelism;
+  const issueCount = input.pendingIssues.length;
+
+  // Score every agent against the issue set, then bucket by rationale.
   const scored = input.reg.agents
     .map((a) => ({ agent: a, score: agentSetScore(a, input.pendingIssues) }))
     .sort(
@@ -146,27 +159,49 @@ export function pickAgents(input: PickAgentsInput): PickResult {
   const reused: PickedAgent[] = [];
   const takenIds = new Set<string>();
 
+  // Pass 1 — pick specialists (positive score = some Jaccard overlap or a
+  // recency bonus on a previously-used agent). Keep going until the cap is
+  // hit OR we've covered enough issues that adding more agents has nothing
+  // to chew on.
   for (const s of scored) {
-    if (reused.length >= input.desiredParallelism) break;
+    if (reused.length >= cap) break;
+    if (reused.length >= issueCount) break;
     if (s.score <= 0) break;
-    reused.push(s);
+    reused.push({ agent: s.agent, score: s.score, rationale: "specialist" });
     takenIds.add(s.agent.agentId);
   }
-  if (reused.length < input.desiredParallelism) {
+  const specialistCount = reused.length;
+
+  // Pass 2 — fill remaining seats with general agents from the registry,
+  // bounded by issue count. Don't summon more than there are issues.
+  const generalReserveTarget = Math.min(cap - reused.length, issueCount - reused.length);
+  if (generalReserveTarget > 0) {
     for (const s of scored) {
-      if (reused.length >= input.desiredParallelism) break;
+      if (reused.length - specialistCount >= generalReserveTarget) break;
       if (takenIds.has(s.agent.agentId)) continue;
-      reused.push(s);
+      reused.push({ agent: s.agent, score: s.score, rationale: "general" });
       takenIds.add(s.agent.agentId);
     }
   }
+  const generalCount = reused.length - specialistCount;
 
-  const newAgentsToMint = Math.max(0, input.desiredParallelism - reused.length);
-  return { reusedAgents: reused, newAgentsToMint };
+  // Mint fresh agents only to fill remaining seats — capped by issue count
+  // (a 10-issue cap with 3 issues + 0 registry agents → 3 fresh, not 10).
+  const newAgentsToMint = Math.max(0, Math.min(cap, issueCount) - reused.length);
+
+  const planned = reused.length + newAgentsToMint;
+  return {
+    reusedAgents: reused,
+    newAgentsToMint,
+    authorized: cap,
+    planned,
+    specialistCount,
+    generalCount,
+  };
 }
 
 async function summonAgents(opts: {
-  desiredParallelism: number;
+  maxParallelism: number;
   state: RunState;
   pendingIssues: IssueSummary[];
   targetRepoPath: string;
@@ -177,7 +212,7 @@ async function summonAgents(opts: {
     const pick = pickAgents({
       reg,
       pendingIssues: opts.pendingIssues,
-      desiredParallelism: opts.desiredParallelism,
+      maxParallelism: opts.maxParallelism,
     });
     const taken: AgentRecord[] = pick.reusedAgents.map((p) => p.agent);
 

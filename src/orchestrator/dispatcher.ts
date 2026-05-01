@@ -1,7 +1,12 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildTickPrompt } from "./prompt.js";
 import { TickProposalSchema, type TickAssignment } from "../types.js";
-import { deterministicFallback } from "./routing.js";
+import {
+  classifyMatch,
+  deterministicFallback,
+  isGeneralist,
+  isTwoPhaseRoutingEnabled,
+} from "./routing.js";
 import type { AgentRecord, IssueSummary } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -160,15 +165,23 @@ function validateProposal(input: ValidateInput): string[] {
   if (input.proposal.length > input.cap) {
     errors.push(`Too many assignments: ${input.proposal.length} > cap ${input.cap}`);
   }
-  // Under-dispatch wastes parallelism: when cap > 0 the dispatcher must fill
-  // every available slot. Past incident 2026-05-01: dispatcher returned 1
-  // assignment at tick 2 with cap=2 (both agents idle, both issues pending),
-  // costing a 10-min wall-clock gap before the next tick re-tried. Treating
-  // under-dispatch as a validation error triggers the retry → deterministic
-  // fallback path which always fills cap.
-  if (input.cap > 0 && input.proposal.length < input.cap) {
+
+  // The "true cap" — how many assignments are ACTUALLY dispatchable, given
+  // matching constraints. In single-phase mode this equals input.cap (any
+  // agent×issue pair is acceptable). In two-phase mode we count specialist
+  // pairs first, then generalist seats for unmatched issues — empty slots
+  // beyond that are correct, not a bug.
+  const trueCap = computeTrueCap(input);
+
+  // Under-dispatch wastes parallelism: when assignments < trueCap the
+  // dispatcher left a dispatchable slot empty. Past incident 2026-05-01:
+  // dispatcher returned 1 assignment at tick 2 with cap=2 (both agents
+  // idle, both issues pending), costing a 10-min wall-clock gap before the
+  // next tick re-tried. Treating under-dispatch as a validation error
+  // triggers the retry → deterministic fallback path which always fills.
+  if (trueCap > 0 && input.proposal.length < trueCap) {
     errors.push(
-      `Under-dispatch: ${input.proposal.length} assignments < cap ${input.cap}. Fill every available slot — the cap reflects what's actually dispatchable.`,
+      `Under-dispatch: ${input.proposal.length} assignments < trueCap ${trueCap}. Fill every dispatchable slot — empty slots beyond what specialists+generalists can cover are fine.`,
     );
   }
 
@@ -183,4 +196,39 @@ function validateProposal(input: ValidateInput): string[] {
     seenIssues.add(a.issueId);
   }
   return errors;
+}
+
+/**
+ * In single-phase mode (legacy), every agent×issue pair is dispatchable so
+ * the true cap is just input.cap. In two-phase mode, count how many issues
+ * have a specialist match; the remainder need a generalist agent. The
+ * dispatchable count is bounded by both.
+ */
+function computeTrueCap(input: ValidateInput): number {
+  const cap = Math.min(input.cap, input.idleAgents.length, input.pendingIssues.length);
+  if (!isTwoPhaseRoutingEnabled()) return cap;
+
+  const specialistAgents = new Set<string>();
+  const matchedIssues = new Set<number>();
+  for (const a of input.idleAgents) {
+    for (const i of input.pendingIssues) {
+      if (classifyMatch(a, i) === "specialist") {
+        specialistAgents.add(a.agentId);
+        matchedIssues.add(i.id);
+      }
+    }
+  }
+  // Specialist seats: each specialist agent can take at most one issue per
+  // tick, but only if at least one of its specialty issues is still available
+  // — bound by min(specialistAgents, matchedIssues).
+  const specialistSeats = Math.min(specialistAgents.size, matchedIssues.size);
+
+  // Generalist seats: idle generalists × unmatched issues.
+  const generalistAgents = input.idleAgents.filter(
+    (a) => !specialistAgents.has(a.agentId) && isGeneralist(a),
+  );
+  const unmatchedIssues = input.pendingIssues.filter((i) => !matchedIssues.has(i.id));
+  const generalistSeats = Math.min(generalistAgents.length, unmatchedIssues.length);
+
+  return Math.min(cap, specialistSeats + generalistSeats);
 }

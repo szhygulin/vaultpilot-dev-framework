@@ -47,6 +47,8 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       branchName: input.branchName,
       dryRun: input.dryRun,
       inspectPaths: input.inspectPaths,
+      agentId: input.agent.agentId,
+      agentName: input.agent.name,
     },
     targetRepoPath: input.targetRepoPath,
   });

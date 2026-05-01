@@ -362,11 +362,16 @@ const ALLOW_PATTERNS: RegExp[] = [
   /^gh\s+issue\s+list(\s|$)/,
   /^gh\s+issue\s+comment(\s|$)/,
   /^gh\s+pr\s+(create|view|checks|list|diff)(\s|$)/,
+  // Cross-issue/PR triage: search by keyword, dedup detection.
+  /^gh\s+search\s+(issues|prs)(\s|$)/,
   // Cross-org issue/PR reads: agents need to verify upstream tracker state
   // (e.g. "is mrgnlabs/mrgn-ts#1139 still open?") for tracking-issue triage.
   // Bare `/issues/N` and `/pulls/N` cover the issue/PR body; the optional
   // `/comments` suffix covers the comment thread. Both are read-only.
   /^gh\s+api\s+repos\/[^\s]+\/(issues|pulls)\/\d+(\/comments)?(\s|$)/,
+  // List endpoint with optional query (state, labels, per_page, etc.) —
+  // agents enumerate by filter to find related issues without GET-by-N.
+  /^gh\s+api\s+repos\/[^\s]+\/(issues|pulls)(\?[^\s]*)?(\s|$)/,
   /^gh\s+api\s+\/?advisories\//,
   /^gh\s+repo\s+view(\s|$)/,
 

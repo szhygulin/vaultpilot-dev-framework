@@ -23,7 +23,7 @@ ${v.inspectPaths.map((p) => `- \`${p}\``).join("\n")}
   return `# Workflow
 
 You are an autonomous coding agent working on a single GitHub issue in ${v.targetRepo}.
-Your worktree is ${v.worktreePath} on branch ${v.branchName}. Stay inside it. Never push to main.${dryNote}${inspectNote}
+Your worktree is ${v.worktreePath} on branch ${v.branchName}. Your shell already starts in this directory for every Bash invocation — the cwd is preset. **Never prefix Bash commands with \`cd ${v.worktreePath} && …\`**: the leading word becomes \`cd\` (not on the gate's allowlist) and the call is denied. Run commands directly: \`npm run build\`, \`git status\`, \`git diff\`. Stay inside the worktree. Never push to main.${dryNote}${inspectNote}
 
 ## Step 1 — Read the issue and ALL comments
 Run BOTH:
@@ -48,7 +48,7 @@ Write the body to a tmp file using the **\`Write\` tool** (NOT a shell heredoc �
 Emit the JSON envelope with decision="pushback" and the comment URL.
 
 ### Implement path
-1. Confirm pwd == ${v.worktreePath} and \`git status\` is clean on ${v.branchName}.
+1. Verify clean state: \`pwd && git status && git log --oneline -1\`. The shell is already in ${v.worktreePath} on ${v.branchName} — no cd needed.
 2. Make the minimum code change.
 3. Build + test in the worktree:
      npm run build

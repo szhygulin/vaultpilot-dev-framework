@@ -94,6 +94,9 @@ function formatVerbose(line: LogEvent): string {
 
 function truncateValue(v: unknown): string {
   if (v == null) return String(v);
-  const s = typeof v === "string" ? v : JSON.stringify(v);
-  return s.length > 200 ? s.slice(0, 197) + "..." : s;
+  const raw = typeof v === "string" ? v : JSON.stringify(v);
+  // Collapse newlines + leading whitespace so verbose stderr stays single-line
+  // per event. The persisted JSONL keeps the original (no flattening).
+  const flat = raw.replace(/\s+/g, " ");
+  return flat.length > 200 ? flat.slice(0, 197) + "..." : flat;
 }

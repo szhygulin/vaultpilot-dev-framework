@@ -297,11 +297,13 @@ const NO_VERIFY_RE = /(--no-verify\b|--no-gpg-sign\b)/;
 // on each in isolation.
 const DRY_RUN_SENSITIVE_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /\bgh\s+issue\s+comment\b/, label: "gh issue comment" },
+  { re: /\bgh\s+issue\s+create\b/, label: "gh issue create" },
   { re: /\bgh\s+pr\s+create\b/, label: "gh pr create" },
   { re: /\bgit\s+push\b/, label: "git push" },
 ];
 const DRY_RUN_SENSITIVE_LEADING: RegExp[] = [
   /^gh\s+issue\s+comment\b/,
+  /^gh\s+issue\s+create\b/,
   /^gh\s+pr\s+create\b/,
   /^git\s+push\b/,
 ];
@@ -349,7 +351,7 @@ const ALLOW_PATTERNS: RegExp[] = [
   /^mv(\s|$)/,
   /^node(\s|$)/,
   /^npx\s+(tsc|vitest|tsx)(\s|$)/,
-  /^npm\s+(install|i|run|test|ci|view|show|pack)(\s|$)/,
+  /^npm\s+(install|i|run|test|ci|view|show|pack|ls|list)(\s|$)/,
 
   // git read-only / safe
   /^git\s+(status|diff|log|show|fetch|rebase|branch|checkout|add|commit|stash)(\s|$)/,
@@ -357,10 +359,15 @@ const ALLOW_PATTERNS: RegExp[] = [
   /^git\s+rev-parse(\s|$)/,
   /^git\s+restore(\s|$)/,
 
-  // gh — issue read + comment, PR create/view/checks, api issue/PR fetch
+  // gh — issue read + comment + create, PR create/view/checks, api issue/PR fetch
   /^gh\s+issue\s+view(\s|$)/,
   /^gh\s+issue\s+list(\s|$)/,
   /^gh\s+issue\s+comment(\s|$)/,
+  // `gh issue create` is the canonical cross-repo-scope-split workflow:
+  // an MCP-side fix needs to file the skill-side half as a tracked issue
+  // in vaultpilot-security-skill. Allowlisted here; dry-run synthesizes a
+  // fake issue URL via dryRunIntercept (same pattern as `gh issue comment`).
+  /^gh\s+issue\s+create(\s|$)/,
   /^gh\s+pr\s+(create|view|checks|list|diff)(\s|$)/,
   // Cross-issue/PR triage: search by keyword, dedup detection.
   /^gh\s+search\s+(issues|prs)(\s|$)/,
@@ -403,6 +410,21 @@ function isAllowedBash(cmd: string, branchName: string): boolean {
 function dryRunIntercept(cmd: string, opts: CanUseOpts): PermissionResult | null {
   if (/^gh\s+issue\s+comment\b/.test(cmd)) {
     const synthetic = `https://dry-run/issue-comment/${opts.targetRepo}/${opts.issueId}`;
+    opts.logger.info("dry_run.intercepted", {
+      agentId: opts.agentId,
+      issueId: opts.issueId,
+      cmd: truncate(cmd, 160),
+      synthetic,
+    });
+    return rewriteAsEcho(synthetic);
+  }
+  if (/^gh\s+issue\s+create\b/.test(cmd)) {
+    // The new issue is in whatever repo the agent named with --repo (often a
+    // cross-repo skill-issue file). Extract it for the synthetic URL; fall
+    // back to opts.targetRepo if --repo isn't present.
+    const repoMatch = /--repo\s+(\S+)/.exec(cmd);
+    const targetForUrl = repoMatch ? repoMatch[1] : opts.targetRepo;
+    const synthetic = `https://dry-run/issue-create/${targetForUrl}/new`;
     opts.logger.info("dry_run.intercepted", {
       agentId: opts.agentId,
       issueId: opts.issueId,

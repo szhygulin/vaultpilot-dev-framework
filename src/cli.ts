@@ -299,8 +299,12 @@ async function cmdStatus(): Promise<void> {
     `  total=${total} pending=${counts.pending} in-flight=${counts["in-flight"]} done=${counts.done} failed=${counts.failed}\n`,
   );
   process.stdout.write(`  ticks=${state.tickCount} parallelism=${state.parallelism} dryRun=${state.dryRun}\n`);
+  // Resolve names from registry (best-effort — keep status read-only).
+  const reg = await loadRegistry();
+  const nameOf = new Map(reg.agents.map((a) => [a.agentId, a.name]));
   for (const a of state.agents) {
-    process.stdout.write(`  agent ${a.agentId}: ${a.status}\n`);
+    const label = nameOf.get(a.agentId) ? `${nameOf.get(a.agentId)} (${a.agentId})` : a.agentId;
+    process.stdout.write(`  agent ${label}: ${a.status}\n`);
   }
 }
 
@@ -325,6 +329,7 @@ async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> 
 
   type Profile = {
     agentId: string;
+    name?: string;
     issuesHandled: number;
     implementCount: number;
     pushbackCount: number;
@@ -347,6 +352,7 @@ async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> 
       .slice(0, opts.topTags);
     profiles.push({
       agentId: a.agentId,
+      name: a.name,
       issuesHandled: a.issuesHandled,
       implementCount: a.implementCount,
       pushbackCount: a.pushbackCount,
@@ -366,8 +372,9 @@ async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> 
   }
 
   for (const p of profiles) {
+    const label = p.name ? `${p.name} (${p.agentId})` : p.agentId;
     process.stdout.write(
-      `\n=== ${p.agentId}  handled=${p.issuesHandled}  impl=${p.implementCount}  pb=${p.pushbackCount}  err=${p.errorCount}  lastActive=${p.lastActiveAt}\n`,
+      `\n=== ${label}  handled=${p.issuesHandled}  impl=${p.implementCount}  pb=${p.pushbackCount}  err=${p.errorCount}  lastActive=${p.lastActiveAt}\n`,
     );
     process.stdout.write(
       `Distinctive tags (in ≤${distinctiveCutoff}/${reg.agents.length} agents): ${p.distinctiveTags.length > 0 ? p.distinctiveTags.join(", ") : "(none — all tags are widely shared)"}\n`,
@@ -402,8 +409,9 @@ async function cmdAgentsList(): Promise<void> {
     process.stdout.write("No agents in registry yet.\n");
     return;
   }
-  const headers = ["agentId", "tags", "issuesHandled", "implement", "pushback", "error", "lastActive"];
+  const headers = ["name", "agentId", "tags", "issuesHandled", "implement", "pushback", "error", "lastActive"];
   const rows = reg.agents.map((a) => [
+    a.name ?? "",
     a.agentId,
     a.tags.join(","),
     String(a.issuesHandled),
@@ -550,6 +558,7 @@ async function cmdAgentsPick(opts: PickOpts): Promise<void> {
       closed,
       reusedAgents: result.reusedAgents.map((p) => ({
         agentId: p.agent.agentId,
+        name: p.agent.name,
         tags: p.agent.tags,
         issuesHandled: p.agent.issuesHandled,
         score: p.score,
@@ -571,8 +580,9 @@ async function cmdAgentsPick(opts: PickOpts): Promise<void> {
   } else {
     for (const p of result.reusedAgents) {
       const tagStr = p.agent.tags.length > 0 ? p.agent.tags.join(",") : "general";
+      const label = p.agent.name ? `${p.agent.name} (${p.agent.agentId})` : p.agent.agentId;
       process.stdout.write(
-        `  ${p.agent.agentId}  tags=[${tagStr}]  issuesHandled=${p.agent.issuesHandled}  score=${p.score.toFixed(3)}\n`,
+        `  ${label}  tags=[${tagStr}]  issuesHandled=${p.agent.issuesHandled}  score=${p.score.toFixed(3)}\n`,
       );
     }
   }

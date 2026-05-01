@@ -69,8 +69,9 @@ export function formatSetupPreview(p: SetupPreview): string {
   } else {
     for (const r of p.reusedAgents) {
       const tagStr = r.agent.tags.length > 0 ? r.agent.tags.join(",") : "general";
+      const label = r.agent.name ? `${r.agent.name} (${r.agent.agentId})` : r.agent.agentId;
       lines.push(
-        `  ${r.agent.agentId}  tags=[${tagStr}]  issuesHandled=${r.agent.issuesHandled}  score=${r.score.toFixed(3)}`,
+        `  ${label}  tags=[${tagStr}]  issuesHandled=${r.agent.issuesHandled}  score=${r.score.toFixed(3)}`,
       );
     }
   }

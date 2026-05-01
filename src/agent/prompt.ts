@@ -10,8 +10,11 @@ export async function buildAgentSystemPrompt(opts: {
   const claudeMd = await readAgentClaudeMd(opts.agent.agentId, opts.targetRepoPath);
   const workflow = renderWorkflow(opts.workflow);
 
+  const label = opts.agent.name
+    ? `${opts.agent.name} [${opts.agent.agentId}]`
+    : opts.agent.agentId;
   return [
-    `# CLAUDE.md (agent ${opts.agent.agentId} — evolving specialization)`,
+    `# CLAUDE.md (agent ${label} — evolving specialization)`,
     "",
     claudeMd.trim(),
     "",

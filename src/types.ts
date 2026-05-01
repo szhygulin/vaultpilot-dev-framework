@@ -20,6 +20,11 @@ export interface AgentRecord {
   pushbackCount: number;
   errorCount: number;
   lastActiveAt: string;
+  // Optional display label, lazy-filled by registry helpers when first
+  // touched. Display-only — agentId remains the canonical handle in branch
+  // names, agent dir paths, log events, lock keys, and the agent's own
+  // prompt header.
+  name?: string;
 }
 
 export interface AgentRegistryFile {

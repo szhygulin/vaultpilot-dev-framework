@@ -1,7 +1,9 @@
 import { promises as fs } from "node:fs";
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { agentClaudeMdPath } from "./specialization.js";
+import { agentClaudeMdPath, agentDir } from "./specialization.js";
+import { mutateRegistry, newAgentId } from "../state/registry.js";
+import { ensureDir } from "../state/locks.js";
 import type { AgentRecord } from "../types.js";
 
 // Thresholds for "this agent is overloaded enough to warrant splitting".
@@ -288,6 +290,134 @@ export function formatProposal(p: SplitProposal): string {
   lines.push("");
   lines.push("To apply this split (creates child agents, archives parent):");
   lines.push(`  vp-dev agents split ${p.agentId} --apply`);
-  lines.push("(--apply not yet implemented; this PR ships read-only detection.)");
   return lines.join("\n");
 }
+
+export interface ApplySplitInput {
+  proposal: SplitProposal;
+  /** Original CLAUDE.md content used to source per-cluster sections. */
+  parentClaudeMd: string;
+}
+
+export interface ApplySplitResult {
+  parentAgentId: string;
+  childIds: string[];
+}
+
+/**
+ * Apply a split proposal: mint child agents (one per cluster), partition
+ * the parent's CLAUDE.md sections into each child's CLAUDE.md, and mark
+ * the parent as archived. One-way mutation. Caller is responsible for
+ * having gathered explicit user confirmation upstream.
+ *
+ * Counters (issuesHandled, implementCount, pushbackCount, errorCount) are
+ * divided evenly across children, rounded down. The remainder is silently
+ * dropped — clean per-issue attribution would require tracking outcome
+ * per CLAUDE.md section, which we don't, so even-division is the
+ * auditable choice.
+ */
+export async function applySplit(input: ApplySplitInput): Promise<ApplySplitResult> {
+  const proposal = input.proposal;
+  if (proposal.clusters.length < 2) {
+    throw new Error(
+      `applySplit requires at least 2 clusters; proposal has ${proposal.clusters.length}.`,
+    );
+  }
+
+  const sections = parseClaudeMdSections(input.parentClaudeMd);
+  const sectionById = new Map(sections.map((s) => [s.sectionId, s]));
+  const seedPart = extractSeedPart(input.parentClaudeMd);
+
+  const result = await mutateRegistry(async (reg) => {
+    const parent = reg.agents.find((a) => a.agentId === proposal.agentId);
+    if (!parent) throw new Error(`parent agent ${proposal.agentId} not found in registry`);
+    if (parent.archived) throw new Error(`parent agent ${proposal.agentId} is already archived`);
+
+    const childIds: string[] = [];
+    const N = proposal.clusters.length;
+    const splitInt = (total: number) => Math.floor(total / N);
+
+    const takenAgentIds = new Set(reg.agents.map((a) => a.agentId));
+    // Forward-compat: pre-PR-1 AgentRecord lacks `name`. Read defensively
+    // through `unknown` so this PR can land before/after PR 1.
+    const takenNames = new Set(
+      reg.agents
+        .map((a) => (a as unknown as { name?: string }).name)
+        .filter((n): n is string => !!n),
+    );
+
+    for (const cluster of proposal.clusters) {
+      let childId = newAgentId();
+      while (takenAgentIds.has(childId)) childId = newAgentId();
+      takenAgentIds.add(childId);
+
+      let name = cluster.proposedName;
+      if (takenNames.has(name)) {
+        // Append the new agentId hex tail to disambiguate. Same pattern
+        // pickName uses for pool exhaustion in the names module.
+        name = `${cluster.proposedName}-${childId.replace(/^agent-/, "")}`;
+      }
+      takenNames.add(name);
+
+      const now = new Date().toISOString();
+      const child: AgentRecord = {
+        agentId: childId,
+        createdAt: now,
+        tags: dedupeStrings([...cluster.proposedTags]),
+        issuesHandled: splitInt(parent.issuesHandled),
+        implementCount: splitInt(parent.implementCount),
+        pushbackCount: splitInt(parent.pushbackCount),
+        errorCount: splitInt(parent.errorCount),
+        lastActiveAt: parent.lastActiveAt,
+        parentAgentId: parent.agentId,
+      };
+      // Forward-compat: only attach `name` if the field exists on the type.
+      // Older clones without the names PR ignore the extra field at JSON
+      // round-trip; the type itself accepts unknown keys via JSON parse.
+      (child as AgentRecord & { name?: string }).name = name;
+
+      reg.agents.push(child);
+      childIds.push(childId);
+
+      // Materialize the child's CLAUDE.md: seed + each cluster section.
+      const dir = agentDir(childId);
+      await ensureDir(dir);
+      const childMdParts: string[] = [];
+      if (seedPart.trim().length > 0) childMdParts.push(seedPart.trim());
+      for (const sid of cluster.sectionIds) {
+        const sec = sectionById.get(sid);
+        if (!sec) continue;
+        const provenance = `<!-- run:${sec.runId ?? "?"} issue:#${sec.issueId ?? "?"} outcome:${sec.outcome ?? "?"} ts:${now} -->`;
+        childMdParts.push(`${provenance}\n## ${sec.heading}\n\n${sec.body}`);
+      }
+      const childMd = childMdParts.join("\n\n") + "\n";
+      const dest = agentClaudeMdPath(childId);
+      const tmp = `${dest}.tmp.${process.pid}`;
+      await fs.writeFile(tmp, childMd);
+      await fs.rename(tmp, dest);
+    }
+
+    parent.archived = true;
+
+    return { parentAgentId: parent.agentId, childIds };
+  });
+
+  return result;
+}
+
+function dedupeStrings(arr: string[]): string[] {
+  return Array.from(new Set(arr));
+}
+
+/**
+ * Everything in the agent's CLAUDE.md before the first summarizer-appended
+ * section (i.e. before the first `<!-- run:... -->` provenance comment).
+ * That preamble is the seed copied at fork time — re-use it as the seed
+ * for every child.
+ */
+function extractSeedPart(md: string): string {
+  const idx = md.search(/<!--\s*run:/);
+  return idx < 0 ? md : md.slice(0, idx);
+}
+
+

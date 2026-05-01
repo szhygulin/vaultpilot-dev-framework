@@ -306,7 +306,20 @@ const DRY_RUN_SENSITIVE_LEADING: RegExp[] = [
   /^git\s+push\b/,
 ];
 
+// Pure file-write heredoc as the WHOLE command: `cat > FILE << DELIM\n…body…\nDELIM`
+// with nothing trailing. The body is data being redirected to disk — it cannot
+// shell-execute, so sensitive substrings inside it (agents writing pushback
+// prose that mentions `gh issue comment`) shouldn't trip the compound-deny scan.
+// Anchored to end-of-string: any trailing compound (`&& gh issue comment`,
+// `; git push`, `| bash`) fails the match and falls through to the normal scan.
+// Push-to-main / force-push / --no-verify denials run BEFORE this exemption
+// (PUSH_TO_MAIN_RE etc. on lines above) and use [\s\S]* to catch heredoc
+// bodies, so this does not weaken push-protection.
+const HEREDOC_FILE_WRITE_RE =
+  /^\s*cat\s*>>?\s*\S+\s*<<-?\s*['"]?(\w+)['"]?\s*\n[\s\S]*?\n\s*\1\s*$/;
+
 function denyCompoundDryRun(cmd: string): PermissionResult | null {
+  if (HEREDOC_FILE_WRITE_RE.test(cmd)) return null;
   for (let i = 0; i < DRY_RUN_SENSITIVE_PATTERNS.length; i++) {
     const { re, label } = DRY_RUN_SENSITIVE_PATTERNS[i];
     const leading = DRY_RUN_SENSITIVE_LEADING[i];
@@ -344,13 +357,16 @@ const ALLOW_PATTERNS: RegExp[] = [
   /^git\s+rev-parse(\s|$)/,
   /^git\s+restore(\s|$)/,
 
-  // gh — issue read + comment, PR create/view/checks, api comments fetch
+  // gh — issue read + comment, PR create/view/checks, api issue/PR fetch
   /^gh\s+issue\s+view(\s|$)/,
   /^gh\s+issue\s+list(\s|$)/,
   /^gh\s+issue\s+comment(\s|$)/,
   /^gh\s+pr\s+(create|view|checks|list|diff)(\s|$)/,
-  /^gh\s+api\s+repos\/[^\s]+\/issues\/\d+\/comments(\s|$)/,
-  /^gh\s+api\s+repos\/[^\s]+\/(issues|pulls)\/\d+\/comments(\s|$)/,
+  // Cross-org issue/PR reads: agents need to verify upstream tracker state
+  // (e.g. "is mrgnlabs/mrgn-ts#1139 still open?") for tracking-issue triage.
+  // Bare `/issues/N` and `/pulls/N` cover the issue/PR body; the optional
+  // `/comments` suffix covers the comment thread. Both are read-only.
+  /^gh\s+api\s+repos\/[^\s]+\/(issues|pulls)\/\d+(\/comments)?(\s|$)/,
   /^gh\s+api\s+\/?advisories\//,
   /^gh\s+repo\s+view(\s|$)/,
 

@@ -9,7 +9,13 @@ const HEADING_MAX = 120;
 const BODY_MAX = 2000;
 
 export const SummarizerOutputSchema = z.object({
-  skip: z.boolean(),
+  // Default false: action-case payloads ({heading, body}) routinely omit
+  // skip. The prompt's prose treats absence as "not skipping" — the LLM
+  // only includes skip:true when it explicitly chooses to skip. Defaulting
+  // matches that intent and keeps the rare-but-legitimate omission from
+  // discarding an otherwise-valid lesson. The prompt still asks for the
+  // field explicitly (suspenders), this is the belt.
+  skip: z.boolean().default(false),
   skipReason: z.string().optional(),
   heading: z.string().min(3).max(HEADING_MAX).optional(),
   body: z.string().min(3).max(BODY_MAX).optional(),
@@ -135,7 +141,7 @@ Hard rules:
 - Body: ≤ 2000 chars. 2–8 short lines. No prose paragraphs.
 - Do NOT mention the specific issue number, PR number, or run id — that's in the provenance comment. Talk about the class of situation, not this instance.
 
-Output: a single JSON object, no fences, no prose. Schema:
+Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Use \`{"skip": false, "heading": "...", "body": "..."}\` when there is a lesson worth saving, and \`{"skip": true, "skipReason": "..."}\` otherwise. Schema:
   {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
 
 function buildPrompt(input: SummarizerInput): string {
@@ -167,7 +173,7 @@ ${trace || "(none captured)"}
 Agent's final reasoning text (truncated):
 ${truncate(input.finalText, 4000)}
 
-Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md? If yes, emit {heading, body}. If no, emit {"skip": true, "skipReason": "..."}. JSON only.`;
+Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md? If yes, emit {"skip": false, "heading": "...", "body": "..."}. If no, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only.`;
 }
 
 function truncate(s: string, max: number): string {

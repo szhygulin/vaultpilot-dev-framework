@@ -39,3 +39,10 @@ After every successful issue-resolution run, a separate sonnet summarizer rewrit
 
 ## CI is a hard gate
 `.github/workflows/ci.yml` runs `npm ci && npm run typecheck && npm run build` on every push and PR. All three must pass. CI failures block merges; reproduce locally with the same three commands before pushing if a PR is failing for unclear reasons.
+
+## Lessons-learned discipline fires on `vp-dev` runs too
+The global **Post-PR Lessons-Learned Discipline** rule fires after opening a PR. In this repo, also apply it after every `vp-dev` invocation that probes tool behavior — both dry-runs (`--dry-run`) and actual executions of development sessions. Each run exercises the orchestrator end-to-end (approval gate, push-protection layers, agent isolation, summarizer, target-repo seeding) and surfaces patterns that code review alone won't catch.
+- Format: same as the global rule — 2 global candidates + 2 local candidates, ranked, with contradiction check + context-cost analysis per candidate.
+- Skip when: the run was a pure repro of unchanged config, or nothing non-trivial surfaced (clean dry-run that matched expectations).
+- Apply when: a new failure mode appeared, the gate / push-protection / approval flow behaved unexpectedly, an agent boundary leaked, the summarizer produced a surprise, or the user pushed back on framing.
+- Local-scope lessons land in this `CLAUDE.md` bundled into the same PR as the work that triggered them; global-scope lessons go to `~/.claude/CLAUDE.md` as a separate commit in the `claude-md-global` repo.

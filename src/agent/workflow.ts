@@ -5,6 +5,8 @@ export interface WorkflowVars {
   branchName: string;
   dryRun: boolean;
   inspectPaths?: string[];
+  agentId: string;
+  agentName?: string;
 }
 
 export function renderWorkflow(v: WorkflowVars): string {
@@ -58,7 +60,7 @@ Emit the JSON envelope with decision="pushback" and the comment URL.
      Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 5. Push:
      git push -u origin ${v.branchName}
-6. Open the PR — body MUST start with "Closes #${v.issueId}" on its own line so GitHub auto-closes.
+6. Open the PR — body MUST start with "Closes #${v.issueId}" on its own line so GitHub auto-closes. The body MUST also end with a single-line signature \`— ${v.agentName ?? v.agentId} (${v.agentId})\` so the human reader can tell which agent opened the PR.
    Write the PR body to a tmp file using the **\`Write\` tool** (same reason as Pushback path: heredoc chained with \`gh pr create\` trips the dry-run gate). Then run \`gh pr create\` as its OWN top-level Bash invocation:
      gh pr create --repo ${v.targetRepo} --base main --head ${v.branchName} --title <short title> --body-file <tmp>
 7. Format the returned PR URL as a Markdown hyperlink in your reasoning.

@@ -335,8 +335,8 @@ const ALLOW_PATTERNS: RegExp[] = [
   /^cp(\s|$)/,
   /^mv(\s|$)/,
   /^node(\s|$)/,
-  /^npx\s+tsc(\s|$)/,
-  /^npm\s+(install|i|run|test|ci)(\s|$)/,
+  /^npx\s+(tsc|vitest|tsx)(\s|$)/,
+  /^npm\s+(install|i|run|test|ci|view|show|pack)(\s|$)/,
 
   // git read-only / safe
   /^git\s+(status|diff|log|show|fetch|rebase|branch|checkout|add|commit|stash)(\s|$)/,
@@ -351,7 +351,16 @@ const ALLOW_PATTERNS: RegExp[] = [
   /^gh\s+pr\s+(create|view|checks|list|diff)(\s|$)/,
   /^gh\s+api\s+repos\/[^\s]+\/issues\/\d+\/comments(\s|$)/,
   /^gh\s+api\s+repos\/[^\s]+\/(issues|pulls)\/\d+\/comments(\s|$)/,
+  /^gh\s+api\s+\/?advisories\//,
   /^gh\s+repo\s+view(\s|$)/,
+
+  // curl — read-only registry / public-API fetches. Limited to known safe
+  // hosts to avoid arbitrary network egress. `--method`/`-X` flags that
+  // would mutate state on these hosts are still blocked because the agent
+  // cannot smuggle a state-changing call past dryRunIntercept here (these
+  // hosts don't accept GitHub-style mutation through curl auth flows).
+  /^curl\s+(-[a-zA-Z]+\s+)*https:\/\/registry\.npmjs\.org\//,
+  /^curl\s+(-[a-zA-Z]+\s+)*https:\/\/api\.github\.com\//,
 ];
 
 function isAllowedBash(cmd: string, branchName: string): boolean {
@@ -392,13 +401,14 @@ function dryRunIntercept(cmd: string, opts: CanUseOpts): PermissionResult | null
     return rewriteAsEcho(synthetic);
   }
   if (/^git\s+push\b/.test(cmd)) {
+    const synthetic = `https://dry-run/git-push/${opts.targetRepo}/issue-${opts.issueId}`;
     opts.logger.info("dry_run.intercepted", {
       agentId: opts.agentId,
       issueId: opts.issueId,
       cmd: truncate(cmd, 160),
-      synthetic: "no-op",
+      synthetic,
     });
-    return rewriteAsEcho("dry-run: git push no-op");
+    return rewriteAsEcho(synthetic);
   }
   return null;
 }

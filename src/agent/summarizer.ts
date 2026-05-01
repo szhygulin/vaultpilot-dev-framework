@@ -140,6 +140,7 @@ Hard rules:
 - Heading: ≤ 120 chars, no trailing colon, no markdown prefix (no leading "##"). The append step prepends "##".
 - Body: ≤ 2000 chars. 2–8 short lines. No prose paragraphs.
 - Do NOT mention the specific issue number, PR number, or run id — that's in the provenance comment. Talk about the class of situation, not this instance.
+- Inside heading / body / skipReason string values: escape every double-quote as \\" and every literal newline as \\n. Unescaped quotes break the JSON parser even when the rest of the payload is valid (we lose the whole lesson). Prefer single-quote ' or backticks for emphasis when the alternative is acceptable.
 
 Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Use \`{"skip": false, "heading": "...", "body": "..."}\` when there is a lesson worth saving, and \`{"skip": true, "skipReason": "..."}\` otherwise. Schema:
   {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
@@ -173,7 +174,7 @@ ${trace || "(none captured)"}
 Agent's final reasoning text (truncated):
 ${truncate(input.finalText, 4000)}
 
-Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md? If yes, emit {"skip": false, "heading": "...", "body": "..."}. If no, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only.`;
+Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md? If yes, emit {"skip": false, "heading": "...", "body": "..."}. If no, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only — escape every \\" inside string values.`;
 }
 
 function truncate(s: string, max: number): string {

@@ -160,6 +160,17 @@ function validateProposal(input: ValidateInput): string[] {
   if (input.proposal.length > input.cap) {
     errors.push(`Too many assignments: ${input.proposal.length} > cap ${input.cap}`);
   }
+  // Under-dispatch wastes parallelism: when cap > 0 the dispatcher must fill
+  // every available slot. Past incident 2026-05-01: dispatcher returned 1
+  // assignment at tick 2 with cap=2 (both agents idle, both issues pending),
+  // costing a 10-min wall-clock gap before the next tick re-tried. Treating
+  // under-dispatch as a validation error triggers the retry → deterministic
+  // fallback path which always fills cap.
+  if (input.cap > 0 && input.proposal.length < input.cap) {
+    errors.push(
+      `Under-dispatch: ${input.proposal.length} assignments < cap ${input.cap}. Fill every available slot — the cap reflects what's actually dispatchable.`,
+    );
+  }
 
   const seenAgents = new Set<string>();
   const seenIssues = new Set<number>();

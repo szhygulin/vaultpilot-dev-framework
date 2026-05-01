@@ -21,6 +21,7 @@ import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
 import { promises as fs } from "node:fs";
 import { runIssueCore } from "./agent/runIssueCore.js";
 import {
+  applySplit,
   detectOverload,
   formatProposal,
   proposeSplit,
@@ -104,10 +105,12 @@ export function buildCli(): Command {
     )
     .addCommand(
       new Command("split")
-        .description("Detect overload + emit a proposed split into 2-3 sub-specialists. Read-only — does NOT mutate (--apply not yet supported).")
+        .description("Detect overload + emit a proposed split into 2-3 sub-specialists. Pass --apply to mutate the registry.")
         .argument("<agentId>", "Agent to inspect (e.g. agent-d396)")
         .option("--json", "Print machine-readable JSON")
         .option("--force", "Run the proposal even if the agent has not crossed an overload threshold")
+        .option("--apply", "Apply the proposal: mint child agents, partition CLAUDE.md sections, archive parent. ONE-WAY mutation.")
+        .option("--yes", "Skip the apply confirmation prompt (required for non-TTY environments).")
         .action(async (agentId, opts) => {
           await cmdAgentsSplit(agentId, opts);
         }),
@@ -422,6 +425,8 @@ function extractSummarizerLessons(md: string): string[] {
 interface AgentsSplitOpts {
   json?: boolean;
   force?: boolean;
+  apply?: boolean;
+  yes?: boolean;
 }
 
 async function cmdAgentsSplit(agentId: string, opts: AgentsSplitOpts): Promise<void> {
@@ -429,6 +434,10 @@ async function cmdAgentsSplit(agentId: string, opts: AgentsSplitOpts): Promise<v
   const agent = reg.agents.find((a) => a.agentId === agentId);
   if (!agent) {
     process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+    process.exit(2);
+  }
+  if (agent.archived) {
+    process.stderr.write(`ERROR: agent '${agentId}' is already archived (already split).\n`);
     process.exit(2);
   }
   const { md, bytes } = await readAgentClaudeMdBytes(agentId);
@@ -447,26 +456,86 @@ async function cmdAgentsSplit(agentId: string, opts: AgentsSplitOpts): Promise<v
   process.stdout.write(`Generating split proposal for ${agentId}...\n`);
   const proposal = await proposeSplit({ agent, claudeMd: md });
 
-  if (opts.json) {
-    process.stdout.write(
-      JSON.stringify(
-        {
-          agentId,
-          overloaded: !!verdict,
-          overloadReasons: verdict?.reasons ?? [],
-          proposal,
-        },
-        null,
-        2,
-      ) + "\n",
-    );
+  if (!opts.apply) {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify(
+          {
+            agentId,
+            overloaded: !!verdict,
+            overloadReasons: verdict?.reasons ?? [],
+            proposal,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      return;
+    }
+    if (verdict) {
+      process.stdout.write(`\nOverload verdict: ${verdict.reasons.join(", ")}\n\n`);
+    }
+    process.stdout.write(formatProposal(proposal) + "\n");
     return;
   }
 
-  if (verdict) {
-    process.stdout.write(`\nOverload verdict: ${verdict.reasons.join(", ")}\n\n`);
+  // --apply path: confirm with user, then mutate.
+  if (proposal.clusters.length < 2) {
+    process.stderr.write(
+      `ERROR: cannot apply — proposal has ${proposal.clusters.length} cluster(s), need >= 2.\n${proposal.notes ?? ""}\n`,
+    );
+    process.exit(2);
   }
-  process.stdout.write(formatProposal(proposal) + "\n");
+  process.stdout.write(formatProposal(proposal) + "\n\n");
+  const confirmed = await confirmApply({
+    agentId,
+    childCount: proposal.clusters.length,
+    yes: !!opts.yes,
+  });
+  if (!confirmed) {
+    process.stdout.write("Aborted — no mutation.\n");
+    return;
+  }
+
+  const result = await applySplit({ proposal, parentClaudeMd: md });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ agentId, applied: true, ...result }, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(
+    `Applied. Created ${result.childIds.length} children from ${result.parentAgentId}: ${result.childIds.join(", ")}\nParent archived.\n`,
+  );
+}
+
+async function confirmApply(input: {
+  agentId: string;
+  childCount: number;
+  yes: boolean;
+}): Promise<boolean> {
+  if (input.yes) {
+    process.stdout.write("Auto-confirmed (--yes).\n");
+    return true;
+  }
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      "ERROR: stdin is not a TTY and --yes was not passed. Re-run with --yes to skip confirmation.\n",
+    );
+    return false;
+  }
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (
+      await rl.question(
+        `Apply split: archive ${input.agentId} and create ${input.childCount} children? [y/N] `,
+      )
+    )
+      .trim()
+      .toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
 }
 
 async function cmdAgentsList(): Promise<void> {

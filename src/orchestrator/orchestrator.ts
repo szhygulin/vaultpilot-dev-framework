@@ -148,8 +148,12 @@ export function pickAgents(input: PickAgentsInput): PickResult {
   const cap = input.maxParallelism;
   const issueCount = input.pendingIssues.length;
 
+  // Archived agents (post-split parents) are kept in the registry for
+  // history but never summoned again — their work has been redistributed
+  // to children.
+  const live = input.reg.agents.filter((a) => !a.archived);
   // Score every agent against the issue set, then bucket by rationale.
-  const scored = input.reg.agents
+  const scored = live
     .map((a) => ({ agent: a, score: agentSetScore(a, input.pendingIssues) }))
     .sort(
       (p, q) =>

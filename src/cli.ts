@@ -16,7 +16,7 @@ import { getIssue, resolveRangeToIssues } from "./github/gh.js";
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
 import { approveSetup, buildSetupPreview } from "./orchestrator/setup.js";
 import { Logger } from "./log/logger.js";
-import { fetchOriginMain, pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
+import { fetchOriginMain, pruneStaleAgentBranches, pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
 import { forkClaudeMd } from "./agent/specialization.js";
 import { runIssueCore } from "./agent/runIssueCore.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
@@ -188,6 +188,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
 
   try {
     await pruneWorktrees(repoPath);
+    await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
     await runOrchestrator({
       state,
       issues: open,
@@ -252,6 +253,7 @@ async function runResume(opts: RunOpts): Promise<void> {
     issueCount: issues.length,
   });
   try {
+    await pruneStaleAgentBranches(repoPath, state.targetRepo, logger);
     await runOrchestrator({
       state,
       issues,
@@ -356,6 +358,7 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
   try {
     await fetchOriginMain(repoPath);
     await pruneWorktrees(repoPath);
+    await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
 
     const inspectPaths = opts.inspectPaths
       ? opts.inspectPaths.split(",").map((s) => s.trim()).filter((s) => s.length > 0)

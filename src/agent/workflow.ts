@@ -43,7 +43,7 @@ Per CLAUDE.md "Issue Analysis": comments are where reviewers add follow-up scope
 
 ### Pushback path
 Compose a comment: one mismatch sentence + 2-3 alternatives + a question.
-Write the body to a tmp file, then:
+Write the body to a tmp file using the **\`Write\` tool** (NOT a shell heredoc — \`cat > FILE << EOF ... EOF\` chained with \`gh issue comment\` in one Bash call trips the dry-run gate, since the chained \`gh issue comment\` would actually post in a non-dry-run). Then issue the comment as its OWN top-level Bash invocation:
   gh issue comment ${v.issueId} --repo ${v.targetRepo} --body-file <tmp>
 Emit the JSON envelope with decision="pushback" and the comment URL.
 
@@ -58,7 +58,8 @@ Emit the JSON envelope with decision="pushback" and the comment URL.
      Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 5. Push:
      git push -u origin ${v.branchName}
-6. Open the PR — body MUST start with "Closes #${v.issueId}" on its own line so GitHub auto-closes:
+6. Open the PR — body MUST start with "Closes #${v.issueId}" on its own line so GitHub auto-closes.
+   Write the PR body to a tmp file using the **\`Write\` tool** (same reason as Pushback path: heredoc chained with \`gh pr create\` trips the dry-run gate). Then run \`gh pr create\` as its OWN top-level Bash invocation:
      gh pr create --repo ${v.targetRepo} --base main --head ${v.branchName} --title <short title> --body-file <tmp>
 7. Format the returned PR URL as a Markdown hyperlink in your reasoning.
 

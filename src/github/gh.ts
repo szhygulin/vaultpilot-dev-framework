@@ -140,3 +140,39 @@ function rangeToIds(from: number, to: number): number[] {
   for (let n = from; n <= to; n++) out.push(n);
   return out;
 }
+
+export interface GhPrState {
+  state: "OPEN" | "MERGED" | "CLOSED" | string;
+  createdAt: string;
+  closedAt: string | null;
+  mergedAt: string | null;
+  reviews: { state?: string }[];
+  // `statusCheckRollup` reflects the *latest commit's* check runs — not a
+  // full history of past failures across re-pushes. Treat ciCycles derived
+  // from this as a lower-bound approximation; refining requires walking
+  // commit history (out of scope until the signal proves noisy).
+  statusCheckRollup: { conclusion?: string }[];
+}
+
+export async function prState(targetRepo: string, prNumber: number): Promise<GhPrState | null> {
+  try {
+    const { stdout } = await execFile(
+      "gh",
+      [
+        "pr",
+        "view",
+        String(prNumber),
+        "--repo",
+        targetRepo,
+        "--json",
+        "state,createdAt,closedAt,mergedAt,reviews,statusCheckRollup",
+      ],
+      { maxBuffer: 5 * 1024 * 1024 },
+    );
+    return JSON.parse(stdout) as GhPrState;
+  } catch (err) {
+    const msg = (err as { stderr?: string; message?: string }).stderr?.toString() ?? "";
+    if (msg.includes("no pull requests found") || msg.includes("Could not resolve")) return null;
+    throw err;
+  }
+}

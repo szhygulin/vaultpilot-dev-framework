@@ -35,7 +35,15 @@ import {
   type PruneProposal,
   type ApplyResult as PruneApplyResult,
 } from "./agent/prune.js";
+import {
+  loadAllOutcomes,
+  pollOutcomes,
+  rollupOutcomes,
+  type AgentRollup,
+} from "./state/outcomes.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
+
+const DEFAULT_STALLED_THRESHOLD_DAYS = 14;
 
 const DEFAULT_MAX_TICKS = 200;
 
@@ -53,6 +61,12 @@ export function buildCli(): Command {
     .option("--resume", "Resume the most recent unfinished run")
     .option("--dry-run", "Intercept comment / PR / push tools with synthetic responses")
     .option("--max-ticks <n>", "Safety cap on scheduling ticks", parsePositive, DEFAULT_MAX_TICKS)
+    .option(
+      "--stalled-threshold-days <n>",
+      "Days a PR may sit open before outcome polling marks it 'stalled'",
+      parsePositive,
+      DEFAULT_STALLED_THRESHOLD_DAYS,
+    )
     .option("--verbose", "Mirror a colorized subset of events to stderr")
     .option("--yes", "Auto-approve the setup preview (required for non-TTY environments)")
     .option(
@@ -138,6 +152,25 @@ export function buildCli(): Command {
         .action(async (opts) => {
           await cmdAgentsPrune(opts);
         }),
+    )
+    .addCommand(
+      new Command("stats")
+        .description("Per-agent rollup of PR outcomes (merge rate, median rework, median CI cycles).")
+        .option("--json", "Print machine-readable JSON")
+        .option(
+          "--poll",
+          "Refresh outcomes from GitHub before printing (one `gh pr view` per non-terminal PR).",
+        )
+        .option(
+          "--stalled-threshold-days <n>",
+          "Days a PR may sit open before --poll marks it 'stalled'",
+          parsePositive,
+          DEFAULT_STALLED_THRESHOLD_DAYS,
+        )
+        .option("--all", "Include archived (split-parent) agents")
+        .action(async (opts) => {
+          await cmdAgentsStats(opts);
+        }),
     );
   program.addCommand(agentsCmd);
 
@@ -152,6 +185,7 @@ interface RunOpts {
   resume?: boolean;
   dryRun?: boolean;
   maxTicks: number;
+  stalledThresholdDays: number;
   verbose?: boolean;
   yes?: boolean;
   includeNonReady?: boolean;
@@ -290,6 +324,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   try {
     await pruneWorktrees(repoPath);
     await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
+    await pollOutcomesLazy({ logger, staleThresholdDays: opts.stalledThresholdDays });
     await runOrchestrator({
       state,
       issues: dispatchIssues,
@@ -309,6 +344,29 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     await logger.close();
   }
   process.stdout.write(`Run ${runId} log: logs/${runId}.jsonl\n`);
+}
+
+/**
+ * Lazy outcome poll on `vp-dev run`. Wrapped in try/catch so a transient
+ * `gh` failure (network down, auth blip) never blocks the run.
+ */
+async function pollOutcomesLazy(opts: {
+  logger: Logger;
+  staleThresholdDays: number;
+}): Promise<void> {
+  try {
+    const result = await pollOutcomes({
+      staleThresholdDays: opts.staleThresholdDays,
+      onWarn: (msg) => opts.logger.warn("outcomes.poll_warn", { msg }),
+    });
+    opts.logger.info("outcomes.polled", {
+      appended: result.appended.length,
+      pending: result.pendingPrs,
+      errors: result.errors,
+    });
+  } catch (err) {
+    opts.logger.warn("outcomes.poll_failed", { err: (err as Error).message });
+  }
 }
 
 async function runResume(opts: RunOpts): Promise<void> {
@@ -355,6 +413,7 @@ async function runResume(opts: RunOpts): Promise<void> {
   });
   try {
     await pruneStaleAgentBranches(repoPath, state.targetRepo, logger);
+    await pollOutcomesLazy({ logger, staleThresholdDays: opts.stalledThresholdDays });
     await runOrchestrator({
       state,
       issues,
@@ -906,6 +965,75 @@ async function cmdAgentsPick(opts: PickOpts): Promise<void> {
   if (result.newAgentsToMint > 0) {
     process.stdout.write(`  + ${result.newAgentsToMint} fresh general agent(s) needed\n`);
   }
+}
+
+interface AgentsStatsOpts {
+  json?: boolean;
+  poll?: boolean;
+  all?: boolean;
+  stalledThresholdDays: number;
+}
+
+async function cmdAgentsStats(opts: AgentsStatsOpts): Promise<void> {
+  if (opts.poll) {
+    const result = await pollOutcomes({
+      staleThresholdDays: opts.stalledThresholdDays,
+      onWarn: (msg) => process.stderr.write(`WARN: ${msg}\n`),
+    });
+    if (!opts.json) {
+      process.stderr.write(
+        `Polled outcomes: appended=${result.appended.length} pending=${result.pendingPrs} errors=${result.errors}\n`,
+      );
+    }
+  }
+
+  const reg = await loadRegistry();
+  const visible = opts.all ? reg.agents : reg.agents.filter((a) => !a.archived);
+  if (visible.length === 0) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ rollups: [] }, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write(
+      opts.all
+        ? "No agents in registry yet.\n"
+        : "No active agents in registry. Pass --all to include archived agents.\n",
+    );
+    return;
+  }
+
+  const outcomesByAgent = await loadAllOutcomes(visible.map((a) => a.agentId));
+  const rollups: AgentRollup[] = visible.map((a) =>
+    rollupOutcomes({
+      agentId: a.agentId,
+      name: a.name,
+      outcomes: outcomesByAgent.get(a.agentId) ?? [],
+    }),
+  );
+
+  // Sort merge-rate desc, then runs desc as a tiebreaker so a 1/1 agent
+  // doesn't outrank a 9/10 agent.
+  rollups.sort((x, y) => y.mergeRate - x.mergeRate || y.runs - x.runs);
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ rollups }, null, 2) + "\n");
+    return;
+  }
+
+  // costUsd + $/merge column intentionally absent — populated once cost
+  // tracking lands (see issue #34). Don't stub a dead column.
+  const headers = ["agent", "runs", "merged", "closed", "stalled", "merge-rate", "median-rework", "median-ci"];
+  const rows = rollups.map((r) => [
+    r.name ? `${r.name} (${r.agentId})` : r.agentId,
+    String(r.runs),
+    String(r.merged),
+    String(r.closedUnmerged),
+    String(r.stalled),
+    r.runs === 0 ? "n/a" : `${Math.round(r.mergeRate * 100)}%`,
+    String(r.medianRework),
+    String(r.medianCiCycles),
+  ]);
+  printTable(headers, rows);
 }
 
 function printTable(headers: string[], rows: string[][]): void {

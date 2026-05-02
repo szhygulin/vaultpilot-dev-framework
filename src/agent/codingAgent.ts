@@ -166,6 +166,10 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     costUsd: costUsd ?? null,
     isError,
     parseError: result.parseError ?? null,
+    // When parsing failed, capture the raw finalText (truncated) so future
+    // failures are debuggable without re-running the agent at $2-3 each.
+    // Omitted on the happy path to avoid log bloat. See issue #52.
+    finalText: result.parseError ? truncate(finalText, 4096) : undefined,
   });
   return result;
 }

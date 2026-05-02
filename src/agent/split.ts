@@ -431,6 +431,8 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitResu
     }
 
     parent.archived = true;
+    parent.archivedAt = new Date().toISOString();
+    parent.splitInto = childIds;
 
     return { parentAgentId: parent.agentId, childIds };
   });

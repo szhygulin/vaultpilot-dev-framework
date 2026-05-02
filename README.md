@@ -58,6 +58,24 @@ node dist/bin/vp-dev.js agents list   # registry roster
 - Three layers block pushes to `main` of the target repo: branch protection,
   `disallowedTools`, and a `canUseTool` regex.
 
+## Troubleshooting
+
+### `Claude Code native binary not found at …-musl/claude` on Linux
+
+`npm install` pulls both the musl and glibc SDK binaries as optional deps;
+the SDK's resolution order tries musl first, so on glibc hosts (Ubuntu,
+Debian, Fedora, RHEL) `query()` launches an ELF whose interpreter
+(`/lib/ld-musl-x86_64.so.1`) doesn't exist and aborts.
+
+Override the binary path via `VP_DEV_CLAUDE_BIN`:
+
+```sh
+export VP_DEV_CLAUDE_BIN=$PWD/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude
+```
+
+Every `query()` call site reads this env var (centralized in
+`src/agent/sdkBinary.ts`) and passes it as `pathToClaudeCodeExecutable`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

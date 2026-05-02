@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { claudeBinPath } from "./sdkBinary.js";
 import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -47,6 +48,7 @@ export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOu
         maxTurns: 1,
         settingSources: [],
         persistSession: false,
+        pathToClaudeCodeExecutable: claudeBinPath(),
       },
     });
     for await (const msg of stream) {

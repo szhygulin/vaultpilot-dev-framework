@@ -7,6 +7,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { buildAgentSystemPrompt } from "./prompt.js";
 import { extractEnvelope } from "./parseResult.js";
+import { claudeBinPath } from "./sdkBinary.js";
 import type { AgentRecord, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -115,6 +116,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
         maxTurns: 50,
         settingSources: [],
         persistSession: false,
+        pathToClaudeCodeExecutable: claudeBinPath(),
       },
     });
 

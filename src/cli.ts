@@ -27,6 +27,13 @@ import {
   proposeSplit,
   readAgentClaudeMdBytes,
 } from "./agent/split.js";
+import {
+  applyPruneProposal,
+  detectPruneCandidates,
+  formatPruneProposals,
+  type PruneProposal,
+  type ApplyResult as PruneApplyResult,
+} from "./agent/prune.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
 
 const DEFAULT_MAX_TICKS = 200;
@@ -113,6 +120,16 @@ export function buildCli(): Command {
         .option("--yes", "Skip the apply confirmation prompt (required for non-TTY environments).")
         .action(async (agentId, opts) => {
           await cmdAgentsSplit(agentId, opts);
+        }),
+    )
+    .addCommand(
+      new Command("prune")
+        .description("Detect overlapping specialists and emit merge proposals. Pass --apply to mutate the registry.")
+        .option("--json", "Print machine-readable JSON")
+        .option("--apply", "Apply proposals: concat CLAUDE.md, archive absorbed agent, update registry. ONE-WAY mutation.")
+        .option("--yes", "Skip the apply confirmation prompt (required for non-TTY environments).")
+        .action(async (opts) => {
+          await cmdAgentsPrune(opts);
         }),
     );
   program.addCommand(agentsCmd);
@@ -529,6 +546,83 @@ async function confirmApply(input: {
       await rl.question(
         `Apply split: archive ${input.agentId} and create ${input.childCount} children? [y/N] `,
       )
+    )
+      .trim()
+      .toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
+interface AgentsPruneOpts {
+  json?: boolean;
+  apply?: boolean;
+  yes?: boolean;
+}
+
+async function cmdAgentsPrune(opts: AgentsPruneOpts): Promise<void> {
+  const reg = await loadRegistry();
+  const proposals = detectPruneCandidates({ registry: reg });
+
+  if (!opts.apply) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ proposals }, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write(formatPruneProposals(proposals));
+    return;
+  }
+
+  if (proposals.length === 0) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ applied: [] }, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write("No prune candidates — nothing to apply.\n");
+    return;
+  }
+
+  process.stdout.write(formatPruneProposals(proposals) + "\n");
+  const confirmed = await confirmPruneApply({ count: proposals.length, yes: !!opts.yes });
+  if (!confirmed) {
+    process.stdout.write("Aborted — no mutation.\n");
+    return;
+  }
+
+  const applied: Array<{ proposal: PruneProposal; result: PruneApplyResult }> = [];
+  for (const p of proposals) {
+    const result = await applyPruneProposal(p);
+    applied.push({ proposal: p, result });
+  }
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ applied }, null, 2) + "\n");
+    return;
+  }
+  for (const a of applied) {
+    process.stdout.write(
+      `merged ${a.proposal.absorbed} -> ${a.proposal.survivor}; archived to ${a.result.archivedTo}\n`,
+    );
+  }
+}
+
+async function confirmPruneApply(input: { count: number; yes: boolean }): Promise<boolean> {
+  if (input.yes) {
+    process.stdout.write("Auto-confirmed (--yes).\n");
+    return true;
+  }
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      "ERROR: stdin is not a TTY and --yes was not passed. Re-run with --yes to skip confirmation.\n",
+    );
+    return false;
+  }
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (
+      await rl.question(`Apply ${input.count} prune proposal(s)? [y/N] `)
     )
       .trim()
       .toLowerCase();

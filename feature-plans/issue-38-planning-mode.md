@@ -1,6 +1,6 @@
 # Plan: planning mode — Opus plans complex issues while small issues dispatch in parallel
 
-Tracks [#37](https://github.com/szhygulin/vaultpilot-development-agents/issues/37).
+Tracks [#38](https://github.com/szhygulin/vaultpilot-development-agents/issues/38).
 
 ## Context
 

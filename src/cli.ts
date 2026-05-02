@@ -11,6 +11,7 @@ import {
   writeCurrentRunId,
 } from "./state/runState.js";
 import { createAgent, loadRegistry, mutateRegistry } from "./state/registry.js";
+import { loadAllAgentStats, pollOutcomes } from "./state/outcomes.js";
 import { parseRangeSpec, describeRange } from "./github/range.js";
 import { getIssue, resolveRangeToIssues } from "./github/gh.js";
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
@@ -30,6 +31,7 @@ import {
 import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
 
 const DEFAULT_MAX_TICKS = 200;
+const DEFAULT_STALLED_THRESHOLD_DAYS = 14;
 
 export function buildCli(): Command {
   const program = new Command();
@@ -45,6 +47,12 @@ export function buildCli(): Command {
     .option("--resume", "Resume the most recent unfinished run")
     .option("--dry-run", "Intercept comment / PR / push tools with synthetic responses")
     .option("--max-ticks <n>", "Safety cap on scheduling ticks", parsePositive, DEFAULT_MAX_TICKS)
+    .option(
+      "--stalled-threshold-days <n>",
+      "Mark an open PR as stalled after N days of inactivity (default 14)",
+      parsePositive,
+      DEFAULT_STALLED_THRESHOLD_DAYS,
+    )
     .option("--verbose", "Mirror a colorized subset of events to stderr")
     .option("--yes", "Auto-approve the setup preview (required for non-TTY environments)")
     .action(async (opts) => {
@@ -104,6 +112,23 @@ export function buildCli(): Command {
         }),
     )
     .addCommand(
+      new Command("stats")
+        .description(
+          "Per-agent outcome rollup: merge rate, median rework, $/merge — sourced from state/outcomes/<agent>.jsonl. Polls non-terminal PRs first.",
+        )
+        .option(
+          "--stalled-threshold-days <n>",
+          "Mark an open PR as stalled after N days of inactivity (default 14)",
+          parsePositive,
+          DEFAULT_STALLED_THRESHOLD_DAYS,
+        )
+        .option("--no-poll", "Skip the GitHub poll; report only what's already on disk")
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdAgentsStats(opts);
+        }),
+    )
+    .addCommand(
       new Command("split")
         .description("Detect overload + emit a proposed split into 2-3 sub-specialists. Pass --apply to mutate the registry.")
         .argument("<agentId>", "Agent to inspect (e.g. agent-d396)")
@@ -128,6 +153,7 @@ interface RunOpts {
   resume?: boolean;
   dryRun?: boolean;
   maxTicks: number;
+  stalledThresholdDays: number;
   verbose?: boolean;
   yes?: boolean;
 }
@@ -172,6 +198,8 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     console.error("ERROR: no open issues in range.");
     process.exit(2);
   }
+
+  await pollOutcomesQuietly({ staleThresholdDays: opts.stalledThresholdDays });
 
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
@@ -255,6 +283,8 @@ async function runResume(opts: RunOpts): Promise<void> {
   const { open, skippedClosed } = await resolveRangeToIssues(state.targetRepo, state.issueRange);
   const tracked = new Set(Object.keys(state.issues).map(Number));
   const issues = open.filter((i) => tracked.has(i.id));
+
+  await pollOutcomesQuietly({ staleThresholdDays: opts.stalledThresholdDays });
 
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
@@ -741,4 +771,67 @@ function parsePositive(value: string): number {
     throw new Error(`Expected positive integer, got "${value}"`);
   }
   return n;
+}
+
+async function pollOutcomesQuietly(opts: { staleThresholdDays: number }): Promise<void> {
+  // Failures here must never block the run: outcome metrics are advisory.
+  // The user sees a one-liner on stderr if anything was appended.
+  try {
+    const result = await pollOutcomes({ staleThresholdDays: opts.staleThresholdDays });
+    if (result.appended.length > 0) {
+      const merged = result.appended.filter((o) => o.terminalState === "merged").length;
+      const closed = result.appended.filter((o) => o.terminalState === "closed-unmerged").length;
+      const stalled = result.appended.filter((o) => o.terminalState === "stalled").length;
+      process.stderr.write(
+        `outcomes: appended ${result.appended.length} (merged=${merged} closed=${closed} stalled=${stalled})\n`,
+      );
+    }
+  } catch (err) {
+    process.stderr.write(`outcomes: poll skipped (${(err as Error).message})\n`);
+  }
+}
+
+interface AgentsStatsOpts {
+  stalledThresholdDays: number;
+  poll?: boolean;
+  json?: boolean;
+}
+
+async function cmdAgentsStats(opts: AgentsStatsOpts): Promise<void> {
+  if (opts.poll !== false) {
+    await pollOutcomesQuietly({ staleThresholdDays: opts.stalledThresholdDays });
+  }
+  const stats = await loadAllAgentStats();
+  const reg = await loadRegistry();
+  const nameOf = new Map(reg.agents.map((a) => [a.agentId, a.name]));
+  const tagsOf = new Map(reg.agents.map((a) => [a.agentId, a.tags]));
+
+  const enriched = stats.map((s) => ({
+    ...s,
+    name: nameOf.get(s.agentId),
+    tags: tagsOf.get(s.agentId) ?? [],
+  }));
+  // Sort by merge-rate desc; tiebreaker = runs desc.
+  enriched.sort((x, y) => y.mergeRate - x.mergeRate || y.runs - x.runs);
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ agents: enriched }, null, 2) + "\n");
+    return;
+  }
+
+  if (enriched.length === 0) {
+    process.stdout.write("No outcomes recorded yet. Run `vp-dev run` to accumulate signal.\n");
+    return;
+  }
+
+  const headers = ["agent", "tags", "runs", "merge-rate", "median-rework", "$/merge"];
+  const rows = enriched.map((s) => [
+    s.name ? `${s.name} (${s.agentId})` : s.agentId,
+    s.tags.length > 0 ? s.tags.join(",") : "general",
+    String(s.runs),
+    `${Math.round(s.mergeRate * 100)}%`,
+    s.medianRework == null ? "-" : String(s.medianRework),
+    s.costPerMerge == null ? "-" : `$${s.costPerMerge.toFixed(2)}`,
+  ]);
+  printTable(headers, rows);
 }

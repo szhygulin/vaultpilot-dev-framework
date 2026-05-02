@@ -37,14 +37,21 @@ for `y/N` confirmation before launching agents. Pass `--yes` to auto-approve
 | `--resume` | Resume the most recent unfinished run. |
 | `--yes` | Skip the approval gate. |
 | `--max-ticks <n>` | Safety cap on scheduling ticks (default 200). |
+| `--stalled-threshold-days <n>` | Mark an open PR as stalled after N days (default 14). |
 | `--verbose` | Mirror a colorized event subset to stderr. |
 
 ### Other commands
 
 ```sh
-node dist/bin/vp-dev.js status        # current run summary
-node dist/bin/vp-dev.js agents list   # registry roster
+node dist/bin/vp-dev.js status         # current run summary
+node dist/bin/vp-dev.js agents list    # registry roster
+node dist/bin/vp-dev.js agents stats   # merge-rate / median-rework / $/merge per agent
 ```
+
+`agents stats` polls each non-terminal PR via `gh pr view` once, then
+appends terminal records to `state/outcomes/<agent>.jsonl`. Pass
+`--no-poll` to skip the GitHub round-trip and report only what's already
+on disk.
 
 ## How it works
 

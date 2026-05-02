@@ -11,6 +11,22 @@ interface GhIssueRecord {
   labels: { name: string }[];
 }
 
+interface GhIssueDetailRecord extends GhIssueRecord {
+  body: string;
+  comments: { author?: { login?: string }; body: string; createdAt: string }[];
+}
+
+export interface IssueComment {
+  author: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface IssueDetail extends IssueSummary {
+  body: string;
+  comments: IssueComment[];
+}
+
 export async function listOpenIssues(targetRepo: string): Promise<IssueSummary[]> {
   const { stdout } = await execFile(
     "gh",
@@ -61,6 +77,37 @@ function toSummary(rec: GhIssueRecord): IssueSummary {
     labels: rec.labels.map((l) => l.name),
     state,
   };
+}
+
+export async function getIssueDetail(targetRepo: string, number: number): Promise<IssueDetail | null> {
+  try {
+    const { stdout } = await execFile(
+      "gh",
+      [
+        "issue",
+        "view",
+        String(number),
+        "--repo",
+        targetRepo,
+        "--json",
+        "number,title,state,labels,body,comments",
+      ],
+      { maxBuffer: 50 * 1024 * 1024 },
+    );
+    const rec = JSON.parse(stdout) as GhIssueDetailRecord;
+    const summary = toSummary(rec);
+    return {
+      ...summary,
+      body: rec.body ?? "",
+      comments: (rec.comments ?? []).map((c) => ({
+        author: c.author?.login ?? "",
+        body: c.body ?? "",
+        createdAt: c.createdAt ?? "",
+      })),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveRangeToIssues(

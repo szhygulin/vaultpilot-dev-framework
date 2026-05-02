@@ -14,7 +14,8 @@ import { createAgent, loadRegistry, mutateRegistry } from "./state/registry.js";
 import { parseRangeSpec, describeRange } from "./github/range.js";
 import { getIssue, resolveRangeToIssues } from "./github/gh.js";
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
-import { approveSetup, buildSetupPreview } from "./orchestrator/setup.js";
+import { approveSetup, buildSetupPreview, type TriageSkipped } from "./orchestrator/setup.js";
+import { triageBatch } from "./orchestrator/triage.js";
 import { Logger } from "./log/logger.js";
 import { fetchOriginMain, pruneStaleAgentBranches, pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
 import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
@@ -54,6 +55,10 @@ export function buildCli(): Command {
     .option("--max-ticks <n>", "Safety cap on scheduling ticks", parsePositive, DEFAULT_MAX_TICKS)
     .option("--verbose", "Mirror a colorized subset of events to stderr")
     .option("--yes", "Auto-approve the setup preview (required for non-TTY environments)")
+    .option(
+      "--include-non-ready",
+      "Skip pre-dispatch triage and dispatch every open issue (per-run override; no env var)",
+    )
     .action(async (opts) => {
       await cmdRun(opts);
     });
@@ -149,6 +154,7 @@ interface RunOpts {
   maxTicks: number;
   verbose?: boolean;
   yes?: boolean;
+  includeNonReady?: boolean;
 }
 
 async function cmdRun(opts: RunOpts): Promise<void> {
@@ -192,17 +198,63 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.exit(2);
   }
 
+  // Pre-dispatch triage runs BEFORE the approval gate so the user sees the
+  // skipped set before y/N. Logger is opened early under a triage-prefixed id
+  // (the real runId is only minted after gate approval); the file lives
+  // alongside the eventual run log under logs/. --include-non-ready bypasses
+  // the haiku call entirely — no value in spending tokens on a result we're
+  // about to ignore.
+  const triageLogger = new Logger({
+    runId: `triage-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+    verbose: !!opts.verbose,
+  });
+  await triageLogger.open();
+  let dispatchIssues = open;
+  let triageSkipped: TriageSkipped[] = [];
+  try {
+    if (opts.includeNonReady) {
+      triageLogger.info("triage.bypassed", { reason: "--include-non-ready", issueCount: open.length });
+    } else {
+      const triaged = await triageBatch({
+        targetRepo: opts.targetRepo,
+        issues: open,
+        logger: triageLogger,
+      });
+      dispatchIssues = triaged.filter((t) => t.result.ready).map((t) => t.issue);
+      triageSkipped = triaged
+        .filter((t) => !t.result.ready)
+        .map((t) => ({ issue: t.issue, reason: t.result.reason }));
+      triageLogger.info("triage.batch_completed", {
+        total: triaged.length,
+        ready: dispatchIssues.length,
+        skipped: triageSkipped.length,
+        cacheHits: triaged.filter((t) => t.fromCache).length,
+        totalCostUsd: triaged.reduce((sum, t) => sum + t.costUsd, 0),
+      });
+    }
+  } finally {
+    await triageLogger.close();
+  }
+
+  if (dispatchIssues.length === 0) {
+    console.error(
+      `ERROR: all ${open.length} open issue(s) filtered by triage as not-ready. Re-run with --include-non-ready to dispatch them anyway.`,
+    );
+    process.exit(2);
+  }
+
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
     targetRepo: opts.targetRepo,
     targetRepoPath: repoPath,
     rangeLabel: describeRange(range),
-    openIssues: open,
+    openIssues: dispatchIssues,
     closedSkipped: skippedClosed,
     parallelism: opts.agents,
     dryRun: !!opts.dryRun,
     resume: false,
     registry,
+    triageSkipped,
   });
   const approved = await approveSetup({ preview, yes: !!opts.yes });
   if (!approved) {
@@ -216,7 +268,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     targetRepo: opts.targetRepo,
     issueRange: range,
     parallelism: opts.agents,
-    issueIds: open.map((i) => i.id),
+    issueIds: dispatchIssues.map((i) => i.id),
     dryRun: !!opts.dryRun,
   });
   await saveRunState(state);
@@ -230,7 +282,8 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     targetRepoPath: repoPath,
     parallelism: opts.agents,
     range: opts.issues,
-    issueCount: open.length,
+    issueCount: dispatchIssues.length,
+    triageSkippedCount: triageSkipped.length,
     dryRun: !!opts.dryRun,
   });
 
@@ -239,7 +292,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
     await runOrchestrator({
       state,
-      issues: open,
+      issues: dispatchIssues,
       parallelism: opts.agents,
       maxTicks: opts.maxTicks,
       logger,
@@ -249,7 +302,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     logger.info("run.completed", {
       runId,
       complete: isRunComplete(state),
-      issueCount: open.length,
+      issueCount: dispatchIssues.length,
     });
     if (isRunComplete(state)) await clearCurrentRunId();
   } finally {

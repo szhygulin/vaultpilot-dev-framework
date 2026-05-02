@@ -7,6 +7,11 @@ import {
   type OverloadVerdict,
 } from "../agent/split.js";
 
+export interface TriageSkipped {
+  issue: IssueSummary;
+  reason: string;
+}
+
 export interface SetupPreview {
   targetRepo: string;
   targetRepoPath: string;
@@ -23,6 +28,10 @@ export interface SetupPreview {
   specialistCount: number;
   generalCount: number;
   overloadWarnings: OverloadVerdict[];
+  // Issues filtered out by pre-dispatch triage (haiku rubric). Surfaced in
+  // the gate so the user can see what is being dropped before y/N. When
+  // --include-non-ready is passed, triage is skipped and this is empty.
+  triageSkipped: TriageSkipped[];
 }
 
 export interface BuildPreviewInput {
@@ -35,6 +44,7 @@ export interface BuildPreviewInput {
   dryRun: boolean;
   resume: boolean;
   registry: AgentRegistryFile;
+  triageSkipped?: TriageSkipped[];
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -68,6 +78,7 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     specialistCount: pick.specialistCount,
     generalCount: pick.generalCount,
     overloadWarnings,
+    triageSkipped: input.triageSkipped ?? [],
   };
 }
 
@@ -117,6 +128,15 @@ export function formatSetupPreview(p: SetupPreview): string {
       lines.push(`  WARNING: ${w.agentId} crossed split threshold — ${w.reasons.join(", ")}`);
       lines.push(`    Run \`vp-dev agents split ${w.agentId}\` to view a split proposal.`);
     }
+    lines.push("");
+  }
+
+  if (p.triageSkipped.length > 0) {
+    lines.push(`${p.triageSkipped.length} issue(s) skipped by triage:`);
+    for (const s of p.triageSkipped) {
+      lines.push(`  #${s.issue.id} — ${s.reason}`);
+    }
+    lines.push("  Override with --include-non-ready.");
     lines.push("");
   }
 

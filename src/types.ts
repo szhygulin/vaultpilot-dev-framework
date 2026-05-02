@@ -32,6 +32,10 @@ export interface AgentRecord {
   // Parent agentId, populated on a child minted by `vp-dev agents split`.
   // Optional for back-compat.
   parentAgentId?: string;
+  // Set on the absorbed agent when `vp-dev agents prune --apply` merges two
+  // overlapping specialists. Points at the surviving agent. Optional for
+  // back-compat with pre-prune records.
+  mergedInto?: string;
 }
 
 export interface AgentRegistryFile {

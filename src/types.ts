@@ -29,6 +29,15 @@ export interface AgentRecord {
   // archived agents but their history survives in the registry. Optional
   // for back-compat with pre-split records.
   archived?: boolean;
+  // ISO-8601 timestamp recorded when `archived` flips true. Lets the
+  // registry alone answer "when was this agent archived?" without
+  // cross-referencing run logs. Optional for back-compat.
+  archivedAt?: string;
+  // The child agentIds minted from this parent at split time. Forward
+  // pointer for the audit trail — given a parent record, you can find
+  // the children that inherited its sections without scanning every
+  // other record. Optional for back-compat.
+  splitInto?: string[];
   // Parent agentId, populated on a child minted by `vp-dev agents split`.
   // Optional for back-compat.
   parentAgentId?: string;

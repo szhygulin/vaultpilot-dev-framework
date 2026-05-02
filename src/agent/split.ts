@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { agentClaudeMdPath, agentDir } from "./specialization.js";
+import { claudeBinPath } from "./sdkBinary.js";
 import { mutateRegistry, newAgentId } from "../state/registry.js";
 import { ensureDir } from "../state/locks.js";
 import type { AgentRecord } from "../types.js";
@@ -182,6 +183,7 @@ export async function proposeSplit(
       maxTurns: 1,
       settingSources: [],
       persistSession: false,
+      pathToClaudeCodeExecutable: claudeBinPath(),
     },
   });
   for await (const msg of stream) {
@@ -431,6 +433,8 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitResu
     }
 
     parent.archived = true;
+    parent.archivedAt = new Date().toISOString();
+    parent.splitInto = childIds;
 
     return { parentAgentId: parent.agentId, childIds };
   });

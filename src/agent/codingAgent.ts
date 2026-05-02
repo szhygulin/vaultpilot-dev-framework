@@ -8,6 +8,7 @@ import {
 import { buildAgentSystemPrompt } from "./prompt.js";
 import { extractEnvelope } from "./parseResult.js";
 import { reconcileFromState, type ReconcileState } from "./reconcile.js";
+import { claudeBinPath } from "./sdkBinary.js";
 import type { AgentRecord, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -129,6 +130,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
         maxTurns: 50,
         settingSources: [],
         persistSession: false,
+        pathToClaudeCodeExecutable: claudeBinPath(),
       },
     });
 
@@ -210,9 +212,13 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     durationMs,
     costUsd: costUsd ?? null,
     isError,
-    parseError: parseError ?? null,
-    reconciled: reconciled ?? null,
-    branchUrl: branchUrl ?? null,
+    parseError: result.parseError ?? null,
+    reconciled: result.reconciled ?? null,
+    branchUrl: result.branchUrl ?? null,
+    // When parsing failed, capture the raw finalText (truncated) so future
+    // failures are debuggable without re-running the agent at $2-3 each.
+    // Omitted on the happy path to avoid log bloat. See issue #52.
+    finalText: result.parseError ? truncate(finalText, 4096) : undefined,
   });
   return result;
 }

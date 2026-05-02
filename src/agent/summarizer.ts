@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { claudeBinPath } from "./sdkBinary.js";
 import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -32,30 +33,101 @@ export interface SummarizerInput {
 }
 
 export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOutput> {
-  const userPrompt = buildPrompt(input);
+  return runSummarizerQuery({
+    agent: input.agent,
+    issue: input.issue,
+    systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
+    userPrompt: buildPrompt(input),
+    logger: input.logger,
+  });
+}
 
+export interface FailureSummarizerInput {
+  agent: AgentRecord;
+  issue: IssueSummary;
+  // Optional — when the SDK or the agent crashed before producing an
+  // envelope, only errorReason is populated.
+  envelope?: ResultEnvelope;
+  errorReason?: string;
+  toolUseTrace: { tool: string; input: string }[];
+  finalText: string;
+  logger: Logger;
+}
+
+export async function summarizeFailureRun(
+  input: FailureSummarizerInput,
+): Promise<SummarizerOutput> {
+  return runSummarizerQuery({
+    agent: input.agent,
+    issue: input.issue,
+    systemPrompt: FAILURE_SUMMARIZER_SYSTEM_PROMPT,
+    userPrompt: buildFailurePrompt(input),
+    logger: input.logger,
+  });
+}
+
+// Pattern-match SDK / GitHub / filesystem transport errors that have no
+// learning value. Anything that doesn't match here is treated as a genuine
+// failure worth distilling into a lesson.
+const INFRA_FLAKE_PATTERNS: RegExp[] = [
+  /\bECONNRESET\b/i,
+  /\bECONNREFUSED\b/i,
+  /\bENOTFOUND\b/i,
+  /\bEPIPE\b/i,
+  /\bETIMEDOUT\b/i,
+  /\baborted?\b/i,
+  /\btimed out\b/i,
+  /\btimeout\b/i,
+  /\bsocket hang up\b/i,
+  /\bnetwork error\b/i,
+  /\bfetch failed\b/i,
+  // GitHub API 5xx surfaces from gh / api wrappers.
+  /\bHTTP 5\d\d\b/,
+  /\bstatus(?:Code)?[:\s]+5\d\d\b/i,
+  // Worktree / filesystem-level failures.
+  /\bworktree\b[\s\S]{0,80}\b(?:fail|create|init|exists|locked)\b/i,
+  /\bENOENT\b/,
+  /\bEACCES\b/,
+  /\bENOSPC\b/,
+];
+
+export function isInfraFlake(reason: string | undefined | null): boolean {
+  if (!reason) return false;
+  return INFRA_FLAKE_PATTERNS.some((re) => re.test(reason));
+}
+
+interface SummarizerQueryArgs {
+  agent: AgentRecord;
+  issue: IssueSummary;
+  systemPrompt: string;
+  userPrompt: string;
+  logger: Logger;
+}
+
+async function runSummarizerQuery(args: SummarizerQueryArgs): Promise<SummarizerOutput> {
   let raw = "";
   try {
     const stream = query({
-      prompt: userPrompt,
+      prompt: args.userPrompt,
       options: {
         model: SUMMARIZER_MODEL,
-        systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
+        systemPrompt: args.systemPrompt,
         tools: [],
         permissionMode: "default",
         env: process.env,
         maxTurns: 1,
         settingSources: [],
         persistSession: false,
+        pathToClaudeCodeExecutable: claudeBinPath(),
       },
     });
     for await (const msg of stream) {
       if (msg.type === "result") {
         if (msg.subtype === "success") raw = msg.result;
         else {
-          input.logger.warn("specialization.summarizer_failed", {
-            agentId: input.agent.agentId,
-            issueId: input.issue.id,
+          args.logger.warn("specialization.summarizer_failed", {
+            agentId: args.agent.agentId,
+            issueId: args.issue.id,
             subtype: msg.subtype,
           });
           return { skip: true, skipReason: `summarizer query failed: ${msg.subtype}` };
@@ -63,9 +135,9 @@ export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOu
       }
     }
   } catch (err) {
-    input.logger.warn("specialization.summarizer_failed", {
-      agentId: input.agent.agentId,
-      issueId: input.issue.id,
+    args.logger.warn("specialization.summarizer_failed", {
+      agentId: args.agent.agentId,
+      issueId: args.issue.id,
       err: (err as Error).message,
     });
     return { skip: true, skipReason: `summarizer exception: ${(err as Error).message}` };
@@ -73,9 +145,9 @@ export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOu
 
   const json = parseJsonLoose(raw);
   if (!json) {
-    input.logger.warn("summarizer.malformed_payload", {
-      agentId: input.agent.agentId,
-      issueId: input.issue.id,
+    args.logger.warn("summarizer.malformed_payload", {
+      agentId: args.agent.agentId,
+      issueId: args.issue.id,
       raw: raw.slice(0, 4000),
     });
     return { skip: true, skipReason: "summarizer output not valid JSON" };
@@ -85,13 +157,13 @@ export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOu
   // validation so the entire summary isn't discarded just because the LLM
   // ignored the prompt's length directive. The schema's max bounds still
   // act as a hard ceiling — clamping happens against those same constants.
-  const clamped = clampLengths(json, input);
+  const clamped = clampLengthsCompat(json, args.logger, args.agent.agentId, args.issue.id);
 
   const parsed = SummarizerOutputSchema.safeParse(clamped);
   if (!parsed.success) {
-    input.logger.warn("summarizer.malformed_payload", {
-      agentId: input.agent.agentId,
-      issueId: input.issue.id,
+    args.logger.warn("summarizer.malformed_payload", {
+      agentId: args.agent.agentId,
+      issueId: args.issue.id,
       raw: raw.slice(0, 4000),
       zodError: parsed.error.message.replace(/\s+/g, " "),
     });
@@ -103,15 +175,20 @@ export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOu
   return parsed.data;
 }
 
-function clampLengths(json: unknown, input: SummarizerInput): unknown {
+function clampLengthsCompat(
+  json: unknown,
+  logger: Logger,
+  agentId: string,
+  issueId: number,
+): unknown {
   if (!json || typeof json !== "object") return json;
   const obj = json as Record<string, unknown>;
   const out: Record<string, unknown> = { ...obj };
   if (typeof obj.heading === "string" && obj.heading.length > HEADING_MAX) {
     out.heading = obj.heading.slice(0, HEADING_MAX - 3) + "...";
-    input.logger.warn("summarizer.clamped", {
-      agentId: input.agent.agentId,
-      issueId: input.issue.id,
+    logger.warn("summarizer.clamped", {
+      agentId,
+      issueId,
       field: "heading",
       originalLength: obj.heading.length,
       max: HEADING_MAX,
@@ -119,9 +196,9 @@ function clampLengths(json: unknown, input: SummarizerInput): unknown {
   }
   if (typeof obj.body === "string" && obj.body.length > BODY_MAX) {
     out.body = obj.body.slice(0, BODY_MAX - 16) + "\n[…truncated]";
-    input.logger.warn("summarizer.clamped", {
-      agentId: input.agent.agentId,
-      issueId: input.issue.id,
+    logger.warn("summarizer.clamped", {
+      agentId,
+      issueId,
       field: "body",
       originalLength: obj.body.length,
       max: BODY_MAX,
@@ -144,6 +221,67 @@ Hard rules:
 
 Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Use \`{"skip": false, "heading": "...", "body": "..."}\` when there is a lesson worth saving, and \`{"skip": true, "skipReason": "..."}\` otherwise. Schema:
   {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
+
+const FAILURE_SUMMARIZER_SYSTEM_PROMPT = `You are a distillation agent. A coding agent JUST FAILED on a single GitHub issue — CI red after retry, agent gave up, envelope decision="error", or the SDK crashed mid-run after producing partial work. Your job is to extract the highest-signal failure lesson worth committing to the agent's CLAUDE.md.
+
+Failure-mode bias: lean toward EMITTING a lesson, not skipping. The whole point of this path is that today these signals are discarded — assume there is something worth saying unless the failure is genuinely opaque.
+
+Three questions to anchor the body:
+1. What did the agent ASSUME that turned out wrong?
+2. What CONTEXT or TOOLING was missing — what would have unblocked it?
+3. What GUARD RULE, written tersely, would have prevented this on the next similar issue?
+
+Style: match the dense rule-form of an existing CLAUDE.md section. Lead with the rule itself in bold. Then a **Why:** line (the failure mode this targets). Then a **How to apply:** line (when this guidance kicks in). Use **Tells:** sparingly. Markdown hyperlinks (\`[label](url)\`) over raw URLs.
+
+Hard rules:
+- If the failure was genuinely uninformative (single ambiguous error string, no agent reasoning, no clear missed assumption), emit \`{"skip": true, "skipReason": "<one short sentence>"}\`. Wrong-lesson risk beats noisy-lesson risk.
+- Heading: ≤ 120 chars, no trailing colon, no markdown prefix (no leading "##"). The append step prepends "##".
+- Body: ≤ 2000 chars. 2–8 short lines. No prose paragraphs.
+- Do NOT mention the specific issue number, PR number, or run id — that's in the provenance comment. Talk about the class of failure, not this instance.
+- Inside heading / body / skipReason string values: escape every double-quote as \\" and every literal newline as \\n. Do NOT escape apostrophes — \\' is INVALID JSON. Write apostrophes as a plain ': don't, isn't, can't.
+
+Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Schema:
+  {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
+
+function buildFailurePrompt(input: FailureSummarizerInput): string {
+  const trace = input.toolUseTrace
+    .slice(-12)
+    .map((t) => `- ${t.tool}: ${t.input}`)
+    .join("\n");
+
+  const decisionLine = input.envelope
+    ? `Decision: ${input.envelope.decision}`
+    : "Decision: <no envelope — agent crashed before emitting one>";
+  const reasonLine = input.envelope ? `Reason: ${input.envelope.reason}` : "";
+  const errorLine = input.errorReason ? `SDK / runtime error: ${input.errorReason}` : "";
+  const tagsAdded = input.envelope ? JSON.stringify(input.envelope.memoryUpdate.addTags) : "[]";
+  const tagsRemoved = input.envelope
+    ? JSON.stringify(input.envelope.memoryUpdate.removeTags ?? [])
+    : "[]";
+
+  return `Agent ${input.agent.agentId} just FAILED work on an issue. Distill the lesson.
+
+Issue:
+  number: ${input.issue.id}
+  title: ${input.issue.title}
+  labels: ${JSON.stringify(input.issue.labels)}
+
+Pre-run agent tags: ${JSON.stringify(input.agent.tags)}
+Tags added this run: ${tagsAdded}
+Tags removed this run: ${tagsRemoved}
+
+${decisionLine}
+${reasonLine}
+${errorLine}
+
+Last tool calls (most recent ${Math.min(12, input.toolUseTrace.length)}):
+${trace || "(none captured)"}
+
+Agent's final reasoning text (truncated):
+${truncate(input.finalText, 4000)}
+
+Decide: is there a generalizable failure lesson worth committing to this agent's CLAUDE.md? Lean toward yes — failure-mode runs exist to capture signal that success-mode discards. If yes, emit {"skip": false, "heading": "...", "body": "..."}. If the failure is genuinely opaque, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only — escape every \\" inside string values.`;
+}
 
 function buildPrompt(input: SummarizerInput): string {
   const trace = input.toolUseTrace

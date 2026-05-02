@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildTickPrompt } from "./prompt.js";
+import { claudeBinPath } from "../agent/sdkBinary.js";
 import { TickProposalSchema, type TickAssignment } from "../types.js";
 import {
   classifyMatch,
@@ -98,6 +99,7 @@ async function tryProposeWithLLM(opts: {
         maxTurns: 1,
         settingSources: [],
         persistSession: false,
+        pathToClaudeCodeExecutable: claudeBinPath(),
       },
     });
     for await (const msg of stream) {

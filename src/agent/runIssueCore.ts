@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { ensureAgent, mutateRegistry } from "../state/registry.js";
 import { runCodingAgent } from "./codingAgent.js";
 import { appendBlock, forkClaudeMd, type AppendOutcome } from "./specialization.js";
-import { summarizeRun } from "./summarizer.js";
+import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
 import {
   createWorktree,
   removeWorktree,
@@ -85,51 +85,78 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       applyTagUpdate(input.agent, envelope);
 
       if (!input.skipSummary) {
-        const summary = await summarizeRun({
+        // Failure-mode branch: agent emitted decision="error" — fire the
+        // failure summarizer (different prompt, biased toward extracting a
+        // lesson). Success/pushback paths stay on summarizeRun.
+        const isAgentFailure = envelope.decision === "error";
+        const summary: SummarizerOutput = isAgentFailure
+          ? await summarizeFailureRun({
+              agent: input.agent,
+              issue: input.issue,
+              envelope,
+              errorReason: result.errorReason,
+              toolUseTrace: result.toolUseTrace,
+              finalText: result.finalText,
+              logger: input.logger,
+            })
+          : await summarizeRun({
+              agent: input.agent,
+              issue: input.issue,
+              envelope,
+              toolUseTrace: result.toolUseTrace,
+              finalText: result.finalText,
+              logger: input.logger,
+            });
+
+        const outcomeTag = isAgentFailure ? "failure-lesson" : envelope.decision;
+        const appendResult = await maybeAppendSummary({
+          summary,
           agent: input.agent,
           issue: input.issue,
-          envelope,
-          toolUseTrace: result.toolUseTrace,
-          finalText: result.finalText,
+          runId: input.runId,
+          outcome: outcomeTag,
+          targetRepoPath: input.targetRepoPath,
           logger: input.logger,
         });
+        appendOutcome = appendResult.appendOutcome;
+        summarySkipReason = appendResult.summarySkipReason;
+      }
+    } else {
+      input.agent.errorCount += 1;
 
-        if (summary.skip || !summary.heading || !summary.body) {
-          summarySkipReason = summary.skipReason ?? "no body";
+      // No envelope — the SDK or the agent crashed before emitting one. Fire
+      // the failure summarizer unless the cause is an infra flake (transport
+      // error, GitHub 5xx, worktree creation fail) where there's no lesson.
+      if (!input.skipSummary) {
+        if (isInfraFlake(result.errorReason)) {
+          summarySkipReason = `infra flake skipped: ${result.errorReason}`;
           input.logger.info("specialization.skipped", {
             agentId: input.agent.agentId,
             issueId: input.issue.id,
             reason: summarySkipReason,
           });
-        } else {
-          appendOutcome = await appendBlock({
-            agentId: input.agent.agentId,
-            runId: input.runId,
-            issueId: input.issue.id,
-            outcome: envelope.decision,
-            heading: summary.heading,
-            body: summary.body,
-            targetRepoPath: input.targetRepoPath,
+        } else if (result.errorReason || result.parseError || result.finalText) {
+          const summary = await summarizeFailureRun({
+            agent: input.agent,
+            issue: input.issue,
+            errorReason: result.errorReason ?? result.parseError,
+            toolUseTrace: result.toolUseTrace,
+            finalText: result.finalText,
+            logger: input.logger,
           });
-          if (appendOutcome.kind === "appended") {
-            input.logger.info("specialization.appended", {
-              agentId: input.agent.agentId,
-              issueId: input.issue.id,
-              heading: summary.heading,
-              bytesAppended: appendOutcome.bytesAppended,
-              totalBytes: appendOutcome.totalBytes,
-            });
-          } else {
-            input.logger.warn("specialization.cap", {
-              agentId: input.agent.agentId,
-              issueId: input.issue.id,
-              totalBytes: appendOutcome.totalBytes,
-            });
-          }
+          const appendResult = await maybeAppendSummary({
+            summary,
+            agent: input.agent,
+            issue: input.issue,
+            runId: input.runId,
+            outcome: "failure-lesson",
+            targetRepoPath: input.targetRepoPath,
+            logger: input.logger,
+          });
+          appendOutcome = appendResult.appendOutcome;
+          summarySkipReason = appendResult.summarySkipReason;
         }
       }
-    } else {
-      input.agent.errorCount += 1;
     }
 
     await mutateRegistry((reg) => {
@@ -182,4 +209,56 @@ function applyTagUpdate(agent: AgentRecord, env: ResultEnvelope): void {
   for (const t of env.memoryUpdate.removeTags ?? []) tags.delete(t.toLowerCase());
   if (tags.size === 0) tags.add("general");
   agent.tags = [...tags].sort();
+}
+
+interface AppendArgs {
+  summary: SummarizerOutput;
+  agent: AgentRecord;
+  issue: IssueSummary;
+  runId: string;
+  outcome: string;
+  targetRepoPath: string;
+  logger: Logger;
+}
+
+async function maybeAppendSummary(args: AppendArgs): Promise<{
+  appendOutcome?: AppendOutcome;
+  summarySkipReason?: string;
+}> {
+  if (args.summary.skip || !args.summary.heading || !args.summary.body) {
+    const summarySkipReason = args.summary.skipReason ?? "no body";
+    args.logger.info("specialization.skipped", {
+      agentId: args.agent.agentId,
+      issueId: args.issue.id,
+      reason: summarySkipReason,
+    });
+    return { summarySkipReason };
+  }
+
+  const appendOutcome = await appendBlock({
+    agentId: args.agent.agentId,
+    runId: args.runId,
+    issueId: args.issue.id,
+    outcome: args.outcome,
+    heading: args.summary.heading,
+    body: args.summary.body,
+    targetRepoPath: args.targetRepoPath,
+  });
+  if (appendOutcome.kind === "appended") {
+    args.logger.info("specialization.appended", {
+      agentId: args.agent.agentId,
+      issueId: args.issue.id,
+      heading: args.summary.heading,
+      outcome: args.outcome,
+      bytesAppended: appendOutcome.bytesAppended,
+      totalBytes: appendOutcome.totalBytes,
+    });
+  } else {
+    args.logger.warn("specialization.cap", {
+      agentId: args.agent.agentId,
+      issueId: args.issue.id,
+      totalBytes: appendOutcome.totalBytes,
+    });
+  }
+  return { appendOutcome };
 }

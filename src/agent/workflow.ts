@@ -34,6 +34,8 @@ Run BOTH:
 
 Per CLAUDE.md "Issue Analysis": comments are where reviewers add follow-up scope or push back on the original framing. Fold every comment into the analysis.
 
+If a \`# Plan for issue #${v.issueId} (from feature-plans/...)\` section appears above this workflow in your seed, that plan was prepared in advance — treat it as authoritative design guidance, read it before Step 2, and prefer its file-by-file layout over reinventing one. If no such section is present, either the issue body's \`## Plan\` is "Not needed — coding agent can start directly from the issue body" or the convention path was empty; in either case proceed from the issue body alone.
+
 ## Step 2 — Apply judgment rules from CLAUDE.md
 - Push-Back Discipline: faulty premise → push back BEFORE acting.
 - Smallest-Solution Discipline: minimum change first; flag larger proposals.

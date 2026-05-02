@@ -85,8 +85,9 @@ export function buildCli(): Command {
     .addCommand(
       new Command("list")
         .description("List the agent roster + specializations")
-        .action(async () => {
-          await cmdAgentsList();
+        .option("--all", "Include archived (split-parent) agents in the output")
+        .action(async (opts) => {
+          await cmdAgentsList(opts);
         }),
     )
     .addCommand(
@@ -105,6 +106,7 @@ export function buildCli(): Command {
       new Command("specialties")
         .description("Print per-agent specialties: counts, distinctive tags, summarizer-appended lessons from each agent's CLAUDE.md")
         .option("--top-tags <n>", "Number of distinctive tags to show per agent", parsePositive, 12)
+        .option("--all", "Include archived (split-parent) agents in the output")
         .option("--json", "Print machine-readable JSON")
         .action(async (opts) => {
           await cmdAgentsSpecialties(opts);
@@ -346,6 +348,7 @@ async function cmdStatus(): Promise<void> {
 
 interface AgentsSpecialtiesOpts {
   topTags: number;
+  all?: boolean;
   json?: boolean;
 }
 
@@ -356,16 +359,28 @@ async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> 
     return;
   }
 
+  // Filter archived (split-parent) agents from the default view — the
+  // dispatcher already skips them, so they're not part of the dispatchable
+  // roster. `--all` opts back into the historical view.
+  const visibleAgents = opts.all ? reg.agents : reg.agents.filter((a) => !a.archived);
+  if (visibleAgents.length === 0) {
+    process.stdout.write("No active agents in registry (all archived). Pass --all to include archived agents.\n");
+    return;
+  }
+
   // Tag distinctiveness: count how many agents in the fleet carry each tag.
   // A tag is "distinctive" to an agent if it appears in at most ~1/3 of the
   // fleet — rarer tags carry more signal about what makes this agent unique.
+  // Distinctiveness is computed against the visible set so the cutoff scales
+  // with what the user is actually looking at.
   const tagFleetFreq = new Map<string, number>();
-  for (const a of reg.agents) for (const t of a.tags) tagFleetFreq.set(t, (tagFleetFreq.get(t) ?? 0) + 1);
-  const distinctiveCutoff = Math.max(2, Math.ceil(reg.agents.length / 3));
+  for (const a of visibleAgents) for (const t of a.tags) tagFleetFreq.set(t, (tagFleetFreq.get(t) ?? 0) + 1);
+  const distinctiveCutoff = Math.max(2, Math.ceil(visibleAgents.length / 3));
 
   type Profile = {
     agentId: string;
     name?: string;
+    archived: boolean;
     issuesHandled: number;
     implementCount: number;
     pushbackCount: number;
@@ -376,7 +391,7 @@ async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> 
   };
 
   const profiles: Profile[] = [];
-  for (const a of reg.agents) {
+  for (const a of visibleAgents) {
     let agentMd = "";
     try {
       agentMd = await fs.readFile(agentClaudeMdPath(a.agentId), "utf-8");
@@ -389,6 +404,7 @@ async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> 
     profiles.push({
       agentId: a.agentId,
       name: a.name,
+      archived: !!a.archived,
       issuesHandled: a.issuesHandled,
       implementCount: a.implementCount,
       pushbackCount: a.pushbackCount,
@@ -408,7 +424,8 @@ async function cmdAgentsSpecialties(opts: AgentsSpecialtiesOpts): Promise<void> 
   }
 
   for (const p of profiles) {
-    const label = p.name ? `${p.name} (${p.agentId})` : p.agentId;
+    const baseLabel = p.name ? `${p.name} (${p.agentId})` : p.agentId;
+    const label = p.archived ? `${baseLabel} [archived]` : baseLabel;
     process.stdout.write(
       `\n=== ${label}  handled=${p.issuesHandled}  impl=${p.implementCount}  pb=${p.pushbackCount}  err=${p.errorCount}  lastActive=${p.lastActiveAt}\n`,
     );
@@ -632,23 +649,41 @@ async function confirmPruneApply(input: { count: number; yes: boolean }): Promis
   }
 }
 
-async function cmdAgentsList(): Promise<void> {
+interface AgentsListOpts {
+  all?: boolean;
+}
+
+async function cmdAgentsList(opts: AgentsListOpts): Promise<void> {
   const reg = await loadRegistry();
   if (reg.agents.length === 0) {
     process.stdout.write("No agents in registry yet.\n");
     return;
   }
+  // Default: hide archived (split-parent) agents — the dispatcher skips them,
+  // and showing them next to active children inflates the apparent roster
+  // size. `--all` opts back into the historical view and surfaces an
+  // `archived` column so the rows stay visually distinguishable.
+  const visibleAgents = opts.all ? reg.agents : reg.agents.filter((a) => !a.archived);
+  if (visibleAgents.length === 0) {
+    process.stdout.write("No active agents in registry (all archived). Pass --all to include archived agents.\n");
+    return;
+  }
   const headers = ["name", "agentId", "tags", "issuesHandled", "implement", "pushback", "error", "lastActive"];
-  const rows = reg.agents.map((a) => [
-    a.name ?? "",
-    a.agentId,
-    a.tags.join(","),
-    String(a.issuesHandled),
-    String(a.implementCount),
-    String(a.pushbackCount),
-    String(a.errorCount),
-    a.lastActiveAt,
-  ]);
+  if (opts.all) headers.push("archived");
+  const rows = visibleAgents.map((a) => {
+    const row = [
+      a.name ?? "",
+      a.agentId,
+      a.tags.join(","),
+      String(a.issuesHandled),
+      String(a.implementCount),
+      String(a.pushbackCount),
+      String(a.errorCount),
+      a.lastActiveAt,
+    ];
+    if (opts.all) row.push(a.archived ? "yes" : "");
+    return row;
+  });
   printTable(headers, rows);
 }
 

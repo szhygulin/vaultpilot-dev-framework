@@ -7,6 +7,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { buildAgentSystemPrompt } from "./prompt.js";
 import { extractEnvelope } from "./parseResult.js";
+import { reconcileFromState, type ReconcileState } from "./reconcile.js";
 import { claudeBinPath } from "./sdkBinary.js";
 import type { AgentRecord, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
@@ -33,6 +34,19 @@ export interface CodingAgentResult {
   isError: boolean;
   errorReason?: string;
   toolUseTrace: { tool: string; input: string }[];
+  /**
+   * Set when extractEnvelope failed and the orchestrator queried git/gh state
+   * to rebuild an envelope. Values:
+   *  - "pr-found" — envelope was synthesized from an open PR; `parseError`
+   *    stays populated as a soft warning.
+   *  - "branch-only" — branch on remote without an open PR; `branchUrl` is
+   *    available in run logs (`agent.reconcile_orphan_branch`); envelope
+   *    stays undefined.
+   *  - "no-state" / "error" — original parseError behavior preserved.
+   */
+  reconciled?: ReconcileState;
+  /** Populated when reconciliation found a branch on remote. */
+  branchUrl?: string;
 }
 
 const ALLOWED_NATIVE_TOOLS = ["Bash", "Read", "Edit", "Write", "Grep", "Glob"];
@@ -148,26 +162,59 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
 
   const durationMs = Date.now() - start;
   const parsed = extractEnvelope(finalText);
+
+  let envelope = parsed.envelope;
+  const parseError = parsed.ok ? undefined : parsed.error;
+  let reconciled: ReconcileState | undefined;
+  let branchUrl: string | undefined;
+
+  // Reconciliation pass — when extractEnvelope fails, rebuild from git/gh
+  // state so a successful PR / orphan branch isn't lost behind a parse error.
+  // Skipped in dry-run: branch and PR creation are intercepted (rewritten to
+  // `printf`), so no real state exists to reconcile against.
+  if (!parsed.ok && !input.dryRun) {
+    const r = await reconcileFromState({
+      agentId: input.agent.agentId,
+      issueId: input.issueId,
+      targetRepo: input.targetRepo,
+      targetRepoPath: input.targetRepoPath,
+      branchName: input.branchName,
+      parseError: parseError ?? "unknown",
+      logger: input.logger,
+    });
+    reconciled = r.state;
+    branchUrl = r.branchUrl;
+    if (r.reconciledEnvelope) {
+      envelope = r.reconciledEnvelope;
+      // parseError intentionally retained: the bug stays visible in logs and
+      // CodingAgentResult; reconciliation just stops it from corrupting status.
+    }
+  }
+
   const result: CodingAgentResult = {
-    envelope: parsed.envelope,
+    envelope,
     finalText,
-    parseError: parsed.ok ? undefined : parsed.error,
+    parseError,
     durationMs,
     costUsd,
     isError,
     errorReason,
     toolUseTrace,
+    reconciled,
+    branchUrl,
   };
 
   input.logger.info("agent.completed", {
     agentId: input.agent.agentId,
     issueId: input.issueId,
-    decision: parsed.envelope?.decision ?? null,
-    prUrl: parsed.envelope?.prUrl ?? null,
+    decision: envelope?.decision ?? null,
+    prUrl: envelope?.prUrl ?? null,
     durationMs,
     costUsd: costUsd ?? null,
     isError,
     parseError: result.parseError ?? null,
+    reconciled: result.reconciled ?? null,
+    branchUrl: result.branchUrl ?? null,
     // When parsing failed, capture the raw finalText (truncated) so future
     // failures are debuggable without re-running the agent at $2-3 each.
     // Omitted on the happy path to avoid log bloat. See issue #52.

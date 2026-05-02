@@ -35,6 +35,10 @@ export interface RunIssueCoreResult {
   summarySkipReason?: string;
   worktreePath?: string;
   branchName?: string;
+  /** See CodingAgentResult.reconciled. */
+  reconciled?: string;
+  /** See CodingAgentResult.branchUrl. */
+  branchUrl?: string;
 }
 
 export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCoreResult> {
@@ -179,6 +183,8 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       summarySkipReason,
       worktreePath: worktree?.path,
       branchName: worktree?.branch,
+      reconciled: result.reconciled,
+      branchUrl: result.branchUrl,
     };
   } finally {
     if (worktree) {

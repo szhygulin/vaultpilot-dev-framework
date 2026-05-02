@@ -308,11 +308,18 @@ async function runOneIssue(opts: {
       commentUrl: env.commentUrl,
     };
   } else {
+    // Reconciliation found a branch on remote without a PR — surface it in
+    // the failure record so the user can salvage with one `gh pr create`
+    // instead of grepping run logs for the orphan branch name.
+    const baseError = result.parseError ?? result.errorReason ?? "Unknown agent failure";
+    const error = result.branchUrl
+      ? `${baseError} | orphan branch: ${result.branchUrl}`
+      : baseError;
     opts.state.issues[String(opts.issue.id)] = {
       status: "failed",
       agentId: opts.agent.agentId,
       outcome: "error",
-      error: result.parseError ?? result.errorReason ?? "Unknown agent failure",
+      error,
     };
   }
 

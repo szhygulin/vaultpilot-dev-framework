@@ -36,6 +36,20 @@ Coding agents key off this section. Plan-mode infrastructure writes it; humans c
 4. **Dispatch loop** — unchanged; picks `pending` issues only, never `planning`. Dispatch and planning run in parallel because `runOrchestrator()` is already async-per-issue.
 5. **Coding agent seed** — `buildAgentSystemPrompt()` parses the `## Plan` section; if a file is linked, its content is appended to the seed.
 
+### Idempotency: skip if a plan is already referenced
+
+The complexity gate (step 1 above) MUST first check the issue body for an existing `## Plan` section. If the section exists with non-empty content — either a `feature-plans/...` link **or** the "Not needed" sentinel — the planner skips that issue entirely. No haiku complexity call, no Opus generation, no body edit.
+
+Rationale: plan files are checked in and human-reviewed; they should not be silently regenerated. A human who chose "Not needed" should not have that choice overridden by a complexity reclassification on a re-run. A human who hand-wrote a plan should not have it overwritten.
+
+Applies to every entry point:
+- **`vp-dev run`** — the in-loop complexity gate skips issues with a populated `## Plan` section.
+- **`vp-dev plan <issue#>`** — the ad-hoc CLI fails fast with `plan already referenced for #<N> (feature-plans/<file>.md)` when the section is already populated. A `--force` override is deferred (ship without it first; users can hand-edit the issue body to clear the section if they want to re-plan).
+
+**Edge case** — section exists but the linked file is missing on disk: treat the section as authoritative, skip planning, surface a warning at the approval gate (`issue #<N> references feature-plans/<X>.md but file not found — manual fix needed`). Do not silently regenerate; that path overwrites human intent.
+
+**Implementation note** — the check is a pure read: `gh api repos/<...>/issues/<N> --jq '.body'` then a regex for `(?m)^## Plan$\n+\S`. It runs before any LLM call so the cost of skipping is zero.
+
 ### Implementation — file-by-file
 
 #### `src/agent/planner.ts` (new)

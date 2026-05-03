@@ -30,7 +30,13 @@ import {
 } from "./state/runConfirm.js";
 import { triageBatch } from "./orchestrator/triage.js";
 import { Logger } from "./log/logger.js";
-import { fetchOriginMain, pruneStaleAgentBranches, pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
+import {
+  fetchOriginMain,
+  formatUnprunableWarning,
+  pruneStaleAgentBranches,
+  pruneWorktrees,
+  resolveTargetRepoPath,
+} from "./git/worktree.js";
 import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
 import { promises as fs } from "node:fs";
 import { runIssueCore } from "./agent/runIssueCore.js";
@@ -438,7 +444,12 @@ async function cmdRun(opts: RunOpts): Promise<void> {
 
   try {
     await pruneWorktrees(repoPath);
-    await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
+    const sweep = await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
+    if (sweep.unprunable.length > 0) {
+      state.unprunableStaleBranches = sweep.unprunable;
+      await saveRunState(state);
+      process.stderr.write(formatUnprunableWarning(sweep.unprunable, { color: !!process.stderr.isTTY }));
+    }
     await pollOutcomesLazy({ logger, staleThresholdDays: opts.stalledThresholdDays });
     await runOrchestrator({
       state,
@@ -527,7 +538,12 @@ async function runResume(opts: RunOpts): Promise<void> {
     issueCount: issues.length,
   });
   try {
-    await pruneStaleAgentBranches(repoPath, state.targetRepo, logger);
+    const sweep = await pruneStaleAgentBranches(repoPath, state.targetRepo, logger);
+    if (sweep.unprunable.length > 0) {
+      state.unprunableStaleBranches = sweep.unprunable;
+      await saveRunState(state);
+      process.stderr.write(formatUnprunableWarning(sweep.unprunable, { color: !!process.stderr.isTTY }));
+    }
     await pollOutcomesLazy({ logger, staleThresholdDays: opts.stalledThresholdDays });
     await runOrchestrator({
       state,
@@ -959,7 +975,13 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
   try {
     await fetchOriginMain(repoPath);
     await pruneWorktrees(repoPath);
-    await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
+    const sweep = await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
+    if (sweep.unprunable.length > 0) {
+      // `vp-dev spawn` doesn't carry a RunState, so the audit trail lives
+      // only in the run log JSONL. Still surface the actionable summary
+      // on stderr — same yellow header as `vp-dev run` (#63).
+      process.stderr.write(formatUnprunableWarning(sweep.unprunable, { color: !!process.stderr.isTTY }));
+    }
 
     const inspectPaths = opts.inspectPaths
       ? opts.inspectPaths.split(",").map((s) => s.trim()).filter((s) => s.length > 0)

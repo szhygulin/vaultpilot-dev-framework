@@ -5,6 +5,7 @@ import { agentClaudeMdPath, agentDir } from "./specialization.js";
 import { claudeBinPath } from "./sdkBinary.js";
 import { mutateRegistry, newAgentId } from "../state/registry.js";
 import { ensureDir } from "../state/locks.js";
+import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import type { AgentRecord } from "../types.js";
 
 // Thresholds for "this agent is overloaded enough to warrant splitting".
@@ -193,9 +194,14 @@ export async function proposeSplit(
     }
   }
 
-  const json = parseJsonLoose(raw);
-  if (!json) throw new Error(`split clusterer output not valid JSON: ${raw.slice(0, 200)}`);
-  const clamped = clampClusterFields(json);
+  // Extract the JSON envelope without schema validation — clampClusterFields
+  // needs to trim oversize rationales/names before ProposalSchema runs, so
+  // pass `z.unknown()` and run safeParse ourselves below.
+  const extracted = parseJsonEnvelope(raw, z.unknown());
+  if (!extracted.ok) {
+    throw new Error(`split clusterer output not valid JSON: ${raw.slice(0, 200)}`);
+  }
+  const clamped = clampClusterFields(extracted.value);
   const parsed = ProposalSchema.safeParse(clamped);
   if (!parsed.success) {
     throw new Error(
@@ -261,32 +267,6 @@ Output JSON: {"clusters": [{"proposedName": "...", "proposedTags": ["..."], "sec
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 3) + "...";
-}
-
-function parseJsonLoose(raw: string): unknown {
-  const trimmed = raw.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const fence = /```(?:json)?\s*\n([\s\S]*?)\n```/i.exec(trimmed);
-    if (fence) {
-      try {
-        return JSON.parse(fence[1]);
-      } catch {
-        return null;
-      }
-    }
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
 }
 
 export async function readAgentClaudeMdBytes(agentId: string): Promise<{ md: string; bytes: number }> {

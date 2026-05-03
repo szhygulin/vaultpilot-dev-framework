@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildTickPrompt } from "./prompt.js";
 import { claudeBinPath } from "../agent/sdkBinary.js";
+import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { TickProposalSchema, type TickAssignment } from "../types.js";
 import {
   classifyMatch,
@@ -118,38 +119,19 @@ async function tryProposeWithLLM(opts: {
     response: raw.length > 4000 ? raw.slice(0, 4000) + "..." : raw,
   });
 
-  const parsedJson = parseJsonLoose(raw);
-  if (!parsedJson) return { errors: ["Orchestrator response is not valid JSON."] };
-
-  const proposal = TickProposalSchema.safeParse(parsedJson);
-  if (!proposal.success) return { errors: [`Schema invalid: ${proposal.error.message}`] };
+  const proposal = parseJsonEnvelope(raw, TickProposalSchema);
+  if (!proposal.ok || !proposal.value) {
+    return { errors: [proposal.error ?? "Orchestrator response is not valid JSON."] };
+  }
 
   const errors = validateProposal({
-    proposal: proposal.data.assignments,
+    proposal: proposal.value.assignments,
     cap: opts.cap,
     idleAgents: opts.idleAgents,
     pendingIssues: opts.pendingIssues,
   });
   if (errors.length > 0) return { errors };
-  return { assignments: proposal.data.assignments };
-}
-
-function parseJsonLoose(raw: string): unknown {
-  const trimmed = raw.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    // try fenced extraction
-    const match = /```(?:json)?\s*\n([\s\S]*?)\n```/i.exec(trimmed);
-    if (match) {
-      try {
-        return JSON.parse(match[1]);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
+  return { assignments: proposal.value.assignments };
 }
 
 interface ValidateInput {

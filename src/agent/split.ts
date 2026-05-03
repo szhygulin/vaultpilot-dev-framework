@@ -4,6 +4,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { agentClaudeMdPath, agentDir } from "./specialization.js";
 import { claudeBinPath } from "./sdkBinary.js";
 import { mutateRegistry, newAgentId } from "../state/registry.js";
+import { pickName } from "../state/names.js";
 import { ensureDir } from "../state/locks.js";
 import type { AgentRecord } from "../types.js";
 
@@ -386,12 +387,13 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitResu
       while (takenAgentIds.has(childId)) childId = newAgentId();
       takenAgentIds.add(childId);
 
-      let name = cluster.proposedName;
-      if (takenNames.has(name)) {
-        // Append the new agentId hex tail to disambiguate. Same pattern
-        // pickName uses for pool exhaustion in the names module.
-        name = `${cluster.proposedName}-${childId.replace(/^agent-/, "")}`;
-      }
+      // Display name: pull from the curated human-name pool, the same source
+      // every freshly-minted agent uses. cluster.proposedName is a topical
+      // section-heading phrase (e.g. "Rogue-MCP Trust Boundary") that reads
+      // as a label rather than an identity — kept on the proposal for the
+      // formatProposal log line, but not stored on the child record. Tags
+      // already carry the routing/topic information.
+      const name = pickName(childId, takenNames);
       takenNames.add(name);
 
       const now = new Date().toISOString();

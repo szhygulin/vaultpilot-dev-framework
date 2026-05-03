@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeBinPath } from "./sdkBinary.js";
+import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -143,8 +144,12 @@ async function runSummarizerQuery(args: SummarizerQueryArgs): Promise<Summarizer
     return { skip: true, skipReason: `summarizer exception: ${(err as Error).message}` };
   }
 
-  const json = parseJsonLoose(raw);
-  if (!json) {
+  // Extract the JSON envelope without schema validation — we still need a
+  // clamp pass on raw heading/body lengths before SummarizerOutputSchema
+  // can be applied. `z.unknown()` makes the helper return whatever parses,
+  // delegating validation to the safeParse below.
+  const extracted = parseJsonEnvelope(raw, z.unknown());
+  if (!extracted.ok) {
     args.logger.warn("summarizer.malformed_payload", {
       agentId: args.agent.agentId,
       issueId: args.issue.id,
@@ -152,6 +157,7 @@ async function runSummarizerQuery(args: SummarizerQueryArgs): Promise<Summarizer
     });
     return { skip: true, skipReason: "summarizer output not valid JSON" };
   }
+  const json = extracted.value;
 
   // Post-parse safety net: clamp oversize heading/body BEFORE schema
   // validation so the entire summary isn't discarded just because the LLM
@@ -320,28 +326,3 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 3) + "...";
 }
 
-function parseJsonLoose(raw: string): unknown {
-  const trimmed = raw.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const match = /```(?:json)?\s*\n([\s\S]*?)\n```/i.exec(trimmed);
-    if (match) {
-      try {
-        return JSON.parse(match[1]);
-      } catch {
-        return null;
-      }
-    }
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-}

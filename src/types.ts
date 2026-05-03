@@ -65,6 +65,22 @@ export interface RunIssueEntry {
   error?: string;
 }
 
+// A `vp-dev/agent-*/issue-*` branch the stale-branch sweep determined was
+// dead (no open PR) but could not delete because the branch is still
+// attached to a worktree. Surfaced into RunState so the user can grep
+// `state/<runId>.json` for accumulated cleanup-needed entries — see issue
+// #63 for the rationale (single dim warning per run was too easy to miss).
+export interface UnprunableStaleBranch {
+  branch: string;
+  agentId: string;
+  issueId: number;
+  // Worktree path parsed out of the `git branch -D` error message
+  // (`used by worktree at '<path>'`). Optional in case the error format
+  // changes in a future git release — fall back to `reason` then.
+  worktreePath?: string;
+  reason: string;
+}
+
 export interface RunState {
   runId: string;
   targetRepo: string;
@@ -76,6 +92,9 @@ export interface RunState {
   lastTickAt: string;
   startedAt: string;
   dryRun: boolean;
+  // Populated by the stale-branch sweep at run start. Optional for
+  // back-compat with run states written before #63.
+  unprunableStaleBranches?: UnprunableStaleBranch[];
 }
 
 export const ResultEnvelopeSchema = z.object({

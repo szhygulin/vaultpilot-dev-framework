@@ -3,6 +3,7 @@ import { execFile as execFileCb } from "node:child_process";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { Logger } from "../log/logger.js";
+import type { UnprunableStaleBranch } from "../types.js";
 
 const execFile = promisify(execFileCb);
 
@@ -141,6 +142,23 @@ export async function listWorktrees(repoPath: string): Promise<string[]> {
   }
 }
 
+// Parses the worktree path out of `git branch -D`'s rejection message:
+//   error: cannot delete branch '<branch>' used by worktree at '<path>'
+// Falls back to undefined if the error format ever changes — callers
+// should treat this as best-effort metadata, not a contract.
+const WORKTREE_AT_RE = /used by worktree at '([^']+)'/;
+
+function parseWorktreePathFromBranchDError(stderr: string): string | undefined {
+  const m = WORKTREE_AT_RE.exec(stderr);
+  return m ? m[1] : undefined;
+}
+
+export interface PruneStaleResult {
+  pruned: number;
+  kept: number;
+  unprunable: UnprunableStaleBranch[];
+}
+
 // Sweep stale `vp-dev/agent-*/issue-*` branches whose PR is no longer open.
 //
 // After a successful "implement" run, runIssueCore intentionally retains the
@@ -157,11 +175,18 @@ export async function listWorktrees(repoPath: string): Promise<string[]> {
 //
 // Push-protection invariant: all writes are local (`git branch -D`,
 // `git worktree remove`). No `git push --delete`, no remote mutation.
+//
+// Some stale branches can't be deleted because the branch is still
+// checked out in a worktree at a non-default path (e.g. a manually-created
+// `.claude/worktrees/pr-43-conflict` for in-flight conflict resolution).
+// `git branch -D` rejects these with an error, which we surface as
+// structured `unprunable` entries — callers persist them into RunState so
+// the user has an audit trail beyond the single dim warning. See #63.
 export async function pruneStaleAgentBranches(
   repoPath: string,
   targetRepo: string,
   logger?: Logger,
-): Promise<{ pruned: number; kept: number }> {
+): Promise<PruneStaleResult> {
   let branches: string[] = [];
   try {
     const { stdout } = await execFile(
@@ -174,15 +199,16 @@ export async function pruneStaleAgentBranches(
     logger?.warn("worktree.stale_branches_list_failed", {
       err: (err as Error).message,
     });
-    return { pruned: 0, kept: 0 };
+    return { pruned: 0, kept: 0, unprunable: [] };
   }
   if (branches.length === 0) {
-    logger?.info("worktree.stale_branches_swept", { pruned: 0, kept: 0 });
-    return { pruned: 0, kept: 0 };
+    logger?.info("worktree.stale_branches_swept", { pruned: 0, kept: 0, unprunable: 0 });
+    return { pruned: 0, kept: 0, unprunable: [] };
   }
 
   let pruned = 0;
   let kept = 0;
+  const unprunable: UnprunableStaleBranch[] = [];
   for (const branch of branches) {
     const m = VP_DEV_BRANCH_RE.exec(branch);
     if (!m) {
@@ -238,13 +264,60 @@ export async function pruneStaleAgentBranches(
       logger?.info("worktree.stale_branch_pruned", { branch, agentId, issueId });
     } catch (err) {
       kept++;
+      const stderr = (err as { stderr?: string }).stderr ?? (err as Error).message;
+      const worktreePath = parseWorktreePathFromBranchDError(stderr);
+      unprunable.push({
+        branch,
+        agentId,
+        issueId,
+        worktreePath,
+        reason: stderr,
+      });
       logger?.warn("worktree.stale_branch_delete_failed", {
         branch,
-        err: (err as { stderr?: string }).stderr ?? (err as Error).message,
+        agentId,
+        issueId,
+        worktreePath,
+        err: stderr,
       });
     }
   }
 
-  logger?.info("worktree.stale_branches_swept", { pruned, kept });
-  return { pruned, kept };
+  logger?.info("worktree.stale_branches_swept", {
+    pruned,
+    kept,
+    unprunable: unprunable.length,
+  });
+  return { pruned, kept, unprunable };
+}
+
+// Renders a clearly-actionable warning summary for the unprunable branches
+// returned by pruneStaleAgentBranches. Intended for direct stderr output —
+// dim, scrolling-by event lines aren't enough (see #63). Uses ANSI colors
+// only when stderr is a TTY so log capture stays clean.
+const ANSI_YELLOW = "\x1b[33m";
+const ANSI_BOLD = "\x1b[1m";
+const ANSI_RESET = "\x1b[0m";
+
+export function formatUnprunableWarning(
+  unprunable: UnprunableStaleBranch[],
+  opts: { color: boolean } = { color: false },
+): string {
+  if (unprunable.length === 0) return "";
+  const y = opts.color ? ANSI_YELLOW : "";
+  const b = opts.color ? ANSI_BOLD : "";
+  const r = opts.color ? ANSI_RESET : "";
+  const header = `${y}${b}WARNING:${r}${y} ${unprunable.length} stale branch(es) attached to a worktree could not be pruned.${r}`;
+  const lines = [header];
+  for (const u of unprunable) {
+    const where = u.worktreePath ? ` — worktree at ${u.worktreePath}` : "";
+    lines.push(`  ${u.branch}${where}`);
+  }
+  lines.push(
+    "  To clean up: review the worktree, then `git worktree remove --force <path>` and `git branch -D <branch>`.",
+  );
+  lines.push(
+    "  Recorded under `unprunableStaleBranches` in the run-state JSON for later audit.",
+  );
+  return lines.join("\n") + "\n";
 }

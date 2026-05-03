@@ -14,7 +14,20 @@ import { createAgent, loadRegistry, mutateRegistry } from "./state/registry.js";
 import { parseRangeSpec, describeRange } from "./github/range.js";
 import { getIssue, resolveRangeToIssues } from "./github/gh.js";
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
-import { approveSetup, buildSetupPreview, type TriageSkipped } from "./orchestrator/setup.js";
+import {
+  approveSetup,
+  buildSetupPreview,
+  formatSetupPreview,
+  type TriageSkipped,
+} from "./orchestrator/setup.js";
+import {
+  deleteRunConfirmToken,
+  hashPreview,
+  mintToken,
+  pruneExpiredTokens,
+  readRunConfirmToken,
+  writeRunConfirmToken,
+} from "./state/runConfirm.js";
 import { triageBatch } from "./orchestrator/triage.js";
 import { Logger } from "./log/logger.js";
 import { fetchOriginMain, pruneStaleAgentBranches, pruneWorktrees, resolveTargetRepoPath } from "./git/worktree.js";
@@ -54,8 +67,8 @@ export function buildCli(): Command {
   program
     .command("run")
     .description("Run agents against a range of GitHub issues")
-    .requiredOption("--agents <n>", "Number of parallel coding agents", parsePositive)
-    .requiredOption("--target-repo <owner/repo>", "Target GitHub repo (e.g. octocat/hello-world)")
+    .option("--agents <n>", "Number of parallel coding agents (required unless --confirm)", parsePositive)
+    .option("--target-repo <owner/repo>", "Target GitHub repo, e.g. octocat/hello-world (required unless --confirm)")
     .option("--issues <range>", "Issue range: 100-150, csv 100,103,108, or all-open")
     .option("--target-repo-path <path>", "Local clone path of the target repo (default: $HOME/dev/<repo-name>)")
     .option("--resume", "Resume the most recent unfinished run")
@@ -69,6 +82,14 @@ export function buildCli(): Command {
     )
     .option("--verbose", "Mirror a colorized subset of events to stderr")
     .option("--yes", "Auto-approve the setup preview (required for non-TTY environments)")
+    .option(
+      "--plan",
+      "Print the setup preview, write a short-lived confirm token, exit 0 without launching",
+    )
+    .option(
+      "--confirm <token>",
+      "Launch the run associated with a token previously emitted by --plan",
+    )
     .option(
       "--include-non-ready",
       "Skip pre-dispatch triage and dispatch every open issue (per-run override; no env var)",
@@ -178,8 +199,8 @@ export function buildCli(): Command {
 }
 
 interface RunOpts {
-  agents: number;
-  targetRepo: string;
+  agents?: number;
+  targetRepo?: string;
   targetRepoPath?: string;
   issues?: string;
   resume?: boolean;
@@ -188,6 +209,8 @@ interface RunOpts {
   stalledThresholdDays: number;
   verbose?: boolean;
   yes?: boolean;
+  plan?: boolean;
+  confirm?: string;
   includeNonReady?: boolean;
 }
 
@@ -203,6 +226,46 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     return;
   }
 
+  if (opts.plan && opts.confirm) {
+    console.error("ERROR: --plan and --confirm are mutually exclusive.");
+    process.exit(2);
+  }
+  if (opts.plan && opts.yes) {
+    console.error("ERROR: --plan and --yes are mutually exclusive (plan emits a token to confirm later, not auto-approve).");
+    process.exit(2);
+  }
+  if (opts.confirm && opts.yes) {
+    console.error("ERROR: --confirm and --yes are mutually exclusive (a verified plan token is itself the approval).");
+    process.exit(2);
+  }
+
+  // --confirm overlays params from the token file, so the user only types the
+  // token. We hold the loaded record to verify the previewHash matches the
+  // re-built preview below.
+  let confirmRecord: Awaited<ReturnType<typeof readRunConfirmToken>> | null = null;
+  if (opts.confirm) {
+    const r = await readRunConfirmToken(opts.confirm);
+    if (!r.ok) {
+      console.error(`ERROR: ${r.message}`);
+      process.exit(2);
+    }
+    confirmRecord = r;
+    const p = r.record.params;
+    opts.agents = p.agents;
+    opts.targetRepo = p.targetRepo;
+    opts.targetRepoPath = p.targetRepoPath;
+    opts.issues = p.issues;
+    opts.dryRun = p.dryRun;
+    opts.maxTicks = p.maxTicks;
+    opts.stalledThresholdDays = p.stalledThresholdDays;
+    opts.includeNonReady = p.includeNonReady;
+    opts.verbose = p.verbose;
+  }
+
+  if (opts.agents === undefined || !opts.targetRepo) {
+    console.error("ERROR: --agents and --target-repo are required (unless --confirm).");
+    process.exit(2);
+  }
   if (!opts.issues) {
     console.error("ERROR: --issues is required (or pass --resume).");
     process.exit(2);
@@ -290,10 +353,62 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     registry,
     triageSkipped,
   });
-  const approved = await approveSetup({ preview, yes: !!opts.yes });
-  if (!approved) {
-    process.stderr.write("Aborted by user.\n");
-    process.exit(1);
+
+  if (opts.plan) {
+    const previewText = formatSetupPreview(preview);
+    process.stdout.write(previewText);
+    process.stdout.write("\n\n");
+    await pruneExpiredTokens();
+    const token = mintToken();
+    const record = await writeRunConfirmToken({
+      token,
+      previewHash: hashPreview(previewText),
+      params: {
+        agents: opts.agents,
+        targetRepo: opts.targetRepo,
+        targetRepoPath: opts.targetRepoPath,
+        issues: opts.issues,
+        dryRun: !!opts.dryRun,
+        maxTicks: opts.maxTicks,
+        stalledThresholdDays: opts.stalledThresholdDays,
+        includeNonReady: !!opts.includeNonReady,
+        verbose: !!opts.verbose,
+      },
+    });
+    process.stdout.write("Plan saved. No agents launched.\n");
+    process.stdout.write(`  Token:    ${token}\n`);
+    process.stdout.write(`  Expires:  ${record.expiresAt}\n`);
+    process.stdout.write("\nTo launch this run, invoke:\n");
+    process.stdout.write(`  vp-dev run --confirm ${token}\n\n`);
+    process.stdout.write(
+      "If the registry / open-issue set changes before --confirm, the previewHash check fails and forces a fresh --plan.\n",
+    );
+    return;
+  }
+
+  if (confirmRecord && confirmRecord.ok) {
+    const previewText = formatSetupPreview(preview);
+    process.stdout.write(previewText);
+    process.stdout.write("\n\n");
+    const currentHash = hashPreview(previewText);
+    if (currentHash !== confirmRecord.record.previewHash) {
+      console.error(
+        "ERROR: Plan diverged: the preview at confirm time does not match the preview at plan time.",
+      );
+      console.error(
+        "  Registry, open-issue set, or triage outcome changed between --plan and --confirm.",
+      );
+      console.error("  Re-run with --plan to see the updated preview, then --confirm the new token.");
+      process.exit(2);
+    }
+    process.stdout.write(`Plan token ${opts.confirm} verified. Launching run.\n`);
+    await deleteRunConfirmToken(opts.confirm!);
+  } else {
+    const approved = await approveSetup({ preview, yes: !!opts.yes });
+    if (!approved) {
+      process.stderr.write("Aborted by user.\n");
+      process.exit(1);
+    }
   }
 
   const runId = makeRunId();

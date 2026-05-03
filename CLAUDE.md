@@ -21,9 +21,14 @@ The orchestrator dispatches coding agents against a `--target-repo` (any GitHub 
 All three stay. Weakening any one (relaxing the regex, removing a `disallowedTools` entry, branch-protection rule edits at the target) is a security regression — surface it explicitly in the PR description and require user sign-off, don't merge silently. Past incident `a3cd8dc` (Fix dry-run gate: streaming input + compound-command denial) tightened the canUseTool layer specifically for compound-command bypasses.
 
 ## Approval gate before launch is mandatory
-`vp-dev run` shows the planned setup (target repo, summoned agents, issue range) and waits for explicit `y/N` confirmation before launching. The gate is the human-in-the-loop checkpoint — agents start consuming Anthropic API tokens and writing to disk the moment the gate passes.
-- `--yes` is the ONLY supported bypass, and only for non-TTY environments (CI dispatchers, scheduled jobs).
-- **Don't add a config-file option that silently bypasses** the gate. Convenience flags that hide the cost of a multi-agent run are exactly what this gate exists to prevent.
+`vp-dev run` shows the planned setup (target repo, summoned agents, issue range) and waits for explicit approval before launching. The gate is the human-in-the-loop checkpoint — agents start consuming Anthropic API tokens and writing to disk the moment the gate passes.
+
+Three supported approval paths:
+- **TTY y/N prompt** (default): preview prints; user types `y`.
+- **`--yes`**: non-interactive auto-approve. Only for non-TTY environments where the human is upstream of the invocation (CI dispatchers, scheduled jobs); never as a convenience flag.
+- **`--plan` + `--confirm <token>`** (two-step): `--plan` prints the preview + writes a short-lived token (15 min TTL) under `state/run-confirm-<token>.json`; human reads the preview, then re-invokes with `--confirm <token>` to launch. The token binds to a `previewHash`, so registry / open-issue drift between plan and confirm rejects the confirm and forces a fresh `--plan`. Used by Claude Code (the `Bash` tool is non-TTY, but the human sees the preview in chat between the two invocations).
+
+- **Don't add a config-file option that silently bypasses** the gate. Convenience flags that hide the cost of a multi-agent run are exactly what this gate exists to prevent. The two-step flow is allowed because it surfaces the cost between invocations; single-flag silent bypasses are not.
 - The gate text MUST surface the planned cost (agent count × issue range × model tier) so the user has the data to refuse. Edits that reduce the surfaced detail are regressions.
 
 ## Target repo's `CLAUDE.md` seeds fresh agents

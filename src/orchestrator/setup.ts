@@ -12,6 +12,12 @@ export interface TriageSkipped {
   reason: string;
 }
 
+export interface OpenPrSkipped {
+  issue: IssueSummary;
+  prNumber: number;
+  prUrl: string;
+}
+
 export interface SetupPreview {
   targetRepo: string;
   targetRepoPath: string;
@@ -32,6 +38,11 @@ export interface SetupPreview {
   // the gate so the user can see what is being dropped before y/N. When
   // --include-non-ready is passed, triage is skipped and this is empty.
   triageSkipped: TriageSkipped[];
+  // Issues filtered out because an open vp-dev PR already covers them.
+  // Re-dispatching would race the stale-sweep + create-worktree path (issue
+  // #62: branch collision -> error.agent.uncaught). The smallest fix is to
+  // let the existing PR land before re-dispatch.
+  openPrSkipped: OpenPrSkipped[];
 }
 
 export interface BuildPreviewInput {
@@ -45,6 +56,7 @@ export interface BuildPreviewInput {
   resume: boolean;
   registry: AgentRegistryFile;
   triageSkipped?: TriageSkipped[];
+  openPrSkipped?: OpenPrSkipped[];
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -79,6 +91,7 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     generalCount: pick.generalCount,
     overloadWarnings,
     triageSkipped: input.triageSkipped ?? [],
+    openPrSkipped: input.openPrSkipped ?? [],
   };
 }
 
@@ -137,6 +150,15 @@ export function formatSetupPreview(p: SetupPreview): string {
       lines.push(`  #${s.issue.id} — ${s.reason}`);
     }
     lines.push("  Override with --include-non-ready.");
+    lines.push("");
+  }
+
+  if (p.openPrSkipped.length > 0) {
+    lines.push(`${p.openPrSkipped.length} issue(s) skipped — open vp-dev PR already covers them:`);
+    for (const s of p.openPrSkipped) {
+      lines.push(`  #${s.issue.id} — PR #${s.prNumber}: ${s.prUrl}`);
+    }
+    lines.push("  Let the PR land (or close it) before re-dispatching.");
     lines.push("");
   }
 

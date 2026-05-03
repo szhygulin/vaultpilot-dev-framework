@@ -12,12 +12,13 @@ import {
 } from "./state/runState.js";
 import { createAgent, loadRegistry, mutateRegistry } from "./state/registry.js";
 import { parseRangeSpec, describeRange } from "./github/range.js";
-import { getIssue, resolveRangeToIssues } from "./github/gh.js";
+import { getIssue, listOpenAgentPrs, resolveRangeToIssues } from "./github/gh.js";
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
 import {
   approveSetup,
   buildSetupPreview,
   formatSetupPreview,
+  type OpenPrSkipped,
   type TriageSkipped,
 } from "./orchestrator/setup.js";
 import {
@@ -295,12 +296,13 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.exit(2);
   }
 
-  // Pre-dispatch triage runs BEFORE the approval gate so the user sees the
-  // skipped set before y/N. Logger is opened early under a triage-prefixed id
-  // (the real runId is only minted after gate approval); the file lives
-  // alongside the eventual run log under logs/. --include-non-ready bypasses
-  // the haiku call entirely — no value in spending tokens on a result we're
-  // about to ignore.
+  // Pre-dispatch preflight (open-PR filter + triage) runs BEFORE the
+  // approval gate so the user sees the skipped set before y/N. Logger is
+  // opened early under a triage-prefixed id (the real runId is only minted
+  // after gate approval); the file lives alongside the eventual run log
+  // under logs/. --include-non-ready bypasses the haiku triage call entirely
+  // — no value in spending tokens on a result we're about to ignore — but
+  // does NOT bypass the open-PR filter, which is correctness, not cost.
   const triageLogger = new Logger({
     runId: `triage-${new Date().toISOString().replace(/[:.]/g, "-")}`,
     verbose: !!opts.verbose,
@@ -308,13 +310,27 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   await triageLogger.open();
   let dispatchIssues = open;
   let triageSkipped: TriageSkipped[] = [];
+  let openPrSkipped: OpenPrSkipped[] = [];
   try {
+    // Open-PR filter: drop issues that already have an in-flight vp-dev PR
+    // (issue #62). Skipped issues never reach triage or dispatch — the PR
+    // is the in-flight work and re-dispatching collides on the existing
+    // branch. Run before triage so we don't spend haiku tokens on issues
+    // we're about to skip.
+    const filterResult = await filterIssuesWithOpenAgentPr({
+      targetRepo: opts.targetRepo,
+      issues: dispatchIssues,
+      logger: triageLogger,
+    });
+    dispatchIssues = filterResult.kept;
+    openPrSkipped = filterResult.skipped;
+
     if (opts.includeNonReady) {
-      triageLogger.info("triage.bypassed", { reason: "--include-non-ready", issueCount: open.length });
+      triageLogger.info("triage.bypassed", { reason: "--include-non-ready", issueCount: dispatchIssues.length });
     } else {
       const triaged = await triageBatch({
         targetRepo: opts.targetRepo,
-        issues: open,
+        issues: dispatchIssues,
         logger: triageLogger,
       });
       dispatchIssues = triaged.filter((t) => t.result.ready).map((t) => t.issue);
@@ -334,9 +350,15 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   }
 
   if (dispatchIssues.length === 0) {
-    console.error(
-      `ERROR: all ${open.length} open issue(s) filtered by triage as not-ready. Re-run with --include-non-ready to dispatch them anyway.`,
-    );
+    if (openPrSkipped.length > 0 && triageSkipped.length === 0) {
+      console.error(
+        `ERROR: all ${open.length} open issue(s) already have an in-flight vp-dev PR. Let those PRs land (or close them) before re-dispatching.`,
+      );
+    } else {
+      console.error(
+        `ERROR: all ${open.length} open issue(s) filtered by preflight (triage=${triageSkipped.length}, open-pr=${openPrSkipped.length}). Re-run with --include-non-ready to dispatch despite triage; resolve open PRs before re-dispatching their issues.`,
+      );
+    }
     process.exit(2);
   }
 
@@ -352,6 +374,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     resume: false,
     registry,
     triageSkipped,
+    openPrSkipped,
   });
 
   if (opts.plan) {
@@ -462,6 +485,56 @@ async function cmdRun(opts: RunOpts): Promise<void> {
 }
 
 /**
+ * Drop issues that already have an in-flight vp-dev PR (issue #62). The
+ * stale-branch sweep keeps such branches because the PR's head depends on
+ * them, but `git worktree add -b <branch>` then collides on re-dispatch and
+ * surfaces as `error.agent.uncaught`. The smallest fix is to skip dispatch
+ * — the PR *is* the in-flight work; let it land or close before re-running.
+ *
+ * Fail-safe: a `gh pr list` exception (network/auth) logs a warning and
+ * returns the issue set unchanged. The createWorktree collision still
+ * fires per-issue in that edge case (current behavior, no regression).
+ */
+async function filterIssuesWithOpenAgentPr(opts: {
+  targetRepo: string;
+  issues: IssueSummary[];
+  logger: Logger;
+}): Promise<{ kept: IssueSummary[]; skipped: OpenPrSkipped[] }> {
+  if (opts.issues.length === 0) return { kept: [], skipped: [] };
+  let prs: Awaited<ReturnType<typeof listOpenAgentPrs>>;
+  try {
+    prs = await listOpenAgentPrs(opts.targetRepo);
+  } catch (err) {
+    opts.logger.warn("dispatch.open_pr_filter_failed", { err: (err as Error).message });
+    return { kept: opts.issues, skipped: [] };
+  }
+  // First-write-wins on collisions (multiple open PRs against the same issue
+  // — shouldn't happen under naming convention, but is possible if someone
+  // hand-created a vp-dev branch against an in-flight one). Either gates.
+  const byIssueId = new Map<number, (typeof prs)[number]>();
+  for (const p of prs) {
+    if (!byIssueId.has(p.issueId)) byIssueId.set(p.issueId, p);
+  }
+  const kept: IssueSummary[] = [];
+  const skipped: OpenPrSkipped[] = [];
+  for (const i of opts.issues) {
+    const pr = byIssueId.get(i.id);
+    if (pr) {
+      skipped.push({ issue: i, prNumber: pr.prNumber, prUrl: pr.prUrl });
+    } else {
+      kept.push(i);
+    }
+  }
+  opts.logger.info("dispatch.open_pr_filter", {
+    total: opts.issues.length,
+    kept: kept.length,
+    skipped: skipped.length,
+    skippedIssueIds: skipped.map((s) => s.issue.id),
+  });
+  return { kept, skipped };
+}
+
+/**
  * Lazy outcome poll on `vp-dev run`. Wrapped in try/catch so a transient
  * `gh` failure (network down, auth blip) never blocks the run.
  */
@@ -499,7 +572,38 @@ async function runResume(opts: RunOpts): Promise<void> {
 
   const { open, skippedClosed } = await resolveRangeToIssues(state.targetRepo, state.issueRange);
   const tracked = new Set(Object.keys(state.issues).map(Number));
-  const issues = open.filter((i) => tracked.has(i.id));
+  let issues = open.filter((i) => tracked.has(i.id));
+
+  // Same open-PR filter as cmdRun (issue #62): if a tracked issue acquired
+  // an in-flight vp-dev PR between runs (e.g., a previous attempt opened a
+  // PR before crashing), resuming would race the createWorktree -b branch
+  // collision. Skip those issues; mark them as failed in state so the next
+  // resume cycle doesn't re-pick them.
+  const resumeFilterLogger = new Logger({
+    runId: `triage-${new Date().toISOString().replace(/[:.]/g, "-")}-resume`,
+    verbose: !!opts.verbose,
+  });
+  await resumeFilterLogger.open();
+  let openPrSkipped: OpenPrSkipped[] = [];
+  try {
+    const filterResult = await filterIssuesWithOpenAgentPr({
+      targetRepo: state.targetRepo,
+      issues,
+      logger: resumeFilterLogger,
+    });
+    issues = filterResult.kept;
+    openPrSkipped = filterResult.skipped;
+  } finally {
+    await resumeFilterLogger.close();
+  }
+  for (const s of openPrSkipped) {
+    state.issues[String(s.issue.id)] = {
+      status: "failed",
+      outcome: "error",
+      error: `open vp-dev PR already covers this issue: ${s.prUrl}`,
+    };
+  }
+  if (openPrSkipped.length > 0) await saveRunState(state);
 
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
@@ -512,6 +616,7 @@ async function runResume(opts: RunOpts): Promise<void> {
     dryRun: state.dryRun,
     resume: true,
     registry,
+    openPrSkipped,
   });
   const approved = await approveSetup({ preview, yes: !!opts.yes });
   if (!approved) {

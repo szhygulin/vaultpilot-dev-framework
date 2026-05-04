@@ -12,6 +12,17 @@ export interface TriageSkipped {
   reason: string;
 }
 
+// Issues filtered out because an open vp-dev PR already covers them. See
+// issue #62: re-dispatching the same (agent, issue) pair throws on
+// `git worktree add -b` because the branch from the prior run still
+// exists. Skipping is the safe default — let the open PR land first.
+export interface OpenPrSkipped {
+  issue: IssueSummary;
+  agentId: string;
+  branch: string;
+  prUrl: string;
+}
+
 export interface SetupPreview {
   targetRepo: string;
   targetRepoPath: string;
@@ -32,6 +43,11 @@ export interface SetupPreview {
   // the gate so the user can see what is being dropped before y/N. When
   // --include-non-ready is passed, triage is skipped and this is empty.
   triageSkipped: TriageSkipped[];
+  // Issues filtered out because an open vp-dev PR already covers them.
+  // Always enforced — there is no override flag (close the PR first, or
+  // use `vp-dev spawn` against a one-off agent if you really need parallel
+  // attempts).
+  openPrSkipped: OpenPrSkipped[];
 }
 
 export interface BuildPreviewInput {
@@ -45,6 +61,7 @@ export interface BuildPreviewInput {
   resume: boolean;
   registry: AgentRegistryFile;
   triageSkipped?: TriageSkipped[];
+  openPrSkipped?: OpenPrSkipped[];
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -79,6 +96,7 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     generalCount: pick.generalCount,
     overloadWarnings,
     triageSkipped: input.triageSkipped ?? [],
+    openPrSkipped: input.openPrSkipped ?? [],
   };
 }
 
@@ -137,6 +155,17 @@ export function formatSetupPreview(p: SetupPreview): string {
       lines.push(`  #${s.issue.id} — ${s.reason}`);
     }
     lines.push("  Override with --include-non-ready.");
+    lines.push("");
+  }
+
+  if (p.openPrSkipped.length > 0) {
+    lines.push(`${p.openPrSkipped.length} issue(s) skipped — open vp-dev PR already covers them:`);
+    for (const s of p.openPrSkipped) {
+      lines.push(`  #${s.issue.id} — ${s.prUrl} (branch ${s.branch})`);
+    }
+    lines.push(
+      "  The PR from the prior run is the in-flight work. Let it land (or close it) before re-dispatching.",
+    );
     lines.push("");
   }
 

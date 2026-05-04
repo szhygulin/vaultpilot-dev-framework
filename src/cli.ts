@@ -18,6 +18,7 @@ import {
   approveSetup,
   buildSetupPreview,
   formatSetupPreview,
+  type OpenPrSkipped,
   type TriageSkipped,
 } from "./orchestrator/setup.js";
 import {
@@ -37,6 +38,7 @@ import {
   pruneWorktrees,
   resolveTargetRepoPath,
 } from "./git/worktree.js";
+import { findOpenVpDevPrs } from "./git/openPrs.js";
 import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
 import { promises as fs } from "node:fs";
 import { runIssueCore } from "./agent/runIssueCore.js";
@@ -346,6 +348,27 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.exit(2);
   }
 
+  // Issues with an open vp-dev PR can't be re-dispatched: `git worktree add
+  // -b <branch>` collides on the branch the prior run pushed. Filter them
+  // before the gate so the user sees the skip in the preview. Per #62 — the
+  // smallest, least surprising default.
+  const openPrMap = await findOpenVpDevPrs({
+    targetRepo: opts.targetRepo,
+    repoPath,
+  });
+  const { dispatchIssues: dispatchAfterPr, openPrSkipped } = partitionOpenPrIssues(
+    dispatchIssues,
+    openPrMap,
+  );
+  const triagePassedCount = dispatchIssues.length;
+  dispatchIssues = dispatchAfterPr;
+  if (dispatchIssues.length === 0) {
+    console.error(
+      `ERROR: all ${triagePassedCount} triage-ready issue(s) are already covered by an open vp-dev PR. Let those PRs land (or close them) before re-dispatching.`,
+    );
+    process.exit(2);
+  }
+
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
     targetRepo: opts.targetRepo,
@@ -358,6 +381,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     resume: false,
     registry,
     triageSkipped,
+    openPrSkipped,
   });
 
   if (opts.plan) {
@@ -510,7 +534,20 @@ async function runResume(opts: RunOpts): Promise<void> {
 
   const { open, skippedClosed } = await resolveRangeToIssues(state.targetRepo, state.issueRange);
   const tracked = new Set(Object.keys(state.issues).map(Number));
-  const issues = open.filter((i) => tracked.has(i.id));
+  const trackedOpen = open.filter((i) => tracked.has(i.id));
+
+  // Same filter as `cmdRun` — issues whose vp-dev branch already has an
+  // open PR can't be re-dispatched without colliding on `git worktree add
+  // -b`. On resume this is even more likely: a previous run that crashed
+  // mid-tick will have left in-flight PRs behind.
+  const openPrMap = await findOpenVpDevPrs({
+    targetRepo: state.targetRepo,
+    repoPath,
+  });
+  const { dispatchIssues: issues, openPrSkipped } = partitionOpenPrIssues(
+    trackedOpen,
+    openPrMap,
+  );
 
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
@@ -523,6 +560,7 @@ async function runResume(opts: RunOpts): Promise<void> {
     dryRun: state.dryRun,
     resume: true,
     registry,
+    openPrSkipped,
   });
   const approved = await approveSetup({ preview, yes: !!opts.yes });
   if (!approved) {
@@ -1188,4 +1226,36 @@ function parsePositive(value: string): number {
     throw new Error(`Expected positive integer, got "${value}"`);
   }
   return n;
+}
+
+/**
+ * Split a candidate dispatch list into (issues to dispatch, issues to skip
+ * because an open vp-dev PR already covers them). Pure — no I/O.
+ *
+ * Per issue #62: when `pruneStaleAgentBranches` keeps a branch because
+ * `gh pr list --head <branch> --state open` returned a row, the dispatcher's
+ * `git worktree add -b <branch>` will collide. Pre-filtering here makes the
+ * skip explicit in the y/N gate instead of surfacing as an
+ * `error.agent.uncaught` mid-run.
+ */
+function partitionOpenPrIssues(
+  issues: IssueSummary[],
+  openPrMap: Map<number, { branch: string; prUrl: string; agentId: string }>,
+): { dispatchIssues: IssueSummary[]; openPrSkipped: OpenPrSkipped[] } {
+  const dispatchIssues: IssueSummary[] = [];
+  const openPrSkipped: OpenPrSkipped[] = [];
+  for (const issue of issues) {
+    const pr = openPrMap.get(issue.id);
+    if (pr) {
+      openPrSkipped.push({
+        issue,
+        agentId: pr.agentId,
+        branch: pr.branch,
+        prUrl: pr.prUrl,
+      });
+    } else {
+      dispatchIssues.push(issue);
+    }
+  }
+  return { dispatchIssues, openPrSkipped };
 }

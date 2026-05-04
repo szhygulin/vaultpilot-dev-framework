@@ -48,6 +48,12 @@ export interface SetupPreview {
   // use `vp-dev spawn` against a one-off agent if you really need parallel
   // attempts).
   openPrSkipped: OpenPrSkipped[];
+  // Total $ already spent by pre-dispatch triage (haiku rubric) for this
+  // run. `undefined` when triage was bypassed (--include-non-ready) — the
+  // gate omits the line entirely in that case rather than showing $0,
+  // since "no triage" and "triage was free" are different signals (per
+  // issue #55 acceptance: "the line is omitted, not zero-valued").
+  triageCostUsd?: number;
 }
 
 export interface BuildPreviewInput {
@@ -62,6 +68,7 @@ export interface BuildPreviewInput {
   registry: AgentRegistryFile;
   triageSkipped?: TriageSkipped[];
   openPrSkipped?: OpenPrSkipped[];
+  triageCostUsd?: number;
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -97,6 +104,7 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     overloadWarnings,
     triageSkipped: input.triageSkipped ?? [],
     openPrSkipped: input.openPrSkipped ?? [],
+    triageCostUsd: input.triageCostUsd,
   };
 }
 
@@ -119,6 +127,15 @@ export function formatSetupPreview(p: SetupPreview): string {
   lines.push(
     `  Planned:        ${p.planned} (${p.specialistCount} specialist, ${p.generalCount} general${freshNote})`,
   );
+  // Triage cost is "already incurred" — it ran before the gate and is
+  // shown so the user sees the small haiku-call cost the run already paid
+  // (and will pay again if they re-run). Omitted entirely when triage was
+  // bypassed via --include-non-ready (per issue #55: not zero-valued).
+  // The projected dispatch-cost anchor lands separately with #34's hard
+  // cost ceiling — until then this row stands alone.
+  if (p.triageCostUsd !== undefined) {
+    lines.push(`  Triage cost:    ~$${p.triageCostUsd.toFixed(4)} (already incurred)`);
+  }
   lines.push(`  Dry run:        ${p.dryRun ? "yes" : "no"}`);
   lines.push(`  Resume:         ${p.resume ? "yes" : "no"}`);
   lines.push("");

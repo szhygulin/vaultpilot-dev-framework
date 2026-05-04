@@ -57,6 +57,16 @@ import {
   type ApplyResult as PruneApplyResult,
 } from "./agent/prune.js";
 import {
+  acceptCandidate,
+  collectPendingCandidates,
+  rejectCandidate,
+  type PendingCandidate,
+} from "./agent/promotion.js";
+import {
+  listSharedLessonDomains,
+  MAX_POOL_LINES,
+} from "./agent/sharedLessons.js";
+import {
   loadAllOutcomes,
   pollOutcomes,
   rollupOutcomes,
@@ -207,6 +217,27 @@ export function buildCli(): Command {
         }),
     );
   program.addCommand(agentsCmd);
+
+  const lessonsCmd = new Command("lessons")
+    .description("Cross-agent shared lessons pool: list pool files + review promote-candidate blocks queued by the summarizer")
+    .addCommand(
+      new Command("list")
+        .description("List all shared-lesson pool files (agents/.shared/lessons/) with size + line count")
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdLessonsList(opts);
+        }),
+    )
+    .addCommand(
+      new Command("review")
+        .description("Walk every agent's CLAUDE.md for `<!-- promote-candidate:<domain> -->` blocks and accept/reject each interactively")
+        .option("--json", "Print machine-readable JSON listing of pending candidates and exit (no mutation)")
+        .option("--yes", "Auto-accept every candidate that passes validation (non-interactive use only)")
+        .action(async (opts) => {
+          await cmdLessonsReview(opts);
+        }),
+    );
+  program.addCommand(lessonsCmd);
 
   return program;
 }
@@ -1244,6 +1275,191 @@ async function cmdAgentsStats(opts: AgentsStatsOpts): Promise<void> {
     String(r.medianCiCycles),
   ]);
   printTable(headers, rows);
+}
+
+interface LessonsListOpts {
+  json?: boolean;
+}
+
+async function cmdLessonsList(opts: LessonsListOpts): Promise<void> {
+  const pools = await listSharedLessonDomains();
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ pools, maxPoolLines: MAX_POOL_LINES }, null, 2) + "\n");
+    return;
+  }
+  if (pools.length === 0) {
+    process.stdout.write(
+      "No shared-lesson pools yet. Run `vp-dev lessons review` after a summarizer pass tags a promote-candidate.\n",
+    );
+    return;
+  }
+  const headers = ["domain", "lines", "bytes", "path"];
+  const rows = pools.map((p) => [
+    p.domain,
+    `${p.totalLines}/${MAX_POOL_LINES}`,
+    String(p.bytes),
+    p.filePath,
+  ]);
+  printTable(headers, rows);
+}
+
+interface LessonsReviewOpts {
+  json?: boolean;
+  yes?: boolean;
+}
+
+async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
+  const reg = await loadRegistry();
+  // Don't filter archived agents — the candidate may have been tagged before
+  // a split, and we still want to surface it. The boundary that matters is
+  // the human-review gate, not the agent's lifecycle status.
+  const pending = await collectPendingCandidates(reg.agents);
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          pending: pending.map((p) => ({
+            agentId: p.agentId,
+            agentName: p.agentName,
+            domain: p.candidate.domain,
+            startLine: p.candidate.startLine,
+            endLine: p.candidate.endLine,
+            body: p.candidate.body,
+            validation: p.validation,
+          })),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
+
+  if (pending.length === 0) {
+    process.stdout.write("No promote-candidate blocks pending review.\n");
+    return;
+  }
+
+  process.stdout.write(`${pending.length} promote-candidate block(s) pending review.\n\n`);
+
+  if (opts.yes) {
+    await runAutoAcceptLoop(pending);
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      "ERROR: stdin is not a TTY and --yes was not passed. Re-run with --yes to auto-accept everything that validates, or pipe to a TTY.\n",
+    );
+    process.exit(2);
+  }
+
+  await runInteractiveReview(pending);
+}
+
+async function runAutoAcceptLoop(pending: PendingCandidate[]): Promise<void> {
+  let acceptedCount = 0;
+  let rejectedCount = 0;
+  let skippedCount = 0;
+  for (const p of pending) {
+    if (!p.validation.ok) {
+      const reason = `validation failed: ${p.validation.errors.join("; ")}`;
+      await rejectCandidate({ pending: p, reason });
+      process.stdout.write(`rejected (validation) ${p.agentId} -> ${p.candidate.domain}: ${reason}\n`);
+      rejectedCount += 1;
+      continue;
+    }
+    const result = await acceptCandidate({ pending: p });
+    if (result.appendOutcome.kind === "appended") {
+      process.stdout.write(
+        `accepted ${p.agentId} -> ${p.candidate.domain} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines)\n`,
+      );
+      acceptedCount += 1;
+    } else if (result.appendOutcome.kind === "rejected-pool-full") {
+      process.stdout.write(
+        `skipped (pool full) ${p.agentId} -> ${p.candidate.domain}: ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool by hand and re-run review.\n`,
+      );
+      skippedCount += 1;
+    } else {
+      process.stdout.write(
+        `skipped (validation) ${p.agentId} -> ${p.candidate.domain}\n`,
+      );
+      skippedCount += 1;
+    }
+  }
+  process.stdout.write(
+    `\nDone: accepted=${acceptedCount} rejected=${rejectedCount} skipped=${skippedCount}\n`,
+  );
+}
+
+async function runInteractiveReview(pending: PendingCandidate[]): Promise<void> {
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let acceptedCount = 0;
+  let rejectedCount = 0;
+  let skippedCount = 0;
+  try {
+    for (let i = 0; i < pending.length; i++) {
+      const p = pending[i];
+      process.stdout.write(`\n--- candidate ${i + 1}/${pending.length} ---\n`);
+      const sourceLabel = p.agentName ? `${p.agentName} (${p.agentId})` : p.agentId;
+      process.stdout.write(`source:  ${sourceLabel}\n`);
+      process.stdout.write(`domain:  ${p.candidate.domain}\n`);
+      process.stdout.write(`source CLAUDE.md lines ${p.candidate.startLine + 1}..${p.candidate.endLine + 1}\n`);
+      if (p.validation.errors.length > 0) {
+        process.stdout.write(`errors:  ${p.validation.errors.join("; ")}\n`);
+      }
+      if (p.validation.warnings.length > 0) {
+        process.stdout.write(`warnings: ${p.validation.warnings.join("; ")}\n`);
+      }
+      process.stdout.write("\n--- body ---\n");
+      process.stdout.write(p.candidate.body + "\n");
+      process.stdout.write("--- /body ---\n\n");
+
+      const allowAccept = p.validation.ok;
+      const choices = allowAccept ? "[a]ccept / [r]eject / [s]kip" : "[r]eject / [s]kip (validation failed; cannot accept)";
+      const answer = (await rl.question(`Action ${choices}? `)).trim().toLowerCase();
+      if (answer === "a" || answer === "accept") {
+        if (!allowAccept) {
+          process.stdout.write("Cannot accept — validation failed. Treating as skip.\n");
+          skippedCount += 1;
+          continue;
+        }
+        const result = await acceptCandidate({ pending: p });
+        if (result.appendOutcome.kind === "appended") {
+          process.stdout.write(
+            `Accepted: appended to ${result.appendOutcome.filePath} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines).\n`,
+          );
+          acceptedCount += 1;
+        } else if (result.appendOutcome.kind === "rejected-pool-full") {
+          process.stdout.write(
+            `POOL FULL: ${result.appendOutcome.filePath} reached ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool file by hand and re-run review for this candidate. (Marker left in source CLAUDE.md.)\n`,
+          );
+          skippedCount += 1;
+        } else {
+          process.stdout.write(`Append refused (validation): ${result.appendOutcome.validation.errors.join("; ")}\n`);
+          skippedCount += 1;
+        }
+        continue;
+      }
+      if (answer === "r" || answer === "reject") {
+        const reason = (await rl.question("Reason (one short sentence): ")).trim() || "no reason given";
+        await rejectCandidate({ pending: p, reason });
+        process.stdout.write("Rejected. Source marker rewritten.\n");
+        rejectedCount += 1;
+        continue;
+      }
+      // anything else == skip
+      process.stdout.write("Skipped — marker left in source CLAUDE.md, will resurface next review.\n");
+      skippedCount += 1;
+    }
+  } finally {
+    rl.close();
+  }
+  process.stdout.write(
+    `\nReview complete: accepted=${acceptedCount} rejected=${rejectedCount} skipped=${skippedCount}\n`,
+  );
 }
 
 function printTable(headers: string[], rows: string[][]): void {

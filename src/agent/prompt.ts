@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { readAgentClaudeMd, readSeedClaudeMd } from "./specialization.js";
+import { readSharedLessonsForDomains } from "./sharedLessons.js";
 import { renderWorkflow, type WorkflowVars } from "./workflow.js";
 import type { AgentRecord } from "../types.js";
 
@@ -26,6 +27,13 @@ export async function buildAgentSystemPrompt(opts: {
     issueId: opts.workflow.issueId,
   });
 
+  // Cross-agent shared lessons (#33). Pulled from `agents/.shared/lessons/`,
+  // matched against the agent's current tag fingerprint. Each pool file is
+  // capped at MAX_POOL_LINES so multi-tag agents stay bounded. Maintained by
+  // the orchestrator via `vp-dev lessons review`; never written by the
+  // coding agent — see the workflow guard in `workflow.ts`.
+  const sharedLessons = await readSharedLessonsForDomains(opts.agent.tags);
+
   const sections: string[] = [
     "# Project rules (live target-repo CLAUDE.md — current as of this dispatch)",
     "",
@@ -38,6 +46,21 @@ export async function buildAgentSystemPrompt(opts: {
     dedupedPerAgent.trim() || "(no agent-specific sections beyond live project rules)",
     "",
   ];
+
+  if (sharedLessons.length > 0) {
+    for (const pool of sharedLessons) {
+      sections.push(
+        "---",
+        "",
+        `## Shared lessons (${pool.domain})`,
+        "",
+        "Cross-agent observations curated by the orchestrator. Read-only — do NOT modify or copy back into your own CLAUDE.md.",
+        "",
+        pool.content.trim(),
+        "",
+      );
+    }
+  }
 
   if (plan) {
     sections.push(

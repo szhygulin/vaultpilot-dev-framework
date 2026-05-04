@@ -17,6 +17,7 @@ import type {
   AgentRecord,
   AgentRegistryFile,
   IssueSummary,
+  RunIssueEntry,
   RunState,
 } from "../types.js";
 import type { RunCostTracker } from "../util/costTracker.js";
@@ -290,6 +291,54 @@ function markFailed(state: RunState, agentId: string, issueId: number, reason: s
   if (a) a.status = "idle";
 }
 
+export interface ComposeFailureInput {
+  agentId: string;
+  /** SDK error subtype (e.g. `error_max_turns`) — primary cause when present. */
+  errorSubtype?: string;
+  /** Free-form human reason from the SDK or thrown errors. */
+  errorReason?: string;
+  /** Envelope-parser symptom — secondary diagnostic only. */
+  parseError?: string;
+  /** Orphan-branch URL from the reconcile pass; appended to `error` when present. */
+  branchUrl?: string;
+}
+
+/**
+ * Compose a failed `RunIssueEntry` from a no-envelope agent result, applying
+ * the cause-vs-symptom ordering required by issue #87.
+ *
+ * Priority for the primary `error` string:
+ *   1. `errorSubtype` (machine-readable SDK cause — `error_max_turns`, etc.)
+ *   2. `errorReason`  (free-form human reason)
+ *   3. `parseError`   (envelope-parser symptom — only when SDK reported nothing)
+ *   4. `"Unknown agent failure"` fallback
+ *
+ * `errorSubtype` and `parseError` are preserved as their own fields on the
+ * entry so triage can distinguish "ran out of turns" from a genuine envelope
+ * parser bug without parsing free-form strings out of `error`.
+ *
+ * Exported for unit testing — call site is the no-envelope branch of
+ * `runOneIssue`.
+ */
+export function composeFailureEntry(input: ComposeFailureInput): RunIssueEntry {
+  const baseError =
+    input.errorSubtype ??
+    input.errorReason ??
+    input.parseError ??
+    "Unknown agent failure";
+  const error = input.branchUrl
+    ? `${baseError} | orphan branch: ${input.branchUrl}`
+    : baseError;
+  return {
+    status: "failed",
+    agentId: input.agentId,
+    outcome: "error",
+    error,
+    ...(input.errorSubtype ? { errorSubtype: input.errorSubtype } : {}),
+    ...(input.parseError ? { parseError: input.parseError } : {}),
+  };
+}
+
 async function runOneIssue(opts: {
   agent: AgentRecord;
   issue: IssueSummary;
@@ -327,15 +376,15 @@ async function runOneIssue(opts: {
     // branch (issue #88) is a separate, labeled ref pushed by the safety
     // net; it lives in `partialBranchUrl` so post-run audits can find it
     // without parsing free-form `error` strings.
-    const baseError = result.parseError ?? result.errorReason ?? "Unknown agent failure";
-    const error = result.branchUrl
-      ? `${baseError} | orphan branch: ${result.branchUrl}`
-      : baseError;
-    opts.state.issues[String(opts.issue.id)] = {
-      status: "failed",
+    const failure = composeFailureEntry({
       agentId: opts.agent.agentId,
-      outcome: "error",
-      error,
+      errorSubtype: result.errorSubtype,
+      errorReason: result.errorReason,
+      parseError: result.parseError,
+      branchUrl: result.branchUrl,
+    });
+    opts.state.issues[String(opts.issue.id)] = {
+      ...failure,
       partialBranchUrl: result.partialBranchUrl,
     };
   }

@@ -1,8 +1,14 @@
 import { promises as fs } from "node:fs";
 import { ensureAgent, mutateRegistry } from "../state/registry.js";
 import { runCodingAgent } from "./codingAgent.js";
-import { appendBlock, forkClaudeMd, type AppendOutcome } from "./specialization.js";
+import {
+  appendBlock,
+  expireFailureLessons,
+  forkClaudeMd,
+  type AppendOutcome,
+} from "./specialization.js";
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
+import { resolveExpireK } from "../util/sentinels.js";
 import {
   createWorktree,
   removeWorktree,
@@ -115,11 +121,44 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
           issue: input.issue,
           runId: input.runId,
           outcome: outcomeTag,
+          tags: envelope.memoryUpdate.addTags,
           targetRepoPath: input.targetRepoPath,
           logger: input.logger,
         });
         appendOutcome = appendResult.appendOutcome;
         summarySkipReason = appendResult.summarySkipReason;
+
+        // Failure-lesson expiry: after a successful implement run has
+        // been recorded, walk the agent's CLAUDE.md and drop any
+        // failure-lesson sentinel that ≥ K subsequent implements with
+        // overlapping tags have superseded. Only fires for implement —
+        // pushback / failure-lesson runs don't trigger expiry. K is
+        // env-configurable (`VP_DEV_FAILURE_LESSON_EXPIRE_K`, default 3).
+        if (
+          envelope.decision === "implement" &&
+          appendOutcome?.kind === "appended"
+        ) {
+          try {
+            const k = resolveExpireK();
+            const expired = await expireFailureLessons(input.agent.agentId, k);
+            if (expired.kind === "expired") {
+              input.logger.info("specialization.expired", {
+                agentId: input.agent.agentId,
+                issueId: input.issue.id,
+                k,
+                droppedCount: expired.dropped.length,
+                droppedIssues: expired.dropped.map((h) => h.issueId),
+                totalBytes: expired.totalBytes,
+              });
+            }
+          } catch (err) {
+            input.logger.warn("specialization.expire_failed", {
+              agentId: input.agent.agentId,
+              issueId: input.issue.id,
+              err: (err as Error).message,
+            });
+          }
+        }
       }
     } else {
       input.agent.errorCount += 1;
@@ -150,6 +189,10 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
             issue: input.issue,
             runId: input.runId,
             outcome: "failure-lesson",
+            // No envelope this branch — fall back to the agent's current
+            // tag fingerprint as the failure-lesson's topical signal.
+            // Best-effort; expiry's tag-overlap check stays conservative.
+            tags: input.agent.tags,
             targetRepoPath: input.targetRepoPath,
             logger: input.logger,
           });
@@ -217,6 +260,8 @@ interface AppendArgs {
   issue: IssueSummary;
   runId: string;
   outcome: string;
+  /** Tags this issue contributed (envelope.memoryUpdate.addTags). */
+  tags?: string[];
   targetRepoPath: string;
   logger: Logger;
 }
@@ -242,6 +287,7 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
     outcome: args.outcome,
     heading: args.summary.heading,
     body: args.summary.body,
+    tags: args.tags,
     targetRepoPath: args.targetRepoPath,
   });
   if (appendOutcome.kind === "appended") {

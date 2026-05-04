@@ -1,6 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { ensureDir, withFileLock } from "../state/locks.js";
+import {
+  expireFailureLessonsInContent,
+  formatSentinelHeader,
+  type SentinelHeader,
+} from "../util/sentinels.js";
 
 export const AGENTS_ROOT = path.resolve(process.cwd(), "agents");
 export const SOFT_CAP_BYTES = 64 * 1024;
@@ -84,6 +89,15 @@ export interface AppendBlockInput {
   heading: string;
   body: string;
   targetRepoPath: string;
+  /**
+   * Tags this issue contributed to the agent's evolving topical
+   * fingerprint (= envelope.memoryUpdate.addTags). Embedded into the
+   * sentinel header as `tags:t1,t2` so future expiry passes can detect
+   * whether subsequent successes are topically related to a stored
+   * failure-lesson. Optional for back-compat; sentinels written without
+   * tags are treated conservatively (never expired) by `expireFailureLessons`.
+   */
+  tags?: string[];
 }
 
 export type AppendOutcome =
@@ -105,9 +119,16 @@ export async function appendBlock(input: AppendBlockInput): Promise<AppendOutcom
     }
 
     const ts = new Date().toISOString();
+    const sentinel = formatSentinelHeader({
+      runId: input.runId,
+      issueId: input.issueId,
+      outcome: input.outcome,
+      ts,
+      tags: input.tags,
+    });
     const block = [
       "",
-      `<!-- run:${input.runId} issue:#${input.issueId} outcome:${input.outcome} ts:${ts} -->`,
+      sentinel,
       `## ${input.heading.trim()}`,
       "",
       input.body.trim(),
@@ -124,6 +145,50 @@ export async function appendBlock(input: AppendBlockInput): Promise<AppendOutcom
       kind: "appended",
       bytesAppended: Buffer.byteLength(block, "utf-8"),
       totalBytes,
+    };
+  });
+}
+
+export type ExpireOutcome =
+  | { kind: "no-op" }
+  | { kind: "expired"; dropped: SentinelHeader[]; totalBytes: number };
+
+/**
+ * Walk the agent's CLAUDE.md and drop `outcome:failure-lesson` blocks
+ * that have ≥ k subsequent `outcome:implement` blocks sharing at least
+ * one tag with the lesson. Idempotent — re-running on the same content
+ * with the same `k` is a no-op. Conservative on legacy sentinels with
+ * no `tags:` field: those are never expired.
+ *
+ * Wired from `runIssueCore` after a successful implement run, matching
+ * the issue's "summarizer rewrites the file after a successful run"
+ * trigger. Shares the same per-file lock as `appendBlock` so the
+ * read-rewrite-write sequence is atomic against concurrent appends.
+ */
+export async function expireFailureLessons(
+  agentId: string,
+  k: number,
+): Promise<ExpireOutcome> {
+  const filePath = agentClaudeMdPath(agentId);
+  return withFileLock(filePath, async () => {
+    let current: string;
+    try {
+      current = await fs.readFile(filePath, "utf-8");
+    } catch {
+      // No CLAUDE.md yet → nothing to expire. Don't seed here; that's
+      // forkClaudeMd / appendBlock's job.
+      return { kind: "no-op" };
+    }
+    const result = expireFailureLessonsInContent(current, k);
+    if (result.droppedHeaders.length === 0) return { kind: "no-op" };
+
+    const tmp = `${filePath}.tmp.${process.pid}`;
+    await fs.writeFile(tmp, result.content);
+    await fs.rename(tmp, filePath);
+    return {
+      kind: "expired",
+      dropped: result.droppedHeaders,
+      totalBytes: Buffer.byteLength(result.content, "utf-8"),
     };
   });
 }

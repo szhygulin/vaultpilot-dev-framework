@@ -63,6 +63,12 @@ export interface RunIssueEntry {
   prUrl?: string;
   commentUrl?: string;
   error?: string;
+  // Set when the orchestrator's safety-net pushed in-flight worktree edits
+  // to a labeled `<branch>-incomplete-<runId>` ref after a non-clean exit
+  // (today: `error_max_turns`). The agent's primary branch may also have
+  // been deleted by the post-run cleanup; this URL preserves the partial
+  // work for human inspection. See issue #88.
+  partialBranchUrl?: string;
 }
 
 // A `vp-dev/agent-*/issue-*` branch the stale-branch sweep determined was

@@ -10,7 +10,9 @@ import {
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
 import { resolveExpireK } from "../util/sentinels.js";
 import {
+  buildIncompleteBranchName,
   createWorktree,
+  pushPartialBranch,
   removeWorktree,
   type WorktreeHandle,
 } from "../git/worktree.js";
@@ -45,6 +47,15 @@ export interface RunIssueCoreResult {
   reconciled?: string;
   /** See CodingAgentResult.branchUrl. */
   branchUrl?: string;
+  /** See CodingAgentResult.errorSubtype — propagated for orchestrator-side branching. */
+  errorSubtype?: string;
+  /**
+   * Set when the orchestrator-level safety net pushed in-flight worktree
+   * edits to a labeled `<branch>-incomplete-<runId>` ref before pruning.
+   * Distinct from `branchUrl` (which describes the agent's primary branch
+   * found via reconcile). See issue #88.
+   */
+  partialBranchUrl?: string;
 }
 
 export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCoreResult> {
@@ -214,6 +225,57 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       });
     });
 
+    // Orchestrator-level safety net: when the SDK truncated the run with
+    // `error_max_turns` AND the agent did not finish with a clean implement
+    // decision, push whatever's currently in the worktree to a labeled
+    // `<branch>-incomplete-<runId>` ref so the partial work isn't lost when
+    // `removeWorktree` deletes the local branch in the finally below. The
+    // in-agent recovery pass (codingAgent.ts) attempts the same first, but
+    // can itself fail — this is the deterministic backstop. Skipped in
+    // dry-run because remote pushes are intercepted into echoes. See #88.
+    let partialBranchUrl: string | undefined;
+    if (
+      worktree &&
+      result.errorSubtype === "error_max_turns" &&
+      envelope?.decision !== "implement" &&
+      !input.dryRun
+    ) {
+      const incompleteBranch = buildIncompleteBranchName(worktree.branch, input.runId);
+      try {
+        const pushResult = await pushPartialBranch({
+          repoPath: input.targetRepoPath,
+          worktreePath: worktree.path,
+          worktreeBranch: worktree.branch,
+          incompleteBranch,
+          runId: input.runId,
+          errorSubtype: result.errorSubtype,
+          targetRepo: input.targetRepo,
+          logger: input.logger,
+          agentId: input.agent.agentId,
+          issueId: input.issue.id,
+        });
+        if (pushResult.pushed) {
+          partialBranchUrl = pushResult.branchUrl;
+        } else {
+          input.logger.info("worktree.partial_branch_skipped", {
+            agentId: input.agent.agentId,
+            issueId: input.issue.id,
+            reason: pushResult.reason,
+          });
+        }
+      } catch (err) {
+        // Defensive: the helper already catches its own failures and returns
+        // structured `reason`. If something throws anyway (e.g. an unexpected
+        // type-error in the helper itself), surface as a warn and continue —
+        // never block the main failure path on the safety net.
+        input.logger.warn("worktree.partial_branch_unexpected_error", {
+          agentId: input.agent.agentId,
+          issueId: input.issue.id,
+          err: (err as Error).message,
+        });
+      }
+    }
+
     return {
       envelope,
       finalText: result.finalText,
@@ -228,6 +290,8 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       branchName: worktree?.branch,
       reconciled: result.reconciled,
       branchUrl: result.branchUrl,
+      errorSubtype: result.errorSubtype,
+      partialBranchUrl,
     };
   } finally {
     if (worktree) {

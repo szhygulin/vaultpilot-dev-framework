@@ -306,11 +306,15 @@ async function runOneIssue(opts: {
       outcome: env.decision,
       prUrl: env.prUrl,
       commentUrl: env.commentUrl,
+      partialBranchUrl: result.partialBranchUrl,
     };
   } else {
     // Reconciliation found a branch on remote without a PR — surface it in
     // the failure record so the user can salvage with one `gh pr create`
-    // instead of grepping run logs for the orphan branch name.
+    // instead of grepping run logs for the orphan branch name. The partial
+    // branch (issue #88) is a separate, labeled ref pushed by the safety
+    // net; it lives in `partialBranchUrl` so post-run audits can find it
+    // without parsing free-form `error` strings.
     const baseError = result.parseError ?? result.errorReason ?? "Unknown agent failure";
     const error = result.branchUrl
       ? `${baseError} | orphan branch: ${result.branchUrl}`
@@ -320,6 +324,7 @@ async function runOneIssue(opts: {
       agentId: opts.agent.agentId,
       outcome: "error",
       error,
+      partialBranchUrl: result.partialBranchUrl,
     };
   }
 

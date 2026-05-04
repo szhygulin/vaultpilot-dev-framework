@@ -33,6 +33,15 @@ export interface CodingAgentResult {
   costUsd?: number;
   isError: boolean;
   errorReason?: string;
+  /**
+   * SDK result subtype when the run ended in error — e.g. `error_max_turns`,
+   * `error_max_budget_usd`, `error_during_execution`. Distinct from
+   * `errorReason` (human-readable string) so callers can branch on the
+   * machine-readable subtype without parsing the message text.
+   */
+  errorSubtype?: string;
+  /** True when the recovery pass for `error_max_turns` was attempted. */
+  recoveryAttempted?: boolean;
   toolUseTrace: { tool: string; input: string }[];
   /**
    * Set when extractEnvelope failed and the orchestrator queried git/gh state
@@ -85,83 +94,76 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     "Bash(git push --force origin main:*)",
   ];
 
-  let finalText = "";
-  let isError = false;
-  let errorReason: string | undefined;
-  let costUsd: number | undefined;
   const toolUseTrace: { tool: string; input: string }[] = [];
 
-  // CRITICAL: canUseTool is delivered via stdio control messages and only
-  // works when the prompt is an AsyncIterable (streaming input mode). With
-  // a plain string prompt, the SDK closes stdin after sending the user
-  // message, so the bridge can never deliver permission requests back to
-  // the callback — the dry-run interception and push-to-main blocks
-  // silently miss every tool call. Two real comments hit issue #612 during
-  // "dry runs" before this was diagnosed.
-  let closeInputStream: () => void = () => {};
-  const inputClosed = new Promise<void>((resolve) => {
-    closeInputStream = resolve;
+  const pass1 = await runSdkPass({
+    input,
+    systemPrompt,
+    userPrompt,
+    maxTurns: 50,
+    canUseTool,
+    disallowedTools,
+    toolUseTrace,
   });
-  async function* makeUserStream(): AsyncIterable<SDKUserMessage> {
-    yield {
-      type: "user",
-      message: { role: "user", content: userPrompt },
-      parent_tool_use_id: null,
-    };
-    // Keep stdin open so the bridge can deliver canUseTool requests until
-    // the result message arrives and we close it from the consumer side.
-    await inputClosed;
-  }
 
-  try {
-    const stream = query({
-      prompt: makeUserStream(),
-      options: {
-        model: "claude-opus-4-7",
-        cwd: input.worktreePath,
-        additionalDirectories: input.inspectPaths,
-        systemPrompt,
-        tools: ALLOWED_NATIVE_TOOLS,
-        permissionMode: "default",
-        canUseTool,
-        disallowedTools,
-        env: process.env,
-        abortController: input.abortController,
-        maxTurns: 50,
-        settingSources: [],
-        persistSession: false,
-        pathToClaudeCodeExecutable: claudeBinPath(),
-      },
+  let finalText = pass1.finalText;
+  let isError = pass1.isError;
+  let errorReason = pass1.errorReason;
+  let errorSubtype = pass1.errorSubtype;
+  let costUsd = pass1.costUsd;
+
+  let parsed = extractEnvelope(finalText);
+  let recoveryAttempted = false;
+
+  // Turn-ceiling recovery: when the SDK truncated the run with
+  // `error_max_turns` and we have no parseable envelope, run a single
+  // recovery pass that asks the agent to commit + push whatever's already
+  // in the worktree and emit the envelope. This upgrades the typical
+  // failure mode (`reconciled: "no-state"`, work lost) to at least
+  // `branch-only` so the user can salvage by hand. Skipped in dry-run
+  // because branch / push are intercepted into echoes, leaving no real
+  // remote state for reconcile to find. See issue #76.
+  if (errorSubtype === "error_max_turns" && !parsed.ok && !input.dryRun) {
+    recoveryAttempted = true;
+    input.logger.info("agent.recovery_started", {
+      agentId: input.agent.agentId,
+      issueId: input.issueId,
+      reason: errorSubtype,
     });
-
-    for await (const msg of stream) {
-      onMessage(msg, input, toolUseTrace);
-      if (msg.type === "assistant") {
-        const text = extractText(msg.message.content);
-        if (text) finalText = text;
-      } else if (msg.type === "result") {
-        if (msg.subtype === "success") {
-          finalText = msg.result || finalText;
-          costUsd = msg.total_cost_usd;
-        } else {
-          isError = true;
-          errorReason = (msg as { errors?: string[] }).errors?.join("; ") ?? msg.subtype;
-          costUsd = msg.total_cost_usd;
-        }
-        // Result arrived — let the input iterator drain so the SDK can
-        // close cleanly without hanging on `await inputClosed`.
-        closeInputStream();
-      }
+    const pass2 = await runSdkPass({
+      input,
+      systemPrompt,
+      userPrompt: buildRecoveryPrompt({ branchName: input.branchName }),
+      maxTurns: 5,
+      canUseTool,
+      disallowedTools,
+      toolUseTrace,
+    });
+    if (pass2.finalText) finalText = pass2.finalText;
+    if (typeof pass2.costUsd === "number") {
+      costUsd = (costUsd ?? 0) + pass2.costUsd;
     }
-  } catch (err) {
-    isError = true;
-    errorReason = (err as Error).message;
-  } finally {
-    closeInputStream();
+    // Recovery may itself fail; that's fine — the existing reconcile pass
+    // below picks up whatever the agent managed to push to origin.
+    if (!pass2.isError) {
+      isError = false;
+      errorReason = undefined;
+      errorSubtype = undefined;
+    } else if (pass2.errorReason) {
+      errorReason = `${errorReason ?? ""}; recovery: ${pass2.errorReason}`.replace(/^; /, "");
+      errorSubtype = pass2.errorSubtype ?? errorSubtype;
+    }
+    parsed = extractEnvelope(finalText);
+    input.logger.info("agent.recovery_completed", {
+      agentId: input.agent.agentId,
+      issueId: input.issueId,
+      parseOk: parsed.ok,
+      isError: pass2.isError,
+      costUsd: pass2.costUsd ?? null,
+    });
   }
 
   const durationMs = Date.now() - start;
-  const parsed = extractEnvelope(finalText);
 
   let envelope = parsed.envelope;
   const parseError = parsed.ok ? undefined : parsed.error;
@@ -199,6 +201,8 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     costUsd,
     isError,
     errorReason,
+    errorSubtype,
+    recoveryAttempted: recoveryAttempted || undefined,
     toolUseTrace,
     reconciled,
     branchUrl,
@@ -212,6 +216,8 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     durationMs,
     costUsd: costUsd ?? null,
     isError,
+    errorSubtype: errorSubtype ?? null,
+    recoveryAttempted: recoveryAttempted || undefined,
     parseError: result.parseError ?? null,
     reconciled: result.reconciled ?? null,
     branchUrl: result.branchUrl ?? null,
@@ -221,6 +227,117 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     finalText: result.parseError ? truncate(finalText, 4096) : undefined,
   });
   return result;
+}
+
+interface SdkPassOpts {
+  input: CodingAgentInput;
+  systemPrompt: string;
+  userPrompt: string;
+  maxTurns: number;
+  canUseTool: CanUseTool;
+  disallowedTools: string[];
+  toolUseTrace: { tool: string; input: string }[];
+}
+
+interface SdkPassResult {
+  finalText: string;
+  isError: boolean;
+  errorReason?: string;
+  errorSubtype?: string;
+  costUsd?: number;
+}
+
+// CRITICAL: canUseTool is delivered via stdio control messages and only
+// works when the prompt is an AsyncIterable (streaming input mode). With
+// a plain string prompt, the SDK closes stdin after sending the user
+// message, so the bridge can never deliver permission requests back to
+// the callback — the dry-run interception and push-to-main blocks
+// silently miss every tool call. Two real comments hit issue #612 during
+// "dry runs" before this was diagnosed.
+async function runSdkPass(opts: SdkPassOpts): Promise<SdkPassResult> {
+  const { input } = opts;
+  let finalText = "";
+  let isError = false;
+  let errorReason: string | undefined;
+  let errorSubtype: string | undefined;
+  let costUsd: number | undefined;
+
+  let closeInputStream: () => void = () => {};
+  const inputClosed = new Promise<void>((resolve) => {
+    closeInputStream = resolve;
+  });
+  async function* makeUserStream(): AsyncIterable<SDKUserMessage> {
+    yield {
+      type: "user",
+      message: { role: "user", content: opts.userPrompt },
+      parent_tool_use_id: null,
+    };
+    await inputClosed;
+  }
+
+  try {
+    const stream = query({
+      prompt: makeUserStream(),
+      options: {
+        model: "claude-opus-4-7",
+        cwd: input.worktreePath,
+        additionalDirectories: input.inspectPaths,
+        systemPrompt: opts.systemPrompt,
+        tools: ALLOWED_NATIVE_TOOLS,
+        permissionMode: "default",
+        canUseTool: opts.canUseTool,
+        disallowedTools: opts.disallowedTools,
+        env: process.env,
+        abortController: input.abortController,
+        maxTurns: opts.maxTurns,
+        settingSources: [],
+        persistSession: false,
+        pathToClaudeCodeExecutable: claudeBinPath(),
+      },
+    });
+
+    for await (const msg of stream) {
+      onMessage(msg, input, opts.toolUseTrace);
+      if (msg.type === "assistant") {
+        const text = extractText(msg.message.content);
+        if (text) finalText = text;
+      } else if (msg.type === "result") {
+        if (msg.subtype === "success") {
+          finalText = msg.result || finalText;
+          costUsd = msg.total_cost_usd;
+        } else {
+          isError = true;
+          errorSubtype = msg.subtype;
+          const errs = (msg as { errors?: string[] }).errors;
+          errorReason = errs && errs.length > 0 ? errs.join("; ") : msg.subtype;
+          costUsd = msg.total_cost_usd;
+        }
+        closeInputStream();
+      }
+    }
+  } catch (err) {
+    isError = true;
+    errorReason = (err as Error).message;
+  } finally {
+    closeInputStream();
+  }
+
+  return { finalText, isError, errorReason, errorSubtype, costUsd };
+}
+
+export function buildRecoveryPrompt(opts: { branchName: string }): string {
+  return [
+    `Recovery turn — your previous session was truncated by the turn ceiling before you could finish.`,
+    ``,
+    `DO NOT attempt new feature work. Recover what's already in the worktree:`,
+    ``,
+    `1. Run \`git status\` to inspect uncommitted changes.`,
+    `2. If anything is uncommitted, stage and commit on branch \`${opts.branchName}\` with a brief message describing what was in flight.`,
+    `3. Push: \`git push -u origin ${opts.branchName}\`.`,
+    `4. Emit the JSON envelope as your final message per the workflow.`,
+    ``,
+    `If the worktree is clean and you never opened a PR, emit \`{"decision":"pushback","reason":"Truncated by turn ceiling; no recoverable artifact in worktree."}\`.`,
+  ].join("\n");
 }
 
 function onMessage(

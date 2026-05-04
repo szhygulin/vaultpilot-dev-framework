@@ -316,6 +316,11 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   await triageLogger.open();
   let dispatchIssues = open;
   let triageSkipped: TriageSkipped[] = [];
+  // `undefined` distinguishes "triage was bypassed" (omit gate line) from
+  // "triage ran but everything was a cache hit" (show $0.0000). Per #55
+  // acceptance: "no change when triage is disabled — the line is
+  // omitted, not zero-valued."
+  let triageCostUsd: number | undefined;
   try {
     if (opts.includeNonReady) {
       triageLogger.info("triage.bypassed", { reason: "--include-non-ready", issueCount: open.length });
@@ -329,12 +334,13 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       triageSkipped = triaged
         .filter((t) => !t.result.ready)
         .map((t) => ({ issue: t.issue, reason: t.result.reason }));
+      triageCostUsd = triaged.reduce((sum, t) => sum + t.costUsd, 0);
       triageLogger.info("triage.batch_completed", {
         total: triaged.length,
         ready: dispatchIssues.length,
         skipped: triageSkipped.length,
         cacheHits: triaged.filter((t) => t.fromCache).length,
-        totalCostUsd: triaged.reduce((sum, t) => sum + t.costUsd, 0),
+        totalCostUsd: triageCostUsd,
       });
     }
   } finally {
@@ -382,6 +388,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     registry,
     triageSkipped,
     openPrSkipped,
+    triageCostUsd,
   });
 
   if (opts.plan) {

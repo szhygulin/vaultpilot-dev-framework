@@ -19,6 +19,7 @@ import type {
   IssueSummary,
   RunState,
 } from "../types.js";
+import type { RunCostTracker } from "../util/costTracker.js";
 
 export interface OrchestratorInput {
   state: RunState;
@@ -28,6 +29,13 @@ export interface OrchestratorInput {
   logger: Logger;
   dryRun: boolean;
   targetRepoPath?: string;
+  /**
+   * Per-run cost accumulator (issue #85 Phase 1 — measurement only).
+   * Threaded down to the dispatcher (orchestrator-side `query()` cost)
+   * and to each `runIssueCore` → `runCodingAgent` (issue-side cost).
+   * Optional so the orchestrator can be exercised without one in tests.
+   */
+  costTracker?: RunCostTracker;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
@@ -66,6 +74,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         pendingIssues: pending,
         cap,
         logger: input.logger,
+        costTracker: input.costTracker,
       });
       input.logger.info("tick.proposal", {
         tick: input.state.tickCount,
@@ -89,6 +98,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
           dryRun: input.dryRun,
           logger: input.logger,
           state: input.state,
+          costTracker: input.costTracker,
         }).catch(async (err) => {
           input.logger.error("agent.uncaught", {
             agentId: agent.agentId,
@@ -287,6 +297,7 @@ async function runOneIssue(opts: {
   dryRun: boolean;
   logger: Logger;
   state: RunState;
+  costTracker?: RunCostTracker;
 }): Promise<void> {
   const result = await runIssueCore({
     agent: opts.agent,
@@ -296,6 +307,7 @@ async function runOneIssue(opts: {
     runId: opts.state.runId,
     dryRun: opts.dryRun,
     logger: opts.logger,
+    costTracker: opts.costTracker,
   });
 
   if (result.envelope) {

@@ -62,6 +62,7 @@ import {
   rollupOutcomes,
   type AgentRollup,
 } from "./state/outcomes.js";
+import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
 
 const DEFAULT_STALLED_THRESHOLD_DAYS = 14;
@@ -101,6 +102,10 @@ export function buildCli(): Command {
     .option(
       "--include-non-ready",
       "Skip pre-dispatch triage and dispatch every open issue (per-run override; no env var)",
+    )
+    .option(
+      "--max-cost-usd <usd>",
+      "Per-run cost ceiling in USD (e.g. 5.0). Phase 1: logged + accumulated only — no enforcement yet (#85). Env fallback: VP_DEV_MAX_COST_USD.",
     )
     .action(async (opts) => {
       await cmdRun(opts);
@@ -220,6 +225,7 @@ interface RunOpts {
   plan?: boolean;
   confirm?: string;
   includeNonReady?: boolean;
+  maxCostUsd?: string;
 }
 
 async function cmdRun(opts: RunOpts): Promise<void> {
@@ -297,6 +303,13 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   const range: IssueRangeSpec = parseRangeSpec(opts.issues);
   const repoPath = await resolveTargetRepoPath(opts.targetRepo, opts.targetRepoPath);
 
+  // Per-run cost tracker (issue #85, Phase 1). Instantiated here so triage
+  // cost (which fires BEFORE the runId is minted on line ~451) accumulates
+  // into the same total as orchestrator + coding-agent spend. Phase 1 is
+  // measurement only — `budgetUsd` is logged but not enforced.
+  const budgetUsd = resolveBudgetUsd({ flag: opts.maxCostUsd, env: process.env });
+  const costTracker = new RunCostTracker();
+
   const { open, skippedClosed } = await resolveRangeToIssues(opts.targetRepo, range);
   if (open.length === 0) {
     console.error("ERROR: no open issues in range.");
@@ -335,6 +348,11 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         .filter((t) => !t.result.ready)
         .map((t) => ({ issue: t.issue, reason: t.result.reason }));
       triageCostUsd = triaged.reduce((sum, t) => sum + t.costUsd, 0);
+      // Pre-dispatch triage runs BEFORE the runId / orchestrator is set up,
+      // but the cost belongs to the same per-run total — fold it in here so
+      // `run.completed` reports a single number that reconciles with the SDK
+      // billing dashboard.
+      costTracker.add(triageCostUsd);
       triageLogger.info("triage.batch_completed", {
         total: triaged.length,
         ready: dispatchIssues.length,
@@ -471,6 +489,10 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     issueCount: dispatchIssues.length,
     triageSkippedCount: triageSkipped.length,
     dryRun: !!opts.dryRun,
+    // `null` (not omitted) when no budget is set so log consumers can
+    // distinguish "Phase-1 run with no cap" from "older log without
+    // cost-tracking columns" without parsing the runId timestamp.
+    maxCostUsd: budgetUsd ?? null,
   });
 
   try {
@@ -490,11 +512,17 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       logger,
       dryRun: !!opts.dryRun,
       targetRepoPath: repoPath,
+      costTracker,
     });
     logger.info("run.completed", {
       runId,
       complete: isRunComplete(state),
       issueCount: dispatchIssues.length,
+      // Run-final accounting (#85 acceptance): single total summed across
+      // triage + dispatcher + coding-agent. Reconciles with the SDK
+      // billing dashboard.
+      totalCostUsd: costTracker.total(),
+      maxCostUsd: budgetUsd ?? null,
     });
     if (isRunComplete(state)) await clearCurrentRunId();
   } finally {

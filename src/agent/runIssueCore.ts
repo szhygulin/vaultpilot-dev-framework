@@ -16,6 +16,7 @@ import {
 } from "../git/worktree.js";
 import type { Logger } from "../log/logger.js";
 import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
+import type { RunCostTracker } from "../util/costTracker.js";
 
 export interface RunIssueCoreInput {
   agent: AgentRecord;
@@ -27,6 +28,12 @@ export interface RunIssueCoreInput {
   logger: Logger;
   skipSummary?: boolean;
   inspectPaths?: string[];
+  /**
+   * Per-run cost accumulator threaded down from `cmdRun()`. Phase 1 of
+   * the cost-ceiling design (#85): measurement only, no enforcement.
+   * Optional so `vp-dev spawn` (single-issue, no run scope) can omit it.
+   */
+  costTracker?: RunCostTracker;
 }
 
 export interface RunIssueCoreResult {
@@ -76,6 +83,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       dryRun: input.dryRun,
       logger: input.logger,
       inspectPaths: input.inspectPaths,
+      costTracker: input.costTracker,
     });
 
     envelope = result.envelope;

@@ -198,9 +198,13 @@ Rubric:
 - Ready: a concrete bug with a repro, or a feature with explicit acceptance criteria, or a clearly-scoped refactor.
 - NOT ready — ambiguous: "we should think about", "explore", "investigate", "discuss", or no acceptance criteria.
 - NOT ready — duplicate: the issue body or comments explicitly say it is a duplicate of another open issue.
-- NOT ready — body/comments conflict: the comments redirect to a different scope than the body, and a coding agent reading body-only would do the wrong thing.
+- NOT ready — body/comments conflict (irreconcilable only): comments mark the issue obsolete / superseded / won't-fix, redirect to a different open issue as a true duplicate, or invalidate the body's premise ("actually we don't want this anymore"). Only skip when the conflict cannot be resolved at dispatch time.
 
 The "Issue Analysis" rule from the agent's CLAUDE.md REQUIRES reading comments — body and comments together form the spec. Prefer comments when they correct or override the body.
+
+Pass through (ready: true) for transient conflicts the dispatched agent can resolve by re-reading comments:
+- "blocked on PR #N" / "depends on #M" / "waiting for upstream merge" — the agent re-reads comments at dispatch time and pushes back if still blocked, or proceeds if the dependency landed.
+- Comments adding follow-up scope or clarifying acceptance criteria without invalidating the body.
 
 Output: a single JSON object, no fences, no prose.
   {"ready": boolean, "reason": "<one short sentence, ≤240 chars>", "suggestedSpecialty"?: "<short hint, optional>"}

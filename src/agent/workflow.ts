@@ -38,7 +38,7 @@ If a \`# Plan for issue #${v.issueId} (from feature-plans/...)\` section appears
 
 ## Step 2 — Apply judgment rules from CLAUDE.md
 - Push-Back Discipline: faulty premise → push back BEFORE acting.
-- Smallest-Solution Discipline: minimum change first; flag larger proposals.
+- Best-Architectural-Solution Discipline: pick the architecturally best-fitting scope — not the smallest, not the biggest. Match the resolution to the problem's structural shape; flag wrong-sized proposals.
 - Rogue-Agent-Only Triage: pure-advisory threats with no signing flow → close as architectural; do not invent skill-side defenses against rogue agents.
 - Cross-Repo Scope Splits: if the fix splits between MCP code and skill rendering, file the skill half as a tracked issue in vaultpilot-security-skill and link both ways.
 - Typed-Data Signing Discipline applies if the issue touches typed-data signing tools.

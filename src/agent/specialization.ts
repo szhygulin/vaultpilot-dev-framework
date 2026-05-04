@@ -26,7 +26,7 @@ fresh agent better starting rules.
 - PR body must use \`Closes #N\` on its own line for GitHub auto-close.
 
 ## Code Discipline
-- Smallest change first. Don't add features beyond the issue's stated scope.
+- Architecturally best-fitting change. Match scope to the problem's structural shape — don't paper over a structural issue with an inline patch, and don't over-engineer a localized bug.
 - Trust framework guarantees — don't add error handling for impossible cases.
 - Default to no comments. Only add when WHY is non-obvious.
 

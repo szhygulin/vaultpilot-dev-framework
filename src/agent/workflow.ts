@@ -90,6 +90,7 @@ Tags: lowercase, dash-separated, domain-specific (e.g. solana, spl-token, aave, 
 Hard rules:
 - Never push to main. Never run \`git push origin main\`.
 - Never use --no-verify, --force without --force-with-lease, or amend a pushed commit.
+- Never write to \`agents/.shared/\` — that directory is curated by the orchestrator's \`vp-dev lessons review\` flow. Read-only seed from your perspective; cross-agent writes corrupt parallel runs.
 - The JSON envelope MUST be your last message. Missing or malformed → the run records the issue as failed.
 `;
 }

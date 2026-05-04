@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { readAgentClaudeMd } from "./specialization.js";
+import { primaryDomain, readAgentClaudeMd } from "./specialization.js";
+import { readDomainPool } from "./lessonsPool.js";
 import { renderWorkflow, type WorkflowVars } from "./workflow.js";
 import type { AgentRecord } from "../types.js";
 
@@ -27,6 +28,25 @@ export async function buildAgentSystemPrompt(opts: {
     claudeMd.trim(),
     "",
   ];
+
+  // Shared lessons pool seeded between the agent's own CLAUDE.md and any
+  // per-issue plan. Domain = the agent's first non-general tag. No file ⇒
+  // skip silently (the absence is normal — most agent/domain pairs won't have
+  // a curated pool yet).
+  const domain = primaryDomain(opts.agent.tags);
+  const sharedLessons = domain ? await readDomainPool(domain) : null;
+  if (sharedLessons && sharedLessons.trim().length > 0) {
+    sections.push(
+      "---",
+      "",
+      `# Shared lessons (${domain})`,
+      "",
+      "Domain knowledge curated from sibling agents. Read-only seed — never write to `agents/.shared/`.",
+      "",
+      sharedLessons.trim(),
+      "",
+    );
+  }
 
   if (plan) {
     sections.push(

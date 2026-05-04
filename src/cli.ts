@@ -38,7 +38,19 @@ import {
   resolveTargetRepoPath,
 } from "./git/worktree.js";
 import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
+import {
+  appendDomainPool,
+  ENTRY_LINE_CAP,
+  POOL_LINE_CAP,
+  poolPath,
+  replaceCandidateMarkers,
+  scanCandidates,
+  type PendingCandidate,
+} from "./agent/lessonsPool.js";
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawn } from "node:child_process";
 import { runIssueCore } from "./agent/runIssueCore.js";
 import {
   applySplit,
@@ -200,6 +212,26 @@ export function buildCli(): Command {
         }),
     );
   program.addCommand(agentsCmd);
+
+  const lessonsCmd = new Command("lessons")
+    .description("Curate the cross-agent shared lessons pool (agents/.shared/lessons/<domain>.md)")
+    .addCommand(
+      new Command("list")
+        .description("List pending promotion candidates across all agents")
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdLessonsList(opts);
+        }),
+    )
+    .addCommand(
+      new Command("review")
+        .description("Walk pending promotion candidates and accept / reject / skip each (interactive)")
+        .option("--yes", "Accept every candidate without prompting (only valid in non-interactive scripts; bypasses the human gate)")
+        .action(async (opts) => {
+          await cmdLessonsReview(opts);
+        }),
+    );
+  program.addCommand(lessonsCmd);
 
   return program;
 }
@@ -1171,6 +1203,215 @@ async function cmdAgentsStats(opts: AgentsStatsOpts): Promise<void> {
     String(r.medianCiCycles),
   ]);
   printTable(headers, rows);
+}
+
+interface LessonsListOpts {
+  json?: boolean;
+}
+
+async function cmdLessonsList(opts: LessonsListOpts): Promise<void> {
+  const candidates = await collectAllCandidates();
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          candidates: candidates.map((c) => ({
+            agentId: c.agentId,
+            domain: c.domain,
+            heading: c.heading,
+            innerPreview: c.inner.length > 200 ? c.inner.slice(0, 197) + "..." : c.inner,
+          })),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
+  if (candidates.length === 0) {
+    process.stdout.write("No pending promotion candidates.\n");
+    return;
+  }
+  const byDomain = new Map<string, PendingCandidate[]>();
+  for (const c of candidates) {
+    const arr = byDomain.get(c.domain) ?? [];
+    arr.push(c);
+    byDomain.set(c.domain, arr);
+  }
+  for (const [domain, list] of [...byDomain.entries()].sort()) {
+    process.stdout.write(`\n=== domain: ${domain} (${list.length} candidate${list.length === 1 ? "" : "s"})\n`);
+    for (const c of list) {
+      process.stdout.write(`  - ${c.agentId}  heading="${c.heading}"\n`);
+    }
+  }
+  process.stdout.write(`\nTotal: ${candidates.length} pending. Run \`vp-dev lessons review\` to triage.\n`);
+}
+
+interface LessonsReviewOpts {
+  yes?: boolean;
+}
+
+async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
+  const candidates = await collectAllCandidates();
+  if (candidates.length === 0) {
+    process.stdout.write("No pending promotion candidates.\n");
+    return;
+  }
+  if (opts.yes) {
+    process.stdout.write(
+      "WARNING: --yes accepts every candidate without prompting. The pool's defense in depth (per-entry line cap, pool cap) still applies, but content review is bypassed.\n\n",
+    );
+  } else if (!process.stdin.isTTY) {
+    process.stderr.write(
+      "ERROR: stdin is not a TTY. Use --yes to bypass the prompt (accepts every candidate; pool/entry caps still enforced).\n",
+    );
+    process.exit(2);
+  }
+
+  let acceptedCount = 0;
+  let rejectedCount = 0;
+  let skippedCount = 0;
+  let capRejectCount = 0;
+
+  const { createInterface } = await import("node:readline/promises");
+  const rl = opts.yes
+    ? null
+    : createInterface({ input: process.stdin, output: process.stdout });
+
+  try {
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      process.stdout.write(
+        `\n[${i + 1}/${candidates.length}] agent=${c.agentId} domain=${c.domain} heading="${c.heading}"\n`,
+      );
+      process.stdout.write(`---\n${c.inner}\n---\n`);
+
+      let action: "accept" | "edit" | "reject" | "skip" = "accept";
+      let editedInner: string | null = null;
+      if (rl) {
+        const answer = (await rl.question("[a]ccept / [e]dit / [r]eject / [s]kip / [q]uit: "))
+          .trim()
+          .toLowerCase();
+        if (answer === "q" || answer === "quit") break;
+        if (answer === "r" || answer === "reject") action = "reject";
+        else if (answer === "s" || answer === "skip" || answer === "") action = "skip";
+        else if (answer === "e" || answer === "edit") {
+          const edited = await editInExternalEditor(c.inner);
+          if (edited === null) {
+            process.stdout.write("(editor unchanged — accepting as-is)\n");
+            action = "accept";
+          } else if (edited.trim().length === 0) {
+            process.stdout.write("(editor produced empty content — treating as reject)\n");
+            action = "reject";
+          } else {
+            editedInner = edited;
+            action = "accept";
+          }
+        } else {
+          action = "accept";
+        }
+      }
+
+      if (action === "skip") {
+        skippedCount += 1;
+        process.stdout.write("  → skipped (will resurface in next review).\n");
+        continue;
+      }
+      if (action === "reject") {
+        let reason = "manual";
+        if (rl) {
+          const r = (await rl.question("  reject reason (one short word, default 'manual'): ")).trim();
+          if (r) reason = r.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 32) || "manual";
+        }
+        await replaceCandidateMarkers({
+          agentId: c.agentId,
+          startIdx: c.startIdx,
+          endIdx: c.endIdx,
+          inner: c.inner,
+          status: "not-promoted",
+          meta: reason,
+        });
+        rejectedCount += 1;
+        process.stdout.write(`  → rejected (reason=${reason}).\n`);
+        continue;
+      }
+
+      const finalInner = editedInner ?? c.inner;
+      const result = await appendDomainPool({
+        domain: c.domain,
+        heading: c.heading,
+        body: finalInner,
+        sourceAgentId: c.agentId,
+        ts: new Date().toISOString(),
+      });
+      if (result.kind === "rejected-entry-cap") {
+        capRejectCount += 1;
+        process.stdout.write(
+          `  → ENTRY-CAP REJECT: this entry is ${result.entryLines} lines, cap=${result.cap}. Trim the body or split into multiple smaller entries, then re-run review.\n`,
+        );
+        continue;
+      }
+      if (result.kind === "rejected-pool-cap") {
+        capRejectCount += 1;
+        process.stdout.write(
+          `  → POOL-CAP REJECT: pool ${poolPath(c.domain)} is ${result.currentLines} lines, adding this would exceed ${result.cap}. Trim the pool file by hand, then re-run review.\n`,
+        );
+        continue;
+      }
+      await replaceCandidateMarkers({
+        agentId: c.agentId,
+        startIdx: c.startIdx,
+        endIdx: c.endIdx,
+        inner: c.inner,
+        status: "promoted",
+        meta: c.domain,
+      });
+      acceptedCount += 1;
+      process.stdout.write(
+        `  → accepted → ${poolPath(c.domain)} (pool now ${result.totalLines}/${POOL_LINE_CAP} lines, entry ${result.entryLines}/${ENTRY_LINE_CAP}).\n`,
+      );
+    }
+  } finally {
+    rl?.close();
+  }
+
+  process.stdout.write(
+    `\nReview complete: accepted=${acceptedCount} rejected=${rejectedCount} skipped=${skippedCount} cap-reject=${capRejectCount}\n`,
+  );
+}
+
+async function collectAllCandidates(): Promise<PendingCandidate[]> {
+  const reg = await loadRegistry();
+  const out: PendingCandidate[] = [];
+  for (const a of reg.agents) {
+    let md: string;
+    try {
+      md = await fs.readFile(agentClaudeMdPath(a.agentId), "utf-8");
+    } catch {
+      continue;
+    }
+    out.push(...scanCandidates(a.agentId, md));
+  }
+  return out;
+}
+
+async function editInExternalEditor(initial: string): Promise<string | null> {
+  const editor = process.env.EDITOR || process.env.VISUAL || "vi";
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vp-dev-lesson-"));
+  const file = path.join(dir, "candidate.md");
+  await fs.writeFile(file, initial);
+  const before = await fs.readFile(file, "utf-8");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(editor, [file], { stdio: "inherit" });
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`editor exited with code ${code}`));
+    });
+    child.on("error", reject);
+  });
+  const after = await fs.readFile(file, "utf-8");
+  await fs.rm(dir, { recursive: true, force: true });
+  return after === before ? null : after;
 }
 
 function printTable(headers: string[], rows: string[][]): void {

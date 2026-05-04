@@ -225,6 +225,13 @@ Hard rules:
 - Do NOT mention the specific issue number, PR number, or run id — that's in the provenance comment. Talk about the class of situation, not this instance.
 - Inside heading / body / skipReason string values: escape every double-quote as \\" and every literal newline as \\n. Do NOT escape apostrophes — \\' is INVALID JSON (the parser only knows \\", \\\\, \\/, \\b, \\f, \\n, \\r, \\t, \\uXXXX). Write apostrophes as a plain ': don't, isn't, can't. Prefer single-quote ' or backticks for emphasis when the alternative is acceptable.
 
+Cross-agent promotion (OPTIONAL):
+- If the lesson would also help a sibling agent in the same primary domain — typically a domain quirk, an SDK gotcha, an on-chain protocol invariant, or a tooling pitfall — wrap the body content in \`<!-- promote-candidate:<DOMAIN> --> ... <!-- /promote-candidate -->\` where DOMAIN is the agent's first non-"general" tag, lowercased.
+- The wrapped section MUST be a descriptive observation, not an imperative directive ("on chain X, RPC Y returns null when …" — yes; "always do Z before calling Y" — no, that's per-agent rule shape).
+- Fence or quote technical content (commands, addresses, code snippets).
+- Skip the wrapping for behaviour rules specific to THIS agent's role, push-back patterns, workflow discipline, or anything that wouldn't survive being read by a sibling with a different tag set.
+- A human reviewer gates promotion via \`vp-dev lessons review\` — false positives are recoverable, false negatives lose the cross-agent signal.
+
 Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Use \`{"skip": false, "heading": "...", "body": "..."}\` when there is a lesson worth saving, and \`{"skip": true, "skipReason": "..."}\` otherwise. Schema:
   {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
 
@@ -245,6 +252,12 @@ Hard rules:
 - Body: ≤ 2000 chars. 2–8 short lines. No prose paragraphs.
 - Do NOT mention the specific issue number, PR number, or run id — that's in the provenance comment. Talk about the class of failure, not this instance.
 - Inside heading / body / skipReason string values: escape every double-quote as \\" and every literal newline as \\n. Do NOT escape apostrophes — \\' is INVALID JSON. Write apostrophes as a plain ': don't, isn't, can't.
+
+Cross-agent promotion (OPTIONAL):
+- If the failure mode would also bite a sibling agent in the same primary domain (SDK quirk, RPC behaviour, protocol invariant, build / test pitfall), wrap the relevant body content in \`<!-- promote-candidate:<DOMAIN> --> ... <!-- /promote-candidate -->\` where DOMAIN is the agent's first non-"general" tag, lowercased.
+- Wrapped content MUST be a descriptive observation, not an imperative directive. Fence technical content (commands, addresses, code).
+- Skip the wrapping for failures specific to this agent's workflow, push-back style, or one-off plan-vs-code mismatch — those don't generalize across siblings.
+- Human reviewer gates promotion via \`vp-dev lessons review\`.
 
 Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Schema:
   {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;

@@ -76,6 +76,22 @@ export async function readAgentClaudeMd(
   }
 }
 
+/**
+ * Pick the agent's primary domain — the first non-"general" tag, lowercased.
+ * Returns null if the agent only carries "general" or has no tags. The shared
+ * lessons pool keys files on this value, so any domain a sibling pool exists
+ * for must round-trip through this resolver to stay reachable. Deliberately
+ * does NOT introduce a second taxonomy on top of the existing free-form tag
+ * set — domains ARE tags.
+ */
+export function primaryDomain(tags: readonly string[]): string | null {
+  for (const t of tags) {
+    const lower = t.toLowerCase().trim();
+    if (lower && lower !== "general") return lower;
+  }
+  return null;
+}
+
 export interface AppendBlockInput {
   agentId: string;
   runId: string;

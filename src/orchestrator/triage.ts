@@ -200,24 +200,34 @@ Rubric:
 - NOT ready — duplicate: the issue body or comments explicitly say it is a duplicate of another open issue.
 - NOT ready — body/comments conflict (irreconcilable only): comments mark the issue obsolete / superseded / won't-fix, redirect to a different open issue as a true duplicate, or invalidate the body's premise ("actually we don't want this anymore"). Only skip when the conflict cannot be resolved at dispatch time.
 
-The "Issue Analysis" rule from the agent's CLAUDE.md REQUIRES reading comments — body and comments together form the spec. Prefer comments when they correct or override the body.
+The "Issue Analysis" rule from the agent's CLAUDE.md REQUIRES reading comments — body and comments together form the spec. Prefer comments when they correct or override the body. The MOST RECENT comment (labeled "most recent" in the input) carries the most weight; treat it as the current state of the thread.
 
 Pass through (ready: true) for transient conflicts the dispatched agent can resolve by re-reading comments:
 - "blocked on PR #N" / "depends on #M" / "waiting for upstream merge" — the agent re-reads comments at dispatch time and pushes back if still blocked, or proceeds if the dependency landed.
 - Comments adding follow-up scope or clarifying acceptance criteria without invalidating the body.
+- The most recent comment is a short directive that selects from a previous comment's proposal: "do B", "option a", "go with it", "yes, A", "+1 to that", "ship it", "ack". A short reply RESOLVES the thread. Do NOT weight comment length when assessing resolution — a 4-character directive is as binding as a multi-paragraph rationale, especially when it follows a multi-path proposal.
+  Example: comment 3/4 lists options (a/b/c); comment 4/4 is "do B". The thread is resolved → ready: true.
 
 Output: a single JSON object, no fences, no prose.
   {"ready": boolean, "reason": "<one short sentence, ≤240 chars>", "suggestedSpecialty"?: "<short hint, optional>"}
 
 Hard rules:
 - Default to ready: true when uncertain (the approval gate is the human backstop).
-- The "reason" must explain WHY in one short sentence. For ready: cite the concrete signal ("explicit acceptance criteria", "bug with repro"). For not-ready: cite the disqualifier ("ambiguous scope", "duplicate of #N", "body/comments conflict").
+- If the reason you would write contains "unresolved", "undecided", "left open", "left direction", "no commitment", or "didn't commit" — that IS the uncertainty case. Return ready: true. The dispatched coding agent re-reads comments at runtime and pushes back if it disagrees.
+- The "reason" must explain WHY in one short sentence. For ready: cite the concrete signal ("explicit acceptance criteria", "bug with repro", "most recent comment selects option B"). For not-ready: cite the disqualifier ("ambiguous scope", "duplicate of #N", "body/comments conflict").
 - No markdown in the reason. No newlines inside the reason — write a single sentence.
 - If the body is empty AND there are no comments, return ready: true with reason "empty body — fail open".`;
 
 function buildPrompt(detail: IssueDetail): string {
+  const total = detail.comments.length;
   const commentBlocks = detail.comments
-    .map((c) => `--- comment by ${c.author} at ${c.createdAt}\n${c.body}`)
+    .map((c, i) => {
+      const ordinal = `${i + 1}/${total}`;
+      let recencyTag = "";
+      if (total > 1 && i === total - 1) recencyTag = " (most recent)";
+      else if (total > 1 && i === 0) recencyTag = " (oldest)";
+      return `--- comment ${ordinal}${recencyTag} by ${c.author} at ${c.createdAt}\n${c.body}`;
+    })
     .join("\n\n");
   return `Issue ${detail.id} — ${detail.title}
 Labels: ${JSON.stringify(detail.labels)}
@@ -236,8 +246,20 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 3) + "...";
 }
 
+// Hash of the rubric + prompt-builder shape, mixed into the per-issue
+// contentHash so that any rubric edit auto-invalidates previously-cached
+// triage decisions. Without this, a prompt fix landing today would still
+// serve yesterday's stale verdict for every cached issue until its body
+// or comments mutate.
+const RUBRIC_FINGERPRINT = createHash("sha256")
+  .update(TRIAGE_SYSTEM_PROMPT)
+  .update("\n--prompt-shape-v2--\n") // bump when buildPrompt() output shape changes
+  .digest("hex")
+  .slice(0, 16);
+
 function computeContentHash(detail: IssueDetail): string {
   const h = createHash("sha256");
+  h.update("rubric:" + RUBRIC_FINGERPRINT + "\n");
   h.update(detail.body ?? "");
   h.update("\n--comments--\n");
   for (const c of detail.comments) {

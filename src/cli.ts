@@ -3,6 +3,7 @@ import {
   clearCurrentRunId,
   downgradeInFlightToPending,
   isRunComplete,
+  findLatestRunId,
   loadRunState,
   makeRunId,
   newRunState,
@@ -46,6 +47,7 @@ import {
   resolveTargetRepoPath,
 } from "./git/worktree.js";
 import { findOpenVpDevPrs } from "./git/openPrs.js";
+import { formatStatusJson, formatStatusText } from "./state/statusFormatter.js";
 import {
   DEFAULT_INCOMPLETE_RETENTION_DAYS,
   filterByRetention,
@@ -159,10 +161,12 @@ export function buildCli(): Command {
     });
 
   program
-    .command("status")
-    .description("Print summary of the current run + per-agent state")
-    .action(async () => {
-      await cmdStatus();
+    .command("status [runId]")
+    .description("Print summary of a run + per-agent state + per-issue detail. With no args: shows the active run if one exists. Pass <runId> to inspect a specific past run, or --latest for the most recent run on disk.")
+    .option("--latest", "Inspect the most recent run-<ts>.json on disk regardless of completion")
+    .option("--json", "Print machine-readable JSON")
+    .action(async (runIdArg, opts) => {
+      await cmdStatus(runIdArg, opts);
     });
 
   program
@@ -1020,42 +1024,50 @@ async function runResume(opts: RunOpts): Promise<void> {
   }
 }
 
-async function cmdStatus(): Promise<void> {
-  const runId = await readCurrentRunId();
+interface StatusOpts {
+  latest?: boolean;
+  json?: boolean;
+}
+
+async function cmdStatus(runIdArg?: string, opts: StatusOpts = {}): Promise<void> {
+  // Three resolution modes for which run to inspect:
+  //   1. Explicit `runId` arg → that run.
+  //   2. --latest → most recent run-*.json on disk regardless of completion.
+  //   3. (default) the active run referenced by `state/current-run.txt`.
+  let runId: string | undefined = runIdArg ?? undefined;
   if (!runId) {
-    process.stdout.write("No active run.\n");
+    runId = opts.latest
+      ? (await findLatestRunId()) ?? undefined
+      : (await readCurrentRunId()) ?? undefined;
+  }
+  if (!runId) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ runId: null, reason: opts.latest ? "no runs on disk" : "no active run" }, null, 2) + "\n");
+    } else {
+      process.stdout.write(opts.latest ? "No runs on disk.\n" : "No active run.\n");
+    }
     return;
   }
-  const state = await loadRunState(runId);
-  const total = Object.keys(state.issues).length;
-  // #86: `aborted-budget` is a distinct terminal state — surface it as its
-  // own column so post-run audits don't have to grep run-state JSON to
-  // tell "operator pulled the plug on cost" apart from "agent failed".
-  const counts: Record<string, number> = {
-    pending: 0,
-    "in-flight": 0,
-    done: 0,
-    failed: 0,
-    "aborted-budget": 0,
-  };
-  for (const e of Object.values(state.issues)) {
-    counts[e.status] = (counts[e.status] ?? 0) + 1;
+
+  let state;
+  try {
+    state = await loadRunState(runId);
+  } catch (err) {
+    process.stderr.write(`ERROR: could not load run-state for ${runId}: ${(err as Error).message}\n`);
+    process.exit(2);
   }
-  process.stdout.write(`Run ${runId} on ${state.targetRepo}\n`);
-  process.stdout.write(
-    `  total=${total} pending=${counts.pending} in-flight=${counts["in-flight"]} done=${counts.done} failed=${counts.failed} aborted-budget=${counts["aborted-budget"]}\n`,
-  );
-  process.stdout.write(`  ticks=${state.tickCount} parallelism=${state.parallelism} dryRun=${state.dryRun}\n`);
-  if (state.maxCostUsd !== undefined) {
-    process.stdout.write(`  maxCostUsd=${state.maxCostUsd}\n`);
-  }
+
   // Resolve names from registry (best-effort — keep status read-only).
   const reg = await loadRegistry();
-  const nameOf = new Map(reg.agents.map((a) => [a.agentId, a.name]));
-  for (const a of state.agents) {
-    const label = nameOf.get(a.agentId) ? `${nameOf.get(a.agentId)} (${a.agentId})` : a.agentId;
-    process.stdout.write(`  agent ${label}: ${a.status}\n`);
+  const agentNames = new Map<string, string | undefined>(
+    reg.agents.map((a) => [a.agentId, a.name]),
+  );
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(formatStatusJson(state, { agentNames }), null, 2) + "\n");
+    return;
   }
+  process.stdout.write(formatStatusText(state, { agentNames }));
 }
 
 interface AgentsSpecialtiesOpts {

@@ -56,6 +56,28 @@ export async function clearCurrentRunId(): Promise<void> {
   await fs.rm(CURRENT_RUN_FILE, { force: true });
 }
 
+/**
+ * Return the most recent `run-<ISO>.json` runId on disk, or null if none.
+ * `state/` is gitignored and run files are named with their ISO start
+ * timestamps — lexicographic sort = chronological order. Used by
+ * `vp-dev status --latest` to inspect the most recent run regardless of
+ * whether `current-run.txt` was cleared on completion.
+ */
+export async function findLatestRunId(): Promise<string | null> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(STATE_DIR);
+  } catch {
+    return null;
+  }
+  const runFiles = entries
+    .filter((e) => e.startsWith("run-") && e.endsWith(".json"))
+    .sort();
+  if (runFiles.length === 0) return null;
+  const last = runFiles[runFiles.length - 1];
+  return last.replace(/\.json$/, "");
+}
+
 export function newRunState(opts: {
   runId: string;
   targetRepo: string;

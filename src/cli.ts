@@ -13,8 +13,9 @@ import {
 } from "./state/runState.js";
 import { createAgent, loadRegistry, mutateRegistry } from "./state/registry.js";
 import { parseRangeSpec, describeRange } from "./github/range.js";
-import { getIssue, resolveRangeToIssues } from "./github/gh.js";
+import { getIssue, getIssueDetail, resolveRangeToIssues, type IssueDetail } from "./github/gh.js";
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
+import { detectDuplicates } from "./orchestrator/dedup.js";
 import {
   approveSetup,
   buildSetupPreview,
@@ -107,7 +108,7 @@ import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
 import { formatRunCompletedSentinel } from "./util/runCompletedSentinel.js";
 import { formatRunReport } from "./util/runReport.js";
 import { diffPreview } from "./util/previewDiff.js";
-import type { AgentRecord, IssueRangeSpec, IssueSummary, ResumeContext, RunState } from "./types.js";
+import type { AgentRecord, DuplicateCluster, IssueRangeSpec, IssueSummary, ResumeContext, RunState } from "./types.js";
 import { STATE_DIR } from "./state/runState.js";
 import { defaultRunLogPath, loadRunActivity } from "./state/runActivity.js";
 import path from "node:path";
@@ -560,6 +561,63 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.exit(2);
   }
 
+  // Issue #151 (Phase 2a-ii of #133): pre-dispatch dedup pass.
+  // Runs against the triage-passed set so the operator sees clusters of
+  // semantically-overlapping candidates in the gate. Phase 2a-ii is
+  // advisory only — all cluster members still dispatch. Phase 2b layers
+  // `--apply-dedup` to optionally close duplicates with a canonical
+  // cross-reference. Single Opus call (`maxTurns: 1`); fail-soft inside
+  // `detectDuplicates` so a flaky model never blocks a run.
+  const dedupLogger = new Logger({
+    runId: `dedup-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+    verbose: !!opts.verbose,
+  });
+  await dedupLogger.open();
+  let duplicateClusters: DuplicateCluster[] = [];
+  let dedupCostUsd: number | undefined;
+  try {
+    if (dispatchIssues.length < 2) {
+      dedupLogger.info("dedup.bypassed", {
+        reason: "fewer than 2 candidate issues",
+        issueCount: dispatchIssues.length,
+      });
+    } else {
+      // Hoist to a local so the narrowing survives the .map() closure;
+      // TS widens `opts.targetRepo` back to `string | undefined` inside
+      // the arrow even though the line-461 guard rejected `undefined`.
+      const targetRepo = opts.targetRepo;
+      const detailResults = await Promise.all(
+        dispatchIssues.map((i) => getIssueDetail(targetRepo, i.id)),
+      );
+      const issueDetails = detailResults.filter(
+        (d): d is IssueDetail => d !== null,
+      );
+      if (issueDetails.length < 2) {
+        dedupLogger.warn("dedup.insufficient_details", {
+          requested: dispatchIssues.length,
+          fetched: issueDetails.length,
+        });
+      } else {
+        const result = await detectDuplicates({
+          issues: issueDetails,
+          logger: dedupLogger,
+        });
+        duplicateClusters = result.clusters;
+        dedupCostUsd = result.costUsd;
+        // Same accounting pattern as triage: dedup runs before the runId
+        // is minted, but its cost belongs to the same per-run total.
+        costTracker.add(dedupCostUsd);
+        dedupLogger.info("dedup.completed", {
+          issueCount: issueDetails.length,
+          clusterCount: duplicateClusters.length,
+          costUsd: dedupCostUsd,
+        });
+      }
+    }
+  } finally {
+    await dedupLogger.close();
+  }
+
   // Issues with an open vp-dev PR can't be re-dispatched: `git worktree add
   // -b <branch>` collides on the branch the prior run pushed. Filter them
   // before the gate so the user sees the skip in the preview. Per #62 — the
@@ -664,6 +722,8 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     budgetUsd,
     preferAgentId: opts.preferAgent,
     incompleteBranchesAvailable,
+    duplicateClusters,
+    dedupCostUsd,
   });
 
   if (opts.plan) {
@@ -770,6 +830,17 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // can re-apply it without the operator re-typing the flag (#86).
     maxCostUsd: budgetUsd,
   });
+  // #151 Phase 2a-ii: persist the dedup pass's outcome so post-run audits
+  // can attribute the spend (`dedupCostUsd`) and read which clusters were
+  // surfaced (`duplicateClustersDetected`) without re-deriving from the
+  // JSONL log. Both fields are optional — back-compat with run-state
+  // files written before this surface existed (#150 shipped the schema).
+  if (duplicateClusters.length > 0) {
+    state.duplicateClustersDetected = duplicateClusters;
+  }
+  if (dedupCostUsd !== undefined) {
+    state.dedupCostUsd = dedupCostUsd;
+  }
   await saveRunState(state);
   await writeCurrentRunId(runId);
 
@@ -783,6 +854,12 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     range: opts.issues,
     issueCount: dispatchIssues.length,
     triageSkippedCount: triageSkipped.length,
+    // #151 Phase 2a-ii: surface dedup outcome on the run-start line so
+    // post-run audits can count clusters without parsing the dedup
+    // logger's separate file. `null` (not omitted) when the pass was
+    // bypassed — distinguishes "no candidates" from "ran free".
+    duplicateClusterCount: duplicateClusters.length,
+    dedupCostUsd: dedupCostUsd ?? null,
     dryRun: !!opts.dryRun,
     // `null` (not omitted) when no budget is set so log consumers can
     // distinguish "Phase-1 run with no cap" from "older log without

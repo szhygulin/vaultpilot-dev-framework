@@ -9,6 +9,7 @@ import {
 } from "./specialization.js";
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
 import { resolveExpiryPolicies } from "../util/sentinels.js";
+import { shouldPushPartial } from "./shouldPushPartial.js";
 import {
   buildIncompleteBranchName,
   createWorktree,
@@ -248,18 +249,19 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       });
     });
 
-    // Orchestrator-level safety net: when the SDK truncated the run with
-    // `error_max_turns` AND the agent did not finish with a clean implement
-    // decision, push whatever's currently in the worktree to a labeled
-    // `<branch>-incomplete-<runId>` ref so the partial work isn't lost when
-    // `removeWorktree` deletes the local branch in the finally below. The
-    // in-agent recovery pass (codingAgent.ts) attempts the same first, but
-    // can itself fail — this is the deterministic backstop. Skipped in
-    // dry-run because remote pushes are intercepted into echoes. See #88.
+    // Orchestrator-level safety net: when the run ended in a non-clean
+    // exit (per `shouldPushPartial`) AND the agent did not finish with a
+    // clean implement decision, push whatever's currently in the worktree
+    // to a labeled `<branch>-incomplete-<runId>` ref so the partial work
+    // isn't lost when `removeWorktree` deletes the local branch in the
+    // finally below. The in-agent recovery pass (codingAgent.ts) attempts
+    // the same first for `error_max_turns`, but can itself fail — this
+    // is the deterministic backstop. Skipped in dry-run because remote
+    // pushes are intercepted into echoes. See #88, broadened by #95.
     let partialBranchUrl: string | undefined;
     if (
       worktree &&
-      result.errorSubtype === "error_max_turns" &&
+      shouldPushPartial(result) &&
       envelope?.decision !== "implement" &&
       !input.dryRun
     ) {
@@ -271,7 +273,11 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
           worktreeBranch: worktree.branch,
           incompleteBranch,
           runId: input.runId,
-          errorSubtype: result.errorSubtype,
+          // The catch-all branch in `shouldPushPartial` (`isError && !envelope`)
+          // can fire without a tagged subtype; pass a sentinel so the salvage
+          // commit message stays human-readable rather than emitting
+          // `errorSubtype=undefined`.
+          errorSubtype: result.errorSubtype ?? "unknown",
           targetRepo: input.targetRepo,
           logger: input.logger,
           agentId: input.agent.agentId,

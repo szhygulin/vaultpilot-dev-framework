@@ -143,8 +143,10 @@ export interface PushPartialBranchResult {
   committed?: boolean;
 }
 
-// Orchestrator-level safety net for non-clean agent exits (today only fired
-// for `error_max_turns`).
+// Orchestrator-level safety net for non-clean agent exits. Fired by
+// `shouldPushPartial()` in runIssueCore.ts for `error_max_turns`,
+// `error_during_execution`, `error_max_budget_usd`, and the catch-all
+// `isError && !envelope` (see issues #88, #95).
 //
 // Why this is a separate orchestrator path even though `runCodingAgent`
 // already runs an in-agent recovery pass (see issue #76, commit d4aadd0):

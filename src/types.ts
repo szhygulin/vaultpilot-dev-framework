@@ -62,6 +62,12 @@ export interface RunIssueEntry {
   outcome?: AgentDecision;
   prUrl?: string;
   commentUrl?: string;
+  // Primary error string. Prefers the SDK `errorSubtype` (e.g.
+  // `error_max_turns`, `error_during_execution`) when the agent crashed
+  // before emitting an envelope, then falls back to `errorReason`, then to
+  // `parseError`. This keeps two distinct failure classes (genuine envelope
+  // parser bug vs. simply ran out of turns) from collapsing into one
+  // indistinguishable string in run-state files. See issue #87.
   error?: string;
   // Set when the orchestrator's safety-net pushed in-flight worktree edits
   // to a labeled `<branch>-incomplete-<runId>` ref after a non-clean exit
@@ -69,6 +75,16 @@ export interface RunIssueEntry {
   // been deleted by the post-run cleanup; this URL preserves the partial
   // work for human inspection. See issue #88.
   partialBranchUrl?: string;
+  // SDK result subtype when the run ended in error (`error_max_turns`,
+  // `error_max_budget_usd`, `error_during_execution`, ...). Optional; absent
+  // for legacy entries and for envelope-decision-error / uncaught-throw
+  // paths where no SDK subtype is available.
+  errorSubtype?: string;
+  // Envelope parse error preserved as a secondary diagnostic so a genuine
+  // parser bug stays visible even when `error` carries the SDK subtype.
+  // Optional; only populated on no-envelope failure paths where
+  // extractEnvelope failed.
+  parseError?: string;
 }
 
 // A `vp-dev/agent-*/issue-*` branch the stale-branch sweep determined was

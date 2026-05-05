@@ -46,6 +46,14 @@ export interface RunIssueCoreResult {
   costUsd?: number;
   isError: boolean;
   errorReason?: string;
+  /**
+   * SDK result subtype passed through from CodingAgentResult — e.g.
+   * `error_max_turns`, `error_max_budget_usd`, `error_during_execution`.
+   * Distinct from `errorReason` (free-form human string) so the orchestrator
+   * can record the machine-readable cause of failure on the run-state entry
+   * and not collapse it into the parser-symptom string. See issue #87.
+   */
+  errorSubtype?: string;
   appendOutcome?: AppendOutcome;
   summarySkipReason?: string;
   worktreePath?: string;
@@ -54,8 +62,6 @@ export interface RunIssueCoreResult {
   reconciled?: string;
   /** See CodingAgentResult.branchUrl. */
   branchUrl?: string;
-  /** See CodingAgentResult.errorSubtype — propagated for orchestrator-side branching. */
-  errorSubtype?: string;
   /**
    * Set when the orchestrator-level safety net pushed in-flight worktree
    * edits to a labeled `<branch>-incomplete-<runId>` ref before pruning.
@@ -292,13 +298,13 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       costUsd: result.costUsd,
       isError: result.isError,
       errorReason: result.errorReason,
+      errorSubtype: result.errorSubtype,
       appendOutcome,
       summarySkipReason,
       worktreePath: worktree?.path,
       branchName: worktree?.branch,
       reconciled: result.reconciled,
       branchUrl: result.branchUrl,
-      errorSubtype: result.errorSubtype,
       partialBranchUrl,
     };
   } finally {

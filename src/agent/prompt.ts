@@ -27,12 +27,20 @@ export async function buildAgentSystemPrompt(opts: {
     issueId: opts.workflow.issueId,
   });
 
-  // Cross-agent shared lessons (#33). Pulled from `agents/.shared/lessons/`,
-  // matched against the agent's current tag fingerprint. Each pool file is
-  // capped at MAX_POOL_LINES so multi-tag agents stay bounded. Maintained by
-  // the orchestrator via `vp-dev lessons review`; never written by the
-  // coding agent — see the workflow guard in `workflow.ts`.
-  const sharedLessons = await readSharedLessonsForDomains(opts.agent.tags);
+  // Cross-agent shared lessons. Pulled per-tier and matched against the
+  // agent's current tag fingerprint. Each pool file is capped at
+  // MAX_POOL_LINES so multi-tag agents stay bounded. Maintained by the
+  // orchestrator via `vp-dev lessons review` (target tier, #33) and
+  // `vp-dev lessons review --global` (cross-target-repo tier, #101); never
+  // written by the coding agent — see the workflow guard in `workflow.ts`.
+  //
+  // Read order is global-first so per-target-repo lessons appear closer to
+  // the workflow and dominate when a domain has content in both tiers
+  // (later sections in the prompt are read more recently in context).
+  const [globalLessons, targetLessons] = await Promise.all([
+    readSharedLessonsForDomains("global", opts.agent.tags),
+    readSharedLessonsForDomains("target", opts.agent.tags),
+  ]);
 
   const sections: string[] = [
     "# Project rules (live target-repo CLAUDE.md — current as of this dispatch)",
@@ -47,19 +55,30 @@ export async function buildAgentSystemPrompt(opts: {
     "",
   ];
 
-  if (sharedLessons.length > 0) {
-    for (const pool of sharedLessons) {
-      sections.push(
-        "---",
-        "",
-        `## Shared lessons (${pool.domain})`,
-        "",
-        "Cross-agent observations curated by the orchestrator. Read-only — do NOT modify or copy back into your own CLAUDE.md.",
-        "",
-        pool.content.trim(),
-        "",
-      );
-    }
+  for (const pool of globalLessons) {
+    sections.push(
+      "---",
+      "",
+      `## Shared lessons (${pool.domain}, global)`,
+      "",
+      "Cross-target-repo observations curated by the orchestrator. Read-only — do NOT modify or copy back into your own CLAUDE.md.",
+      "",
+      pool.content.trim(),
+      "",
+    );
+  }
+
+  for (const pool of targetLessons) {
+    sections.push(
+      "---",
+      "",
+      `## Shared lessons (${pool.domain})`,
+      "",
+      "Cross-agent observations curated by the orchestrator (per-target-repo pool). Read-only — do NOT modify or copy back into your own CLAUDE.md.",
+      "",
+      pool.content.trim(),
+      "",
+    );
   }
 
   if (plan) {

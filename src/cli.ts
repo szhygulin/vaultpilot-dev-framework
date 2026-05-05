@@ -65,6 +65,7 @@ import {
 import {
   listSharedLessonDomains,
   MAX_POOL_LINES,
+  type LessonTier,
 } from "./agent/sharedLessons.js";
 import {
   loadAllOutcomes,
@@ -222,17 +223,19 @@ export function buildCli(): Command {
     .description("Cross-agent shared lessons pool: list pool files + review promote-candidate blocks queued by the summarizer")
     .addCommand(
       new Command("list")
-        .description("List all shared-lesson pool files (agents/.shared/lessons/) with size + line count")
+        .description("List shared-lesson pool files (agents/.shared/lessons/ by default; --global for ~/.vaultpilot/shared-lessons/) with size + line count")
         .option("--json", "Print machine-readable JSON")
+        .option("--global", "Inspect the cross-target-repo global pool (~/.vaultpilot/shared-lessons/) instead of the per-target pool")
         .action(async (opts) => {
           await cmdLessonsList(opts);
         }),
     )
     .addCommand(
       new Command("review")
-        .description("Walk every agent's CLAUDE.md for `<!-- promote-candidate:<domain> -->` blocks and accept/reject each interactively")
+        .description("Walk every agent's CLAUDE.md for `<!-- promote-candidate:<domain> -->` blocks and accept/reject each interactively. --global routes accepted entries to the cross-target-repo pool.")
         .option("--json", "Print machine-readable JSON listing of pending candidates and exit (no mutation)")
         .option("--yes", "Auto-accept every candidate that passes validation (non-interactive use only)")
+        .option("--global", "Append accepted entries to the global pool (~/.vaultpilot/shared-lessons/) instead of the per-target pool")
         .action(async (opts) => {
           await cmdLessonsReview(opts);
         }),
@@ -1279,20 +1282,26 @@ async function cmdAgentsStats(opts: AgentsStatsOpts): Promise<void> {
 
 interface LessonsListOpts {
   json?: boolean;
+  global?: boolean;
 }
 
 async function cmdLessonsList(opts: LessonsListOpts): Promise<void> {
-  const pools = await listSharedLessonDomains();
+  const tier: LessonTier = opts.global ? "global" : "target";
+  const pools = await listSharedLessonDomains(tier);
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ pools, maxPoolLines: MAX_POOL_LINES }, null, 2) + "\n");
-    return;
-  }
-  if (pools.length === 0) {
     process.stdout.write(
-      "No shared-lesson pools yet. Run `vp-dev lessons review` after a summarizer pass tags a promote-candidate.\n",
+      JSON.stringify({ tier, pools, maxPoolLines: MAX_POOL_LINES }, null, 2) + "\n",
     );
     return;
   }
+  if (pools.length === 0) {
+    const reviewHint = opts.global ? "vp-dev lessons review --global" : "vp-dev lessons review";
+    process.stdout.write(
+      `No ${tier} shared-lesson pools yet. Run \`${reviewHint}\` after a summarizer pass tags a promote-candidate.\n`,
+    );
+    return;
+  }
+  process.stdout.write(`tier: ${tier}\n`);
   const headers = ["domain", "lines", "bytes", "path"];
   const rows = pools.map((p) => [
     p.domain,
@@ -1306,9 +1315,11 @@ async function cmdLessonsList(opts: LessonsListOpts): Promise<void> {
 interface LessonsReviewOpts {
   json?: boolean;
   yes?: boolean;
+  global?: boolean;
 }
 
 async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
+  const tier: LessonTier = opts.global ? "global" : "target";
   const reg = await loadRegistry();
   // Don't filter archived agents — the candidate may have been tagged before
   // a split, and we still want to surface it. The boundary that matters is
@@ -1319,6 +1330,7 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
     process.stdout.write(
       JSON.stringify(
         {
+          tier,
           pending: pending.map((p) => ({
             agentId: p.agentId,
             agentName: p.agentName,
@@ -1341,10 +1353,13 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
     return;
   }
 
-  process.stdout.write(`${pending.length} promote-candidate block(s) pending review.\n\n`);
+  const tierLabel = tier === "global" ? "global (~/.vaultpilot/shared-lessons/)" : "per-target (agents/.shared/lessons/)";
+  process.stdout.write(
+    `${pending.length} promote-candidate block(s) pending review. Accepting writes to: ${tierLabel}\n\n`,
+  );
 
   if (opts.yes) {
-    await runAutoAcceptLoop(pending);
+    await runAutoAcceptLoop(pending, tier);
     return;
   }
 
@@ -1355,10 +1370,10 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
     process.exit(2);
   }
 
-  await runInteractiveReview(pending);
+  await runInteractiveReview(pending, tier);
 }
 
-async function runAutoAcceptLoop(pending: PendingCandidate[]): Promise<void> {
+async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier): Promise<void> {
   let acceptedCount = 0;
   let rejectedCount = 0;
   let skippedCount = 0;
@@ -1370,15 +1385,15 @@ async function runAutoAcceptLoop(pending: PendingCandidate[]): Promise<void> {
       rejectedCount += 1;
       continue;
     }
-    const result = await acceptCandidate({ pending: p });
+    const result = await acceptCandidate({ pending: p, tier });
     if (result.appendOutcome.kind === "appended") {
       process.stdout.write(
-        `accepted ${p.agentId} -> ${p.candidate.domain} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines)\n`,
+        `accepted [${tier}] ${p.agentId} -> ${p.candidate.domain} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines)\n`,
       );
       acceptedCount += 1;
     } else if (result.appendOutcome.kind === "rejected-pool-full") {
       process.stdout.write(
-        `skipped (pool full) ${p.agentId} -> ${p.candidate.domain}: ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool by hand and re-run review.\n`,
+        `skipped (pool full) [${tier}] ${p.agentId} -> ${p.candidate.domain}: ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool by hand and re-run review.\n`,
       );
       skippedCount += 1;
     } else {
@@ -1393,7 +1408,7 @@ async function runAutoAcceptLoop(pending: PendingCandidate[]): Promise<void> {
   );
 }
 
-async function runInteractiveReview(pending: PendingCandidate[]): Promise<void> {
+async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTier): Promise<void> {
   const { createInterface } = await import("node:readline/promises");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let acceptedCount = 0;
@@ -1426,10 +1441,10 @@ async function runInteractiveReview(pending: PendingCandidate[]): Promise<void> 
           skippedCount += 1;
           continue;
         }
-        const result = await acceptCandidate({ pending: p });
+        const result = await acceptCandidate({ pending: p, tier });
         if (result.appendOutcome.kind === "appended") {
           process.stdout.write(
-            `Accepted: appended to ${result.appendOutcome.filePath} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines).\n`,
+            `Accepted [${tier}]: appended to ${result.appendOutcome.filePath} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines).\n`,
           );
           acceptedCount += 1;
         } else if (result.appendOutcome.kind === "rejected-pool-full") {

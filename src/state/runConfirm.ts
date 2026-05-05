@@ -47,6 +47,14 @@ export interface RunConfirmParams {
   // that the two-step approval flow surfaces the same intent at confirm
   // time as at plan time.
   resumeIncomplete?: boolean;
+  // Issue #142 Phase 2 of #134: per-run flag that flips the workflow
+  // prompt's `autoPhaseFollowup` render switch on. When `true`, the
+  // coding agent's seed renders Step N+1 ("Auto-file next phase") and
+  // the agent files a follow-up issue + sets `nextPhaseIssueUrl` in its
+  // envelope when the issue it just shipped was phase-marked. Optional
+  // for back-compat: tokens written before #142 default to `false` /
+  // `undefined` and the existing no-auto-file behavior is preserved.
+  autoPhaseFollowup?: boolean;
 }
 
 export interface RunConfirmToken {

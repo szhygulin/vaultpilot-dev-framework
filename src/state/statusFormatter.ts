@@ -1,14 +1,26 @@
 import type { IssueStatus, RunIssueEntry, RunState } from "../types.js";
+import { formatTimeSince, type RunActivity, type IssueActivity, type RecentEvent } from "./runActivity.js";
 
 /**
  * Pure formatters for `vp-dev status` output. Both the text and JSON
  * variants take a `RunState` plus an optional `agentNames` lookup (so the
  * registry I/O stays in the CLI layer and these helpers are testable
  * without touching disk).
+ *
+ * Issue #131: an optional `activity` plus `now` clock can be threaded
+ * through to surface in-flight progress signals (per-issue tool counts,
+ * time since last activity, recent events tail). Both are optional —
+ * the formatter degrades gracefully to the pre-#131 output when not
+ * supplied so terminal-state runs and tests that don't care about
+ * activity stay simple.
  */
 export interface StatusFormatOpts {
   /** Map of agentId -> display name. Agents not in the map render with bare ID. */
   agentNames?: Map<string, string | undefined>;
+  /** Aggregated JSONL-log activity from `loadRunActivity`. Optional. */
+  activity?: RunActivity;
+  /** Reference clock for "X ago" computations. Defaults to `new Date()`. */
+  now?: Date;
 }
 
 const STATUS_KEYS: IssueStatus[] = [
@@ -23,6 +35,8 @@ export function formatStatusText(state: RunState, opts: StatusFormatOpts = {}): 
   const total = Object.keys(state.issues).length;
   const counts = countByStatus(state);
   const nameOf = opts.agentNames ?? new Map<string, string | undefined>();
+  const activity = opts.activity;
+  const now = opts.now ?? new Date();
 
   const lines: string[] = [];
   lines.push(`Run ${state.runId} on ${state.targetRepo}`);
@@ -42,6 +56,19 @@ export function formatStatusText(state: RunState, opts: StatusFormatOpts = {}): 
     lines.push(`  maxCostUsd=${state.maxCostUsd}`);
   }
 
+  // Issue #131: surface live cost-burn whenever the orchestrator has
+  // persisted it. Format depends on whether a per-run ceiling is set —
+  // `$X.XXXX / $Y.YYYY` when bounded so the operator can see headroom,
+  // `$X.XXXX (no ceiling)` when unbounded.
+  if (state.costAccumulatedUsd !== undefined) {
+    const total = state.costAccumulatedUsd.toFixed(4);
+    if (state.maxCostUsd !== undefined) {
+      lines.push(`  cost=$${total} / $${state.maxCostUsd.toFixed(4)}`);
+    } else {
+      lines.push(`  cost=$${total} (no ceiling)`);
+    }
+  }
+
   for (const a of state.agents) {
     const name = nameOf.get(a.agentId);
     const label = name ? `${name} (${a.agentId})` : a.agentId;
@@ -55,10 +82,68 @@ export function formatStatusText(state: RunState, opts: StatusFormatOpts = {}): 
     for (const id of issueIds) {
       const e = state.issues[id];
       lines.push(...renderIssueLines(id, e, nameOf));
+      // Per-issue activity addendum: only renders when we have activity
+      // data for this issue AND the issue is in-flight. Terminal issues
+      // already have their PR / error rendered above; tool counts after
+      // completion add noise without value.
+      if (activity && e.status === "in-flight") {
+        const issueActivity = activity.byIssue[id];
+        if (issueActivity) {
+          lines.push(...renderActivityLines(issueActivity, now));
+        }
+      }
+    }
+  }
+
+  // Recent events tail — only when activity was supplied AND the tail
+  // is non-empty. Stays at the bottom of the output so the operator's
+  // eye lands there last when scanning top-to-bottom.
+  if (activity && activity.recentEvents.length > 0) {
+    lines.push("");
+    lines.push(`  Recent events (last ${activity.recentEvents.length}):`);
+    for (const ev of activity.recentEvents) {
+      lines.push(formatRecentEventLine(ev));
     }
   }
 
   return lines.join("\n") + "\n";
+}
+
+function renderActivityLines(activity: IssueActivity, now: Date): string[] {
+  const out: string[] = [];
+  const sinceLabel = formatTimeSince(activity.lastEventTs, now);
+  if (activity.lastEventDescription) {
+    const since = sinceLabel ? ` (${sinceLabel})` : "";
+    out.push(`           last activity: ${activity.lastEventDescription}${since}`);
+  } else if (sinceLabel) {
+    out.push(`           last activity: ${sinceLabel}`);
+  }
+  if (activity.totalToolCalls > 0) {
+    const breakdown = Object.entries(activity.toolCounts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([tool, n]) => `${n} ${tool}`)
+      .join(", ");
+    out.push(`           tools: ${breakdown} (${activity.totalToolCalls} total)`);
+  }
+  return out;
+}
+
+function formatRecentEventLine(ev: RecentEvent): string {
+  const time = ev.ts.length >= 19 ? ev.ts.slice(11, 19) : ev.ts;
+  const issueLabel = ev.issueId !== undefined ? `#${ev.issueId}` : "—";
+  const detail = ev.detail ? `  ${ev.detail}` : "";
+  return `    ${time}  ${issueLabel.padEnd(6)} ${ev.event}${detail}`;
+}
+
+export interface IssueLiveActivityJson {
+  /** ISO-8601 ts of the most recent issue-scoped event. */
+  lastEventTs?: string;
+  /** Short description of the most recent event (tool+input or message preview). */
+  lastEventDescription?: string;
+  /** Tool name -> call count. Empty when no tool calls observed. */
+  toolCounts: Record<string, number>;
+  /** Sum of `toolCounts` values. */
+  totalToolCalls: number;
 }
 
 export interface StatusJson {
@@ -71,6 +156,8 @@ export interface StatusJson {
   dryRun: boolean;
   tickCount: number;
   maxCostUsd?: number;
+  /** Running USD total, when persisted by the orchestrator (issue #131). */
+  costAccumulatedUsd?: number;
   summary: { total: number } & Record<IssueStatus, number>;
   agents: { agentId: string; agentName?: string; status: string }[];
   issues: {
@@ -85,12 +172,17 @@ export interface StatusJson {
     error?: string;
     errorSubtype?: string;
     parseError?: string;
+    /** Present only when `opts.activity` was supplied and the issue had any events. */
+    liveActivity?: IssueLiveActivityJson;
   }[];
+  /** Last N events from the JSONL log, present only when `opts.activity` was supplied. */
+  recentEvents?: { ts: string; issueId?: number; event: string; detail?: string }[];
 }
 
 export function formatStatusJson(state: RunState, opts: StatusFormatOpts = {}): StatusJson {
   const counts = countByStatus(state);
   const nameOf = opts.agentNames ?? new Map<string, string | undefined>();
+  const activity = opts.activity;
   const total = Object.keys(state.issues).length;
   const durationMs =
     state.startedAt && state.lastTickAt
@@ -110,6 +202,7 @@ export function formatStatusJson(state: RunState, opts: StatusFormatOpts = {}): 
     dryRun: state.dryRun,
     tickCount: state.tickCount,
     maxCostUsd: state.maxCostUsd,
+    costAccumulatedUsd: state.costAccumulatedUsd,
     summary: { total, ...counts },
     agents: state.agents.map((a) => ({
       agentId: a.agentId,
@@ -120,6 +213,7 @@ export function formatStatusJson(state: RunState, opts: StatusFormatOpts = {}): 
       .sort((a, b) => Number(a) - Number(b))
       .map((id) => {
         const e = state.issues[id];
+        const issueActivity = activity?.byIssue[id];
         return {
           id: Number(id),
           status: e.status,
@@ -132,8 +226,17 @@ export function formatStatusJson(state: RunState, opts: StatusFormatOpts = {}): 
           error: e.error,
           errorSubtype: e.errorSubtype,
           parseError: e.parseError,
+          liveActivity: issueActivity
+            ? {
+                lastEventTs: issueActivity.lastEventTs,
+                lastEventDescription: issueActivity.lastEventDescription,
+                toolCounts: issueActivity.toolCounts,
+                totalToolCalls: issueActivity.totalToolCalls,
+              }
+            : undefined,
         };
       }),
+    recentEvents: activity ? activity.recentEvents.map((ev) => ({ ...ev })) : undefined,
   };
 }
 

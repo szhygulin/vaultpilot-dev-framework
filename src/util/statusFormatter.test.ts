@@ -5,6 +5,7 @@ import {
   formatStatusJson,
   formatStatusText,
 } from "../state/statusFormatter.js";
+import type { RunActivity } from "../state/runActivity.js";
 import type { RunState } from "../types.js";
 
 function fixture(overrides: Partial<RunState> = {}): RunState {
@@ -192,4 +193,134 @@ test("formatDuration: returns undefined for negative span (clock skew)", () => {
     formatDuration("2026-05-05T13:06:09Z", "2026-05-05T13:00:00Z"),
     undefined,
   );
+});
+
+// Issue #131: in-flight progress signals (cost, tool counts, recent events)
+
+test("formatStatusText: cost-burn line bounded by ceiling when maxCostUsd set", () => {
+  const text = formatStatusText(
+    fixture({ costAccumulatedUsd: 2.31, maxCostUsd: 5.0 } as Partial<RunState>),
+  );
+  assert.match(text, /cost=\$2\.3100 \/ \$5\.0000/);
+});
+
+test("formatStatusText: cost-burn line shows '(no ceiling)' when maxCostUsd absent", () => {
+  const text = formatStatusText(
+    fixture({ costAccumulatedUsd: 0.42 } as Partial<RunState>),
+  );
+  assert.match(text, /cost=\$0\.4200 \(no ceiling\)/);
+});
+
+test("formatStatusText: cost line omitted when costAccumulatedUsd undefined (back-compat)", () => {
+  const text = formatStatusText(fixture());
+  assert.doesNotMatch(text, /cost=\$/);
+});
+
+test("formatStatusText: in-flight issue gets activity addendum (last activity + tool counts)", () => {
+  const activity: RunActivity = {
+    byIssue: {
+      "131": {
+        toolCounts: { Read: 22, Bash: 22, Edit: 8, Write: 2 },
+        totalToolCalls: 54,
+        lastEventTs: "2026-05-05T13:38:50.000Z",
+        lastEventDescription: "Bash npm test",
+      },
+    },
+    recentEvents: [],
+  };
+  const text = formatStatusText(
+    fixture({
+      issues: { "131": { status: "in-flight", agentId: "agent-916a" } },
+    }),
+    {
+      activity,
+      now: new Date("2026-05-05T13:38:55.000Z"),
+    },
+  );
+  assert.match(text, /last activity: Bash npm test \(5s ago\)/);
+  // Tool counts sorted by count descending, then alphabetically.
+  assert.match(text, /tools: 22 Bash, 22 Read, 8 Edit, 2 Write \(54 total\)/);
+});
+
+test("formatStatusText: terminal issues skip activity addendum even when activity present", () => {
+  const activity: RunActivity = {
+    byIssue: {
+      "131": {
+        toolCounts: { Bash: 5 },
+        totalToolCalls: 5,
+        lastEventTs: "2026-05-05T13:38:50.000Z",
+        lastEventDescription: "Bash npm test",
+      },
+    },
+    recentEvents: [],
+  };
+  const text = formatStatusText(
+    fixture({
+      issues: {
+        "131": { status: "done", agentId: "agent-916a", outcome: "implement", prUrl: "https://github.com/x/y/pull/1" },
+      },
+    }),
+    { activity, now: new Date("2026-05-05T13:38:55.000Z") },
+  );
+  assert.doesNotMatch(text, /last activity:/);
+  assert.doesNotMatch(text, /tools:/);
+});
+
+test("formatStatusText: recent events tail rendered when activity supplied and non-empty", () => {
+  const activity: RunActivity = {
+    byIssue: {},
+    recentEvents: [
+      { ts: "2026-05-05T13:38:50.000Z", issueId: 131, event: "agent.tool_use", detail: "Read 'src/cli.ts'" },
+      { ts: "2026-05-05T13:38:55.000Z", issueId: 131, event: "agent.message", detail: "Now build and test" },
+    ],
+  };
+  const text = formatStatusText(fixture(), { activity });
+  assert.match(text, /Recent events \(last 2\):/);
+  assert.match(text, /13:38:50/);
+  assert.match(text, /agent\.tool_use/);
+  assert.match(text, /Now build and test/);
+});
+
+test("formatStatusText: recent events tail omitted when activity undefined", () => {
+  const text = formatStatusText(fixture());
+  assert.doesNotMatch(text, /Recent events/);
+});
+
+test("formatStatusJson: includes costAccumulatedUsd when set", () => {
+  const json = formatStatusJson(
+    fixture({ costAccumulatedUsd: 1.23 } as Partial<RunState>),
+  );
+  assert.equal(json.costAccumulatedUsd, 1.23);
+});
+
+test("formatStatusJson: liveActivity present per in-flight issue when activity supplied", () => {
+  const activity: RunActivity = {
+    byIssue: {
+      "131": {
+        toolCounts: { Read: 3 },
+        totalToolCalls: 3,
+        lastEventTs: "2026-05-05T13:38:50.000Z",
+        lastEventDescription: "Read src/x.ts",
+      },
+    },
+    recentEvents: [
+      { ts: "2026-05-05T13:38:50.000Z", issueId: 131, event: "agent.tool_use", detail: "Read src/x.ts" },
+    ],
+  };
+  const json = formatStatusJson(
+    fixture({
+      issues: { "131": { status: "in-flight", agentId: "agent-916a" } },
+    }),
+    { activity },
+  );
+  const issue = json.issues[0];
+  assert.ok(issue.liveActivity);
+  assert.equal(issue.liveActivity?.totalToolCalls, 3);
+  assert.equal(issue.liveActivity?.lastEventDescription, "Read src/x.ts");
+  assert.equal(json.recentEvents?.length, 1);
+});
+
+test("formatStatusJson: liveActivity + recentEvents undefined when activity not supplied (back-compat)", () => {
+  const json = formatStatusJson(fixture());
+  assert.equal(json.recentEvents, undefined);
 });

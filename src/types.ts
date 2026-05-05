@@ -133,6 +133,15 @@ export interface RunState {
   // remember the original flag. Optional for back-compat with run states
   // written before #86 and for runs dispatched without --max-cost-usd.
   maxCostUsd?: number;
+  // Running USD total accumulated by the in-memory `RunCostTracker`.
+  // Persisted to the run-state file at every orchestrator tick + final
+  // save so `vp-dev status` can render the live cost-burn signal without
+  // re-attaching to the orchestrator's process or scraping the JSONL log.
+  // Optional for back-compat with run states written before this surface
+  // existed (issue #131); absent for resumed runs that bypass the
+  // tracker. Updated immediately before each `saveRunState` call in
+  // `runOrchestrator` — see `src/orchestrator/orchestrator.ts`.
+  costAccumulatedUsd?: number;
 }
 
 export const ResultEnvelopeSchema = z.object({

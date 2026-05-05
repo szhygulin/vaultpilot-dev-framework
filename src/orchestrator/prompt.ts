@@ -6,6 +6,11 @@ export interface TickPromptInput {
   idleAgents: AgentRecord[];
   cap: number;
   errorsFromPrior?: string[];
+  /** Issue #84: per-run agent override. When the preferred agent is in
+   *  the idle set, the prompt instructs the LLM to assign it first; the
+   *  validator enforces this and the deterministic fallback honors it on
+   *  failure. */
+  preferAgentId?: string;
 }
 
 export function buildTickPrompt(input: TickPromptInput): string {
@@ -22,6 +27,16 @@ export function buildTickPrompt(input: TickPromptInput): string {
 
   const errorBlock = input.errorsFromPrior?.length
     ? `\n\nYour PRIOR proposal failed validation. Fix these and re-emit:\n${input.errorsFromPrior.map((e) => `- ${e}`).join("\n")}\n`
+    : "";
+
+  // Hard override: if the preferred agent is currently idle, the proposal
+  // MUST include it. The validator enforces the same; surfacing it here
+  // shortcuts the retry round-trip.
+  const preferredIsIdle =
+    input.preferAgentId !== undefined &&
+    input.idleAgents.some((a) => a.agentId === input.preferAgentId);
+  const preferBlock = preferredIsIdle
+    ? `\n\nOVERRIDE: the run was launched with --prefer-agent ${input.preferAgentId}. Assign that agent to one of the pending issues — natural Jaccard fit does not matter. Picking any other assignment for ${input.preferAgentId} when it is idle will fail validation.`
     : "";
 
   const routingRule = isTwoPhaseRoutingEnabled()
@@ -41,7 +56,7 @@ export function buildTickPrompt(input: TickPromptInput): string {
 ${routingRule}
 
 Inputs (JSON):
-${JSON.stringify({ pending, idle, cap: input.cap }, null, 2)}${errorBlock}
+${JSON.stringify({ pending, idle, cap: input.cap }, null, 2)}${preferBlock}${errorBlock}
 
 Output ONLY valid JSON in this exact shape, no prose, no markdown:
 {"assignments":[{"agentId":"<id>","issueId":<number>}, ...]}`;

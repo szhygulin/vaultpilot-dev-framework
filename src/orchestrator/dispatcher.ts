@@ -25,6 +25,16 @@ export interface DispatchInput {
    * coding-agent cost.
    */
   costTracker?: RunCostTracker;
+  /**
+   * Issue #84: per-run agent override. Surfaced to the LLM dispatcher as
+   * a hard rule and forwarded to the deterministic fallback so the
+   * preferred agent's score gets the +PREFER_AGENT_BUMP nudge there too.
+   * If the LLM proposal omits the preferred agent while it's still idle
+   * and at least one issue is pending, validation fails and the run
+   * falls through to the retry → deterministic fallback path which
+   * always picks it first.
+   */
+  preferAgentId?: string;
 }
 
 export interface DispatchResult {
@@ -44,6 +54,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     cap,
     logger: input.logger,
     costTracker: input.costTracker,
+    preferAgentId: input.preferAgentId,
   });
   if (firstAttempt.assignments) {
     return { assignments: firstAttempt.assignments, source: "llm" };
@@ -61,6 +72,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     logger: input.logger,
     errorsFromPrior: firstAttempt.errors,
     costTracker: input.costTracker,
+    preferAgentId: input.preferAgentId,
   });
   if (retry.assignments) {
     return { assignments: retry.assignments, source: "llm-retry" };
@@ -75,6 +87,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     idleAgents: input.idleAgents,
     pendingIssues: input.pendingIssues,
     cap,
+    preferAgentId: input.preferAgentId,
   });
   return { assignments: fallback, source: "fallback" };
 }
@@ -91,12 +104,14 @@ async function tryProposeWithLLM(opts: {
   logger: Logger;
   errorsFromPrior?: string[];
   costTracker?: RunCostTracker;
+  preferAgentId?: string;
 }): Promise<ProposeOutcome> {
   const prompt = buildTickPrompt({
     pendingIssues: opts.pendingIssues,
     idleAgents: opts.idleAgents,
     cap: opts.cap,
     errorsFromPrior: opts.errorsFromPrior,
+    preferAgentId: opts.preferAgentId,
   });
 
   let raw = "";
@@ -143,6 +158,7 @@ async function tryProposeWithLLM(opts: {
     cap: opts.cap,
     idleAgents: opts.idleAgents,
     pendingIssues: opts.pendingIssues,
+    preferAgentId: opts.preferAgentId,
   });
   if (errors.length > 0) return { errors };
   return { assignments: proposal.value.assignments };
@@ -153,6 +169,7 @@ interface ValidateInput {
   cap: number;
   idleAgents: AgentRecord[];
   pendingIssues: IssueSummary[];
+  preferAgentId?: string;
 }
 
 function validateProposal(input: ValidateInput): string[] {
@@ -162,6 +179,22 @@ function validateProposal(input: ValidateInput): string[] {
 
   if (input.proposal.length > input.cap) {
     errors.push(`Too many assignments: ${input.proposal.length} > cap ${input.cap}`);
+  }
+
+  // Issue #84: when --prefer-agent is active and the preferred agent is
+  // idle with at least one pending issue, the LLM proposal MUST include
+  // an assignment for it. Otherwise fail validation — the retry prompt
+  // surfaces the omission, and the deterministic fallback path picks the
+  // preferred agent first via its +PREFER_AGENT_BUMP score.
+  if (
+    input.preferAgentId !== undefined &&
+    idleSet.has(input.preferAgentId) &&
+    input.pendingIssues.length > 0 &&
+    !input.proposal.some((a) => a.agentId === input.preferAgentId)
+  ) {
+    errors.push(
+      `Preferred agent ${input.preferAgentId} (--prefer-agent) is idle but missing from the proposal. Assign it to one of the pending issues.`,
+    );
   }
 
   // The "true cap" — how many assignments are ACTUALLY dispatchable, given

@@ -39,6 +39,27 @@ export function scoreAgentIssue(agent: AgentRecord, issue: IssueSummary): number
   return j + 0.05 * Math.log(1 + agent.issuesHandled);
 }
 
+/**
+ * Issue #84: preferred agent's per-pair score with the +PREFER_AGENT_BUMP
+ * applied. Comfortably larger than any natural Jaccard tiebreak gap so the
+ * preferred agent leads dispatch regardless of fit. Re-uses
+ * `scoreAgentIssue` so the bump is purely additive — the natural score
+ * still influences ordering when multiple issues compete for the
+ * preferred agent.
+ */
+export const PREFER_AGENT_BUMP = 1.0;
+
+export function scoreAgentIssueWithPreference(
+  agent: AgentRecord,
+  issue: IssueSummary,
+  preferAgentId?: string,
+): number {
+  const base = scoreAgentIssue(agent, issue);
+  return preferAgentId !== undefined && agent.agentId === preferAgentId
+    ? base + PREFER_AGENT_BUMP
+    : base;
+}
+
 export type MatchClass = "specialist" | "weak" | "miss";
 
 export function classifyMatch(agent: AgentRecord, issue: IssueSummary): MatchClass {
@@ -62,6 +83,10 @@ export interface TwoPhasePickInput {
   idleAgents: AgentRecord[];
   pendingIssues: IssueSummary[];
   cap: number;
+  /** Issue #84: per-run agent override. Bumps the named agent's
+   *  per-pair score by `PREFER_AGENT_BUMP` in both specialist and
+   *  generalist phases so it leads regardless of natural fit. */
+  preferAgentId?: string;
 }
 
 export interface TwoPhasePickResult {
@@ -99,15 +124,20 @@ export function twoPhasePick(input: TwoPhasePickInput): TwoPhasePickResult {
   const usedAgents = new Set<string>();
   const usedIssues = new Set<number>();
 
-  // Phase A: collect specialist pairs and sort.
+  // Phase A: collect specialist pairs and sort. Issue #84 — also include
+  // the preferred agent's pairs even if they fail the specialist
+  // threshold; the +PREFER_AGENT_BUMP makes them sort to the top
+  // unconditionally.
   const specialistPairs: ScoredPair[] = [];
   for (const a of input.idleAgents) {
+    const isPreferred =
+      input.preferAgentId !== undefined && a.agentId === input.preferAgentId;
     for (const i of input.pendingIssues) {
-      if (classifyMatch(a, i) === "specialist") {
+      if (classifyMatch(a, i) === "specialist" || isPreferred) {
         specialistPairs.push({
           agentId: a.agentId,
           issueId: i.id,
-          score: scoreAgentIssue(a, i),
+          score: scoreAgentIssueWithPreference(a, i, input.preferAgentId),
         });
       }
     }
@@ -134,7 +164,7 @@ export function twoPhasePick(input: TwoPhasePickInput): TwoPhasePickResult {
       if (usedIssues.has(i.id)) continue;
       const next = generalists.find((g) => !usedAgents.has(g.agentId));
       if (!next) break;
-      const score = scoreAgentIssue(next, i);
+      const score = scoreAgentIssueWithPreference(next, i, input.preferAgentId);
       assignments.push({ agentId: next.agentId, issueId: i.id, score });
       usedAgents.add(next.agentId);
       usedIssues.add(i.id);
@@ -152,6 +182,10 @@ export interface FallbackInput {
   idleAgents: AgentRecord[];
   pendingIssues: IssueSummary[];
   cap: number;
+  /** Issue #84: per-run agent override. Bumps the named agent's
+   *  per-pair score by `PREFER_AGENT_BUMP` so it leads dispatcher routing
+   *  regardless of natural fit. */
+  preferAgentId?: string;
 }
 
 export interface FallbackAssignment {
@@ -169,7 +203,11 @@ export function deterministicFallback(input: FallbackInput): FallbackAssignment[
   const pairs: ScoredPair[] = [];
   for (const a of input.idleAgents) {
     for (const i of input.pendingIssues) {
-      pairs.push({ agentId: a.agentId, issueId: i.id, score: scoreAgentIssue(a, i) });
+      pairs.push({
+        agentId: a.agentId,
+        issueId: i.id,
+        score: scoreAgentIssueWithPreference(a, i, input.preferAgentId),
+      });
     }
   }
   pairs.sort((p, q) => q.score - p.score || p.agentId.localeCompare(q.agentId) || p.issueId - q.issueId);

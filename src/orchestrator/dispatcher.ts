@@ -3,6 +3,7 @@ import { buildTickPrompt } from "./prompt.js";
 import { claudeBinPath } from "../agent/sdkBinary.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { TickProposalSchema, type TickAssignment } from "../types.js";
+import { ORCHESTRATOR_MODEL_DISPATCH } from "./models.js";
 import {
   classifyMatch,
   deterministicFallback,
@@ -42,7 +43,9 @@ export interface DispatchResult {
   source: "llm" | "llm-retry" | "fallback";
 }
 
-const ORCHESTRATOR_MODEL = "claude-sonnet-4-6";
+// Resolved at module load from `models.ts` (env-overridable). See
+// `src/orchestrator/models.ts` for the tier rationale and override env vars.
+const ORCHESTRATOR_MODEL = ORCHESTRATOR_MODEL_DISPATCH;
 
 export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   const cap = Math.min(input.cap, input.idleAgents.length, input.pendingIssues.length);

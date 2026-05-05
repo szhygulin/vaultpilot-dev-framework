@@ -6,10 +6,13 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { ensureDir } from "../state/locks.js";
 import { getIssueDetail, type IssueComment, type IssueDetail } from "../github/gh.js";
 import { detectPendingPostMortem } from "./failurePostMortem.js";
+import { ORCHESTRATOR_MODEL_TRIAGE } from "./models.js";
 import type { IssueSummary } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
-const TRIAGE_MODEL = "claude-haiku-4-5-20251001";
+// Resolved at module load from `models.ts` (env-overridable). See
+// `src/orchestrator/models.ts` for tier rationale and override env vars.
+const TRIAGE_MODEL = ORCHESTRATOR_MODEL_TRIAGE;
 const REASON_MAX = 240;
 
 export const TRIAGE_DIR = path.resolve(process.cwd(), "state", "triage");

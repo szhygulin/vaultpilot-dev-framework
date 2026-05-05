@@ -29,9 +29,12 @@ import {
   MAX_ENTRY_LINES,
   isValidDomain,
 } from "../util/promotionMarkers.js";
+import { ORCHESTRATOR_MODEL_TRIM } from "../orchestrator/models.js";
 import type { Logger } from "../log/logger.js";
 
-const TRIM_MODEL = "claude-sonnet-4-6";
+// Resolved at module load from `models.ts` (env-overridable). See
+// `src/orchestrator/models.ts` for tier rationale and override env vars.
+const TRIM_MODEL = ORCHESTRATOR_MODEL_TRIM;
 
 // Matches the entry sentinel emitted by `formatEntryBlock` in
 // `sharedLessons.ts`. Domain-source-issueId-ts triple uniquely keys an entry

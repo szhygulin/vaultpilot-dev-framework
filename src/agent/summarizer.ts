@@ -2,10 +2,13 @@ import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeBinPath } from "./sdkBinary.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
+import { ORCHESTRATOR_MODEL_SUMMARIZER } from "../orchestrator/models.js";
 import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
-const SUMMARIZER_MODEL = "claude-sonnet-4-6";
+// Resolved at module load from `models.ts` (env-overridable). See
+// `src/orchestrator/models.ts` for tier rationale and override env vars.
+const SUMMARIZER_MODEL = ORCHESTRATOR_MODEL_SUMMARIZER;
 
 const HEADING_MAX = 120;
 const BODY_MAX = 2000;

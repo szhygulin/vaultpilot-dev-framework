@@ -6,10 +6,23 @@ import {
   readAgentClaudeMdBytes,
   type OverloadVerdict,
 } from "../agent/split.js";
+import type { BudgetExceededSkipped } from "./costEstimator.js";
 
 export interface TriageSkipped {
   issue: IssueSummary;
   reason: string;
+}
+
+// Per-issue cost estimate surfaced in the gate. One entry per dispatched
+// issue plus one per skipped-over-budget issue (issue #99). Read by the
+// renderer to show the user which issues fit the cost ceiling and which
+// don't, before y/N approval.
+export interface IssueCostForecastEntry {
+  issueId: number;
+  estimateUsd: number;
+  source: "plan" | "fallback";
+  fileCount?: number;
+  planFile?: string;
 }
 
 // Issues filtered out because an open vp-dev PR already covers them. See
@@ -54,6 +67,18 @@ export interface SetupPreview {
   // since "no triage" and "triage was free" are different signals (per
   // issue #55 acceptance: "the line is omitted, not zero-valued").
   triageCostUsd?: number;
+  // Per-issue cost forecasts in dispatch order. Includes both dispatched
+  // and skipped-over-budget issues, so the gate text can show every
+  // estimate the user is being asked to approve.
+  costForecast: IssueCostForecastEntry[];
+  // Issues whose individual estimate exceeded the remaining budget at the
+  // moment of evaluation. Same skip-and-surface pattern as `triageSkipped`
+  // and `openPrSkipped`. Empty when no `--max-cost-usd` was set.
+  budgetExceededSkipped: BudgetExceededSkipped[];
+  // Run-level cost ceiling (USD) — `undefined` means no ceiling. Surfaces
+  // alongside the triage line and as the anchor for "remaining budget"
+  // arithmetic in the per-issue forecast block.
+  budgetUsd?: number;
 }
 
 export interface BuildPreviewInput {
@@ -69,6 +94,9 @@ export interface BuildPreviewInput {
   triageSkipped?: TriageSkipped[];
   openPrSkipped?: OpenPrSkipped[];
   triageCostUsd?: number;
+  costForecast?: IssueCostForecastEntry[];
+  budgetExceededSkipped?: BudgetExceededSkipped[];
+  budgetUsd?: number;
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -105,6 +133,9 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     triageSkipped: input.triageSkipped ?? [],
     openPrSkipped: input.openPrSkipped ?? [],
     triageCostUsd: input.triageCostUsd,
+    costForecast: input.costForecast ?? [],
+    budgetExceededSkipped: input.budgetExceededSkipped ?? [],
+    budgetUsd: input.budgetUsd,
   };
 }
 
@@ -131,10 +162,15 @@ export function formatSetupPreview(p: SetupPreview): string {
   // shown so the user sees the small haiku-call cost the run already paid
   // (and will pay again if they re-run). Omitted entirely when triage was
   // bypassed via --include-non-ready (per issue #55: not zero-valued).
-  // The projected dispatch-cost anchor lands separately with #34's hard
-  // cost ceiling — until then this row stands alone.
   if (p.triageCostUsd !== undefined) {
     lines.push(`  Triage cost:    ~$${p.triageCostUsd.toFixed(4)} (already incurred)`);
+  }
+  // Cost ceiling — the anchor for the per-issue forecast block below.
+  // Shown only when the user passed --max-cost-usd / VP_DEV_MAX_COST_USD;
+  // a "no ceiling" run still gets the per-issue forecast (so the user can
+  // see what they're authorizing) but no skip partition.
+  if (p.budgetUsd !== undefined) {
+    lines.push(`  Cost ceiling:   $${p.budgetUsd.toFixed(2)} (--max-cost-usd)`);
   }
   lines.push(`  Dry run:        ${p.dryRun ? "yes" : "no"}`);
   lines.push(`  Resume:         ${p.resume ? "yes" : "no"}`);
@@ -186,6 +222,42 @@ export function formatSetupPreview(p: SetupPreview): string {
     lines.push("");
   }
 
+  // Per-issue cost forecast (#99). Always shown when there are dispatch
+  // candidates — the forecast itself is the value-add, independent of
+  // whether a budget ceiling is set. The "remaining budget" line + the
+  // skip block below only fire when --max-cost-usd is set.
+  if (p.costForecast.length > 0) {
+    lines.push("Per-issue cost forecast:");
+    for (const f of p.costForecast) {
+      lines.push(`  #${f.issueId}  ~$${f.estimateUsd.toFixed(2)}  ${describeForecastSource(f)}`);
+    }
+    const total = p.costForecast.reduce((sum, f) => sum + f.estimateUsd, 0);
+    if (p.budgetUsd !== undefined) {
+      const triageSpent = p.triageCostUsd ?? 0;
+      const remaining = p.budgetUsd - triageSpent;
+      const fitsMark = total <= remaining ? "✓ fits" : "✗ exceeds";
+      lines.push(
+        `  TOTAL: ~$${total.toFixed(2)} forecast against $${remaining.toFixed(2)} remaining budget — ${fitsMark}`,
+      );
+    } else {
+      lines.push(`  TOTAL: ~$${total.toFixed(2)} forecast (no --max-cost-usd set)`);
+    }
+    lines.push("");
+  }
+
+  if (p.budgetExceededSkipped.length > 0) {
+    lines.push(`${p.budgetExceededSkipped.length} issue(s) skipped — exceeds remaining budget:`);
+    for (const s of p.budgetExceededSkipped) {
+      lines.push(
+        `  #${s.issue.id}  ~$${s.estimateUsd.toFixed(2)} forecast — exceeds $${s.remainingBudgetUsd.toFixed(2)} remaining at issue-time`,
+      );
+    }
+    lines.push(
+      `  Override: raise --max-cost-usd, or split the issue per CLAUDE.md "Pre-dispatch scope-fit check" rule.`,
+    );
+    lines.push("");
+  }
+
   lines.push("Issues to address:");
   const ids = p.openIssues.map((i) => i.id);
   lines.push(`  ${formatIdList(ids)}`);
@@ -197,6 +269,11 @@ function formatIdList(ids: number[]): string {
   const head = ids.slice(0, 6).join(", ");
   const tail = ids.slice(-3).join(", ");
   return `${head}, ..., ${tail}  (${ids.length} total)`;
+}
+
+function describeForecastSource(f: IssueCostForecastEntry): string {
+  if (f.source === "fallback") return "(no plan; fallback estimate)";
+  return `(${f.fileCount ?? 0}-file plan)`;
 }
 
 export interface ApprovalInput {

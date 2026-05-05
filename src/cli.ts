@@ -18,9 +18,16 @@ import {
   approveSetup,
   buildSetupPreview,
   formatSetupPreview,
+  type IssueCostForecastEntry,
   type OpenPrSkipped,
   type TriageSkipped,
 } from "./orchestrator/setup.js";
+import {
+  estimateIssueCost,
+  partitionByBudget,
+  readPlanFileForIssue,
+  type IssueCostEstimate,
+} from "./orchestrator/costEstimator.js";
 import {
   deleteRunConfirmToken,
   hashPreview,
@@ -353,6 +360,10 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     opts.stalledThresholdDays = p.stalledThresholdDays;
     opts.includeNonReady = p.includeNonReady;
     opts.verbose = p.verbose;
+    // Carry the cost ceiling forward — same partition at confirm-time as at
+    // plan-time. Older tokens (pre-#99) leave this undefined which matches
+    // "no ceiling" semantics.
+    opts.maxCostUsd = p.maxCostUsd;
   }
 
   if (opts.agents === undefined || !opts.targetRepo) {
@@ -479,6 +490,54 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.exit(2);
   }
 
+  // Pre-dispatch cost estimate (#99). For each candidate, read its
+  // matching `feature-plans/issue-<N>-*.md` (if present) and compute an
+  // estimate. Then partition against `--max-cost-usd` minus the triage
+  // spend so issues whose individual estimate exceeds remaining budget are
+  // surfaced in the gate as skipped — preventing the doomed-dispatch
+  // failure mode from #34.
+  const estimates = new Map<number, IssueCostEstimate>();
+  for (const issue of dispatchIssues) {
+    const plan = await readPlanFileForIssue({
+      targetRepoPath: repoPath,
+      issueId: issue.id,
+    });
+    estimates.set(
+      issue.id,
+      estimateIssueCost({
+        planContent: plan?.content,
+        planFile: plan?.filename,
+      }),
+    );
+  }
+  const partition = partitionByBudget({
+    issues: dispatchIssues,
+    estimates,
+    budgetUsd,
+    alreadySpentUsd: triageCostUsd ?? 0,
+  });
+  const budgetExceededSkipped = partition.budgetExceededSkipped;
+  // Forecast covers BOTH dispatched and skipped issues so the gate text can
+  // show every estimate the user is being asked to (or refused) to authorize.
+  const costForecast: IssueCostForecastEntry[] = dispatchIssues.map((issue) => {
+    const est = estimates.get(issue.id)!;
+    return {
+      issueId: issue.id,
+      estimateUsd: est.estimateUsd,
+      source: est.source,
+      fileCount: est.fileCount,
+      planFile: est.planFile,
+    };
+  });
+  const dispatchAfterBudgetCount = partition.dispatch.length;
+  dispatchIssues = partition.dispatch;
+  if (dispatchIssues.length === 0) {
+    console.error(
+      `ERROR: all ${dispatchAfterBudgetCount + budgetExceededSkipped.length} candidate issue(s) exceed the per-issue cost budget. Raise --max-cost-usd or split the issues per CLAUDE.md "Pre-dispatch scope-fit check" rule.`,
+    );
+    process.exit(2);
+  }
+
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
     targetRepo: opts.targetRepo,
@@ -493,6 +552,9 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     triageSkipped,
     openPrSkipped,
     triageCostUsd,
+    costForecast,
+    budgetExceededSkipped,
+    budgetUsd,
   });
 
   if (opts.plan) {
@@ -514,6 +576,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         stalledThresholdDays: opts.stalledThresholdDays,
         includeNonReady: !!opts.includeNonReady,
         verbose: !!opts.verbose,
+        maxCostUsd: opts.maxCostUsd,
       },
     });
     process.stdout.write("Plan saved. No agents launched.\n");

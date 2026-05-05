@@ -28,6 +28,11 @@ export interface RunConfirmParams {
   stalledThresholdDays: number;
   includeNonReady: boolean;
   verbose: boolean;
+  // Optional per-run cost ceiling carried over from --plan to --confirm so
+  // the budget that gated the partition at plan-time is the same one that
+  // gates dispatch at confirm-time. Optional for back-compat with tokens
+  // minted before #99 landed.
+  maxCostUsd?: string;
 }
 
 export interface RunConfirmToken {

@@ -18,6 +18,15 @@ export const SPLIT_THRESHOLD_ISSUES = 20;
 export const SPLIT_THRESHOLD_TAGS = 50;
 export const SPLIT_THRESHOLD_BYTES = 30 * 1024;
 
+// Hard floor for the clusterer: with fewer than 4 attributable sections
+// (`<!-- run:... -->`-prefixed blocks) there isn't enough signal to
+// produce 2-3 coherent clusters. Crossed in `proposeSplit` and
+// surfaced via `OverloadVerdict.attributableSections` so the
+// pre-dispatch warning text can branch on splitter eligibility instead
+// of pointing the user at `vp-dev agents split` for an agent the
+// splitter will refuse (issue #161).
+export const SPLIT_MIN_SECTIONS = 4;
+
 // Resolved at module load from `models.ts` (env-overridable). See
 // `src/orchestrator/models.ts` for tier rationale and override env vars.
 const PROPOSAL_MODEL = ORCHESTRATOR_MODEL_SPLIT;
@@ -27,13 +36,22 @@ export interface OverloadVerdict {
   agentId: string;
   reasons: string[];
   claudeMdBytes: number;
+  /**
+   * Count of `<!-- run:... -->`-prefixed sections in the agent's
+   * CLAUDE.md — i.e. summarizer-attributable lessons. Surfaced so
+   * pre-dispatch warning text can distinguish "overloaded AND
+   * splittable" from "overloaded but section-floor blocks the
+   * splitter" (issue #161).
+   */
+  attributableSections: number;
 }
 
 export function detectOverload(
   agent: AgentRecord,
-  claudeMdBytes: number,
+  claudeMd: string,
 ): OverloadVerdict | null {
   const reasons: string[] = [];
+  const claudeMdBytes = Buffer.byteLength(claudeMd, "utf-8");
   if (agent.issuesHandled >= SPLIT_THRESHOLD_ISSUES) {
     reasons.push(`issuesHandled=${agent.issuesHandled} >= ${SPLIT_THRESHOLD_ISSUES}`);
   }
@@ -46,7 +64,12 @@ export function detectOverload(
     );
   }
   if (reasons.length === 0) return null;
-  return { agentId: agent.agentId, reasons, claudeMdBytes };
+  return {
+    agentId: agent.agentId,
+    reasons,
+    claudeMdBytes,
+    attributableSections: parseClaudeMdSections(claudeMd).length,
+  };
 }
 
 export interface ParsedSection {
@@ -160,10 +183,10 @@ export async function proposeSplit(
   input: ProposeSplitInput,
 ): Promise<SplitProposal> {
   const sections = parseClaudeMdSections(input.claudeMd);
-  if (sections.length < 4) {
-    // With <4 attributable sections there's not enough signal to split on
-    // — return a single-cluster "no-op" proposal callers can render as
-    // "not enough history yet to split meaningfully".
+  if (sections.length < SPLIT_MIN_SECTIONS) {
+    // With fewer than SPLIT_MIN_SECTIONS attributable sections there's not
+    // enough signal to split on — return a single-cluster "no-op" proposal
+    // callers can render as "not enough history yet to split meaningfully".
     return {
       agentId: input.agent.agentId,
       parentTags: input.agent.tags,
@@ -171,7 +194,7 @@ export async function proposeSplit(
       unclusteredSectionIds: sections.map((s) => s.sectionId),
       inputBytes: Buffer.byteLength(input.claudeMd, "utf-8"),
       sectionCount: sections.length,
-      notes: "Too few attributable sections (<4) to cluster meaningfully.",
+      notes: `Too few attributable sections (<${SPLIT_MIN_SECTIONS}) to cluster meaningfully.`,
     };
   }
 

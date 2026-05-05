@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatSetupPreview, type SetupPreview } from "./setup.js";
 import type { DuplicateCluster } from "../types.js";
+import type { OverloadVerdict } from "../agent/split.js";
 
 // Issue #151 (Phase 2a-ii of #133): integration tests for the dedup
 // advisory block + dedup-cost line. Pure-function tests against
@@ -113,6 +114,71 @@ test("formatSetupPreview: dedupCostUsd 0 still renders the line", () => {
   // the pass actually executed.
   const text = formatSetupPreview(basePreview({ dedupCostUsd: 0 }));
   assert.match(text, /Dedup cost:\s+~\$0\.0000 \(already incurred\)/);
+});
+
+// Issue #161: pre-dispatch overload warning text must branch on whether
+// the splitter can actually produce a proposal. With fewer than 4
+// attributable sections, `vp-dev agents split <id>` returns "Too few
+// attributable sections (<4) to cluster meaningfully" — pointing the
+// user at it from the warning is a "you should split this → can't split
+// this" dead end. Verdict.attributableSections gates the text below.
+test("formatSetupPreview: overload warning with >=4 sections points at `vp-dev agents split`", () => {
+  const verdict: OverloadVerdict = {
+    agentId: "agent-1234",
+    reasons: ["CLAUDE.md=51.9KB >= 30KB", "tags=74 >= 50"],
+    claudeMdBytes: 51_900,
+    attributableSections: 12,
+  };
+  const text = formatSetupPreview(basePreview({ overloadWarnings: [verdict] }));
+  assert.match(text, /WARNING: agent-1234 crossed split threshold/);
+  assert.match(text, /CLAUDE\.md=51\.9KB >= 30KB/);
+  assert.match(text, /Run `vp-dev agents split agent-1234` to view a split proposal\./);
+  assert.doesNotMatch(text, /Splitter needs/);
+});
+
+test("formatSetupPreview: overload warning with <4 sections points at compaction path (#158), not the splitter", () => {
+  const verdict: OverloadVerdict = {
+    agentId: "agent-916a",
+    reasons: ["CLAUDE.md=51.9KB >= 30KB", "tags=74 >= 50"],
+    claudeMdBytes: 51_900,
+    attributableSections: 3,
+  };
+  const text = formatSetupPreview(basePreview({ overloadWarnings: [verdict] }));
+  assert.match(text, /WARNING: agent-916a crossed split threshold/);
+  assert.match(
+    text,
+    /Splitter needs >=4 attributable sections; agent-916a has 3\. See #158 for the compaction path\./,
+  );
+  // Critical: do NOT recommend `vp-dev agents split` for an agent the
+  // splitter will refuse — that's the dead-end UX the branch fixes.
+  assert.doesNotMatch(text, /Run `vp-dev agents split agent-916a`/);
+});
+
+test("formatSetupPreview: per-agent branching — splittable + un-splittable agents in same run get different remediation lines", () => {
+  // Mixed-overload run: agent-AAAA has lots of sections (post-summarizer
+  // history) so the splitter will work; agent-BBBB has tons of size /
+  // tag pressure but only 2 sections so the splitter would refuse. Each
+  // gets its own remediation line.
+  const verdicts: OverloadVerdict[] = [
+    {
+      agentId: "agent-AAAA",
+      reasons: ["issuesHandled=22 >= 20"],
+      claudeMdBytes: 20_000,
+      attributableSections: 18,
+    },
+    {
+      agentId: "agent-BBBB",
+      reasons: ["CLAUDE.md=37.0KB >= 30KB"],
+      claudeMdBytes: 37_888,
+      attributableSections: 2,
+    },
+  ];
+  const text = formatSetupPreview(basePreview({ overloadWarnings: verdicts }));
+  assert.match(text, /Run `vp-dev agents split agent-AAAA` to view a split proposal\./);
+  assert.match(
+    text,
+    /Splitter needs >=4 attributable sections; agent-BBBB has 2\. See #158 for the compaction path\./,
+  );
 });
 
 test("formatSetupPreview: cluster set + dedup cost are bound into the rendered text (previewHash coverage)", () => {

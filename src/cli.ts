@@ -74,6 +74,7 @@ import {
   applySplit,
   detectOverload,
   formatProposal,
+  parseClaudeMdSections,
   proposeSplit,
   readAgentClaudeMdBytes,
 } from "./agent/split.js";
@@ -318,6 +319,10 @@ export function buildCli(): Command {
           "Soft cap on per-section savings before flagging the rewrite as 'excessive-savings' (default 40)",
           parsePositive,
           DEFAULT_MAX_SAVINGS_PCT,
+        )
+        .option(
+          "--no-diff",
+          "Suppress per-rewrite unified diffs in the human-readable output (#176). Falls back to the savings-only single-line summary; --json mode is unaffected (always omits diffs to keep the payload lean).",
         )
         .action(async (agentId, opts) => {
           await cmdAgentsTightenClaudeMd(agentId, opts);
@@ -2157,6 +2162,10 @@ async function cmdAgentsCompactClaudeMdConfirm(
 interface AgentsTightenClaudeMdOpts {
   json?: boolean;
   maxSavingsPct: number;
+  // Commander stores `--no-diff` as `diff: false` (boolean, defaults to
+  // true). Naming the option `noDiff` would invert the convention; using
+  // `diff` matches Commander's default and keeps the call-site readable.
+  diff?: boolean;
 }
 
 async function cmdAgentsTightenClaudeMd(
@@ -2193,10 +2202,25 @@ async function cmdAgentsTightenClaudeMd(
   });
 
   if (opts.json) {
+    // JSON mode keeps its lean payload — `rewrittenBody` is already in
+    // each rewrite, so a JSON consumer that wants a diff can derive one
+    // by re-parsing the agent's CLAUDE.md (#176 out of scope: per-rewrite
+    // diff field for --json mode).
     process.stdout.write(JSON.stringify({ agentId, proposal }, null, 2) + "\n");
     return;
   }
-  process.stdout.write(formatTightenProposal(proposal) + "\n");
+  // Build the source-body lookup from the same MD we just proposed
+  // against. Commander parses `--no-diff` into `opts.diff === false`;
+  // when the flag is absent, `opts.diff` is `undefined` (effectively
+  // true → show diffs by default, per #176).
+  const sections = parseClaudeMdSections(md);
+  const sources = new Map(sections.map((s) => [s.sectionId, s.body]));
+  process.stdout.write(
+    formatTightenProposal(proposal, {
+      showDiffs: opts.diff !== false,
+      sources,
+    }) + "\n",
+  );
 }
 
 interface AgentsPruneOpts {

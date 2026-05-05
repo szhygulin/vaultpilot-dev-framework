@@ -8,13 +8,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_MAX_DIFF_LINES,
   DEFAULT_MAX_SAVINGS_PCT,
+  MIN_DIFF_SAVINGS_BYTES,
   clampRewriteFields,
   extractDistinctDates,
   extractDistinctNumerics,
   extractDistinctXrefs,
   findDroppedInvariants,
+  formatRewriteDiff,
   formatTightenProposal,
+  lineDiff,
   type SectionRewrite,
   type TightenProposal,
 } from "./tightenClaudeMd.js";
@@ -405,4 +409,197 @@ test("formatTightenProposal: clean proposal points at the --apply path tracker",
 
 test("DEFAULT_MAX_SAVINGS_PCT: documented default is 40 (per issue #172)", () => {
   assert.equal(DEFAULT_MAX_SAVINGS_PCT, 40);
+});
+
+test("MIN_DIFF_SAVINGS_BYTES: documented default is 50 (per issue #176)", () => {
+  assert.equal(MIN_DIFF_SAVINGS_BYTES, 50);
+});
+
+test("DEFAULT_MAX_DIFF_LINES: documented default is 60 (per issue #176)", () => {
+  assert.equal(DEFAULT_MAX_DIFF_LINES, 60);
+});
+
+test("lineDiff: identical inputs yield only eq ops", () => {
+  const ops = lineDiff(["a", "b", "c"], ["a", "b", "c"]);
+  assert.deepEqual(
+    ops.map((o) => o.kind),
+    ["eq", "eq", "eq"],
+  );
+});
+
+test("lineDiff: pure replacement yields del+add ops", () => {
+  const ops = lineDiff(["old"], ["new"]);
+  assert.deepEqual(
+    ops.map((o) => `${o.kind}:${o.line}`).sort(),
+    ["add:new", "del:old"],
+  );
+});
+
+test("lineDiff: detects common context line between two changes", () => {
+  const ops = lineDiff(
+    ["context", "removed-line", "context2"],
+    ["context", "added-line", "context2"],
+  );
+  // Expected order from LCS walk: context (eq), removed (del),
+  // added (add), context2 (eq) — and the eq lines must surface as eq.
+  assert.equal(ops.filter((o) => o.kind === "eq").length, 2);
+  assert.ok(ops.some((o) => o.kind === "del" && o.line === "removed-line"));
+  assert.ok(ops.some((o) => o.kind === "add" && o.line === "added-line"));
+});
+
+test("formatRewriteDiff: emits unified-diff headers and prefixed body lines", () => {
+  const out = formatRewriteDiff({
+    sectionId: "s0",
+    sourceBody: "alpha\nbeta\ngamma",
+    rewrittenBody: "alpha\ndelta\ngamma",
+  });
+  const lines = out.split("\n");
+  assert.equal(lines[0], "--- s0 (source)");
+  assert.equal(lines[1], "+++ s0 (rewrite)");
+  assert.equal(lines[2], "@@ -1,3 +1,3 @@");
+  // alpha/gamma are common context (two-space prefix); beta→delta are -/+.
+  assert.ok(out.includes("  alpha"));
+  assert.ok(out.includes("- beta"));
+  assert.ok(out.includes("+ delta"));
+  assert.ok(out.includes("  gamma"));
+});
+
+test("formatRewriteDiff: caps body at maxLines and appends truncation marker", () => {
+  // Build a 100-line "all replaced" diff: every line differs, so 200 ops.
+  const src = Array.from({ length: 100 }, (_, i) => `src-line-${i}`).join("\n");
+  const dst = Array.from({ length: 100 }, (_, i) => `dst-line-${i}`).join("\n");
+  const out = formatRewriteDiff({
+    sectionId: "s0",
+    sourceBody: src,
+    rewrittenBody: dst,
+    maxLines: 10,
+  });
+  const lines = out.split("\n");
+  // 3 header lines + 10 body lines + 1 truncation marker = 14.
+  assert.equal(lines.length, 3 + 10 + 1);
+  assert.match(lines[lines.length - 1], /^… \(\d+ more lines truncated\)$/);
+});
+
+test("formatTightenProposal: emits inline diff for rewrite ≥ 50 bytes when sources provided", () => {
+  const sourceBody =
+    "Past incident 2026-04-28: thing happened in elaborate detail.\n" +
+    "More background that the rewrite trims.\n" +
+    "Final point #162 preserved.";
+  const rewrittenBody =
+    "Past incident 2026-04-28: thing happened.\nFinal point #162 preserved.";
+  const proposal: TightenProposal = {
+    agentId: "agent-test",
+    rewrites: [
+      {
+        sectionId: "s0",
+        rewrittenBody,
+        estimatedBytesSaved:
+          Buffer.byteLength(sourceBody, "utf-8") -
+          Buffer.byteLength(rewrittenBody, "utf-8"),
+      },
+    ],
+    unchangedSectionIds: [],
+    estimatedBytesSaved: 60,
+    inputBytes: 4096,
+    sectionCount: 1,
+    warnings: [],
+    maxSavingsPct: DEFAULT_MAX_SAVINGS_PCT,
+  };
+  const sources = new Map([["s0", sourceBody]]);
+  const out = formatTightenProposal(proposal, { sources });
+  assert.match(out, /diff:/);
+  assert.match(out, /--- s0 \(source\)/);
+  assert.match(out, /\+\+\+ s0 \(rewrite\)/);
+});
+
+test("formatTightenProposal: omits diff for sub-50-byte savings (low signal)", () => {
+  const sourceBody = "Tiny rewrite. Drop one filler.";
+  const rewrittenBody = "Tiny rewrite.";
+  const saved =
+    Buffer.byteLength(sourceBody, "utf-8") -
+    Buffer.byteLength(rewrittenBody, "utf-8");
+  assert.ok(saved < MIN_DIFF_SAVINGS_BYTES, "fixture must be sub-50B");
+  const proposal: TightenProposal = {
+    agentId: "agent-test",
+    rewrites: [
+      {
+        sectionId: "s0",
+        rewrittenBody,
+        estimatedBytesSaved: saved,
+      },
+    ],
+    unchangedSectionIds: [],
+    estimatedBytesSaved: saved,
+    inputBytes: 1024,
+    sectionCount: 1,
+    warnings: [],
+    maxSavingsPct: DEFAULT_MAX_SAVINGS_PCT,
+  };
+  const sources = new Map([["s0", sourceBody]]);
+  const out = formatTightenProposal(proposal, { sources });
+  // No diff block should appear; the savings-only summary stays.
+  assert.doesNotMatch(out, /diff:/);
+  assert.doesNotMatch(out, /--- s0 \(source\)/);
+  assert.match(out, /\[s0\]/);
+});
+
+test("formatTightenProposal: --no-diff (showDiffs:false) suppresses diffs even for big rewrites", () => {
+  const sourceBody = "x".repeat(1000);
+  const rewrittenBody = "y".repeat(500);
+  const proposal: TightenProposal = {
+    agentId: "agent-test",
+    rewrites: [
+      { sectionId: "s0", rewrittenBody, estimatedBytesSaved: 500 },
+    ],
+    unchangedSectionIds: [],
+    estimatedBytesSaved: 500,
+    inputBytes: 4096,
+    sectionCount: 1,
+    warnings: [],
+    maxSavingsPct: 100,
+  };
+  const sources = new Map([["s0", sourceBody]]);
+  const out = formatTightenProposal(proposal, { showDiffs: false, sources });
+  assert.doesNotMatch(out, /diff:/);
+  assert.doesNotMatch(out, /--- s0 \(source\)/);
+});
+
+test("formatTightenProposal: gracefully omits diff when sources lack the sectionId", () => {
+  const proposal: TightenProposal = {
+    agentId: "agent-test",
+    rewrites: [
+      { sectionId: "s0", rewrittenBody: "tight", estimatedBytesSaved: 200 },
+    ],
+    unchangedSectionIds: [],
+    estimatedBytesSaved: 200,
+    inputBytes: 4096,
+    sectionCount: 1,
+    warnings: [],
+    maxSavingsPct: DEFAULT_MAX_SAVINGS_PCT,
+  };
+  // showDiffs default true, but sources empty: formatter must NOT throw
+  // and must still render the savings-only line.
+  const out = formatTightenProposal(proposal, { sources: new Map() });
+  assert.doesNotMatch(out, /diff:/);
+  assert.match(out, /\[s0\] 0\.20KB saved/);
+});
+
+test("formatTightenProposal: omits diff entirely when no opts arg provided (back-compat)", () => {
+  const proposal: TightenProposal = {
+    agentId: "agent-test",
+    rewrites: [
+      { sectionId: "s0", rewrittenBody: "tight", estimatedBytesSaved: 200 },
+    ],
+    unchangedSectionIds: [],
+    estimatedBytesSaved: 200,
+    inputBytes: 4096,
+    sectionCount: 1,
+    warnings: [],
+    maxSavingsPct: DEFAULT_MAX_SAVINGS_PCT,
+  };
+  // Legacy single-arg call (existing tests + JSON path) must keep working
+  // and produce no diff (no sources to diff against).
+  const out = formatTightenProposal(proposal);
+  assert.doesNotMatch(out, /diff:/);
+  assert.match(out, /\[s0\] 0\.20KB saved/);
 });

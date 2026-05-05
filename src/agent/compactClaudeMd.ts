@@ -66,7 +66,12 @@ export function resolveMinClusterSize(opts: {
 // be larger than per-section bodies (it's a synthesis), but a generous
 // ceiling prevents the model from emitting essay-length merges that defeat
 // the purpose of compaction.
-const HEADING_MAX = 100;
+// Phase A appendBlock headings are short rule titles; 100 chars is fine.
+// Compaction-via-merge headings are *thesis-summary* headings describing
+// what 3-6 source rules have in common — the model wants 110-145 chars,
+// and a 100-char clamp truncates them with a literal `...` (issue #167).
+// 160 covers observed natural lengths without admitting essay-length headings.
+const HEADING_MAX = 160;
 const BODY_MAX = 6000;
 const RATIONALE_MAX = 800;
 // Top-level model-side `notes` field. Pre-clamp ceiling matches
@@ -388,7 +393,7 @@ Output rules:
 - Each cluster must merge ${minClusterSize}+ sectionIds.
 - Each cluster needs:
   - sectionIds: the section IDs being merged (≥${minClusterSize}).
-  - proposedHeading: a short canonical heading (<= 100 chars). Capture the shared thesis.
+  - proposedHeading: a canonical thesis-summary heading (<= 160 chars). Capture what every source section in the cluster has in common.
   - proposedBody: synthesized body containing every load-bearing detail from the sources. Bullets > prose. Cite every past-incident date verbatim.
   - rationale: 1-3 sentences on why these sections share a thesis.
 - unclusteredSectionIds: sections that don't share a thesis with ${minClusterSize - 1}+ others. Better to leave them than force a weak cluster.

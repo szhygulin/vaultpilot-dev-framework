@@ -5,6 +5,7 @@ import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { ensureDir } from "../state/locks.js";
 import { getIssueDetail, type IssueComment, type IssueDetail } from "../github/gh.js";
+import { detectPendingPostMortem } from "./failurePostMortem.js";
 import type { IssueSummary } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -71,6 +72,27 @@ async function triageOne(input: TriageOneInput): Promise<TriagedIssue> {
     return {
       issue: input.issue,
       result: { ready: true, reason: "triage skipped: issue detail unavailable" },
+      fromCache: false,
+      costUsd: 0,
+    };
+  }
+
+  // Issue #100: deterministic gate. A `## vp-dev failure post-mortem` comment
+  // on the issue means a prior agent attempted-and-failed; without this check
+  // the next `vp-dev run` re-dispatches the same issue and burns budget on
+  // the same structural blocker. Resolution keywords (`retry`, `fix landed`,
+  // `scope changed`, `unblock`, `proceed`) in any later non-post-mortem
+  // comment lift the gate. `--include-non-ready` bypasses triage entirely
+  // and therefore also overrides this check (see cli.ts:369).
+  const pendingPostMortem = detectPendingPostMortem(detail.comments);
+  if (pendingPostMortem.pending && pendingPostMortem.reason) {
+    input.logger.info("triage.post_mortem_gate", {
+      issueId: input.issue.id,
+      reason: pendingPostMortem.reason,
+    });
+    return {
+      issue: input.issue,
+      result: { ready: false, reason: pendingPostMortem.reason },
       fromCache: false,
       costUsd: 0,
     };

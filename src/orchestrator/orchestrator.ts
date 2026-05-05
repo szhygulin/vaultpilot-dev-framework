@@ -12,6 +12,8 @@ import {
   fetchOriginMain,
   resolveTargetRepoPath,
 } from "../git/worktree.js";
+import { postIssueComment } from "../github/gh.js";
+import { composeFailurePostMortem } from "./failurePostMortem.js";
 import type { Logger } from "../log/logger.js";
 import type {
   AgentRecord,
@@ -359,6 +361,11 @@ async function runOneIssue(opts: {
     costTracker: opts.costTracker,
   });
 
+  // Track whether this run was a non-clean exit so the post-mortem comment
+  // step below can fire after the run-state entry is settled. Two failure
+  // shapes count: (a) no envelope at all, (b) envelope with decision="error".
+  let nonCleanExit = false;
+
   if (result.envelope) {
     const env = result.envelope;
     opts.state.issues[String(opts.issue.id)] = {
@@ -369,6 +376,7 @@ async function runOneIssue(opts: {
       commentUrl: env.commentUrl,
       partialBranchUrl: result.partialBranchUrl,
     };
+    nonCleanExit = env.decision === "error";
   } else {
     // Reconciliation found a branch on remote without a PR — surface it in
     // the failure record so the user can salvage with one `gh pr create`
@@ -387,9 +395,43 @@ async function runOneIssue(opts: {
       ...failure,
       partialBranchUrl: result.partialBranchUrl,
     };
+    nonCleanExit = true;
   }
 
   const stateAgent = opts.state.agents.find((a) => a.agentId === opts.agent.agentId);
   if (stateAgent) stateAgent.status = "idle";
   await saveRunState(opts.state);
+
+  // Issue #100: post a fail-fast post-mortem comment on the GitHub issue
+  // after a non-clean exit. The triage gate on the next `vp-dev run` reads
+  // this comment and skips re-dispatch until a human resolves the blocker
+  // (or `--include-non-ready` overrides). Skipped in dry-run because gh
+  // calls in dry-run runs are intercepted into echoes; failing to post
+  // logs a warning but never aborts the run.
+  if (nonCleanExit && !opts.dryRun) {
+    const body = composeFailurePostMortem({
+      runId: opts.state.runId,
+      agentId: opts.agent.agentId,
+      errorSubtype: result.errorSubtype,
+      errorReason: result.errorReason,
+      costUsd: result.costUsd,
+      durationMs: result.durationMs,
+      partialBranchUrl: result.partialBranchUrl,
+    });
+    try {
+      await postIssueComment(opts.state.targetRepo, opts.issue.id, body);
+      opts.logger.info("orchestrator.post_mortem_posted", {
+        agentId: opts.agent.agentId,
+        issueId: opts.issue.id,
+        runId: opts.state.runId,
+      });
+    } catch (err) {
+      opts.logger.warn("orchestrator.post_mortem_failed", {
+        agentId: opts.agent.agentId,
+        issueId: opts.issue.id,
+        runId: opts.state.runId,
+        err: (err as Error).message,
+      });
+    }
+  }
 }

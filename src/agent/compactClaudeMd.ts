@@ -38,6 +38,30 @@ const COMPACT_MODEL = ORCHESTRATOR_MODEL_SPLIT;
 // near-duplicate gets merged and loses nuance). Operator-tunable from CLI.
 export const DEFAULT_MIN_CLUSTER_SIZE = 3;
 
+// Floor lowered by `--allow-pair-clusters` (issue #168). The default-3 floor
+// IS the safety story; pair clusters need a human deciding "yes, these two
+// are tight enough to merge" — which is exactly what the existing
+// `--apply` / `--confirm` two-step gate provides.
+export const PAIR_CLUSTER_FLOOR = 2;
+
+/**
+ * Resolve the effective `minClusterSize` for a compaction invocation.
+ *
+ * `--allow-pair-clusters` is sugar for "lower the floor to 2 if it would
+ * otherwise be higher" (issue #168). If the operator explicitly passed
+ * `--min-cluster-size <n>` with `n < 2`, that explicit choice wins —
+ * pair-clusters never raises the floor.
+ */
+export function resolveMinClusterSize(opts: {
+  minClusterSize: number;
+  allowPairClusters?: boolean;
+}): number {
+  if (opts.allowPairClusters && opts.minClusterSize > PAIR_CLUSTER_FLOOR) {
+    return PAIR_CLUSTER_FLOOR;
+  }
+  return opts.minClusterSize;
+}
+
 // Per-field caps on the LLM proposal payload. `proposedBody` can legitimately
 // be larger than per-section bodies (it's a synthesis), but a generous
 // ceiling prevents the model from emitting essay-length merges that defeat

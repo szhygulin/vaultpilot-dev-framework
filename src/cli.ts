@@ -336,10 +336,17 @@ async function cmdRun(opts: RunOpts): Promise<void> {
 
   // Per-run cost tracker (issue #85, Phase 1). Instantiated here so triage
   // cost (which fires BEFORE the runId is minted on line ~451) accumulates
-  // into the same total as orchestrator + coding-agent spend. Phase 1 is
-  // measurement only — `budgetUsd` is logged but not enforced.
+  // into the same total as orchestrator + coding-agent spend.
+  //
+  // Issue #98: the budget is now threaded into the tracker constructor so
+  // `runCodingAgent` can derive a per-query `maxBudgetUsd` via
+  // `remainingBudget()` and let the SDK hard-stop the agent on cost
+  // exhaustion. This replaces the old `maxTurns: 50` ceiling on pass 1 —
+  // cost is the real constraint, and the turn cap was an indirect proxy
+  // that fired at a less-meaningful boundary (issue #34 hit it mid-edit
+  // on a 9-file plan despite making forward progress).
   const budgetUsd = resolveBudgetUsd({ flag: opts.maxCostUsd, env: process.env });
-  const costTracker = new RunCostTracker();
+  const costTracker = new RunCostTracker({ budgetUsd });
 
   const { open, skippedClosed } = await resolveRangeToIssues(opts.targetRepo, range);
   if (open.length === 0) {

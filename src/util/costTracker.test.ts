@@ -7,6 +7,73 @@ test("RunCostTracker: starts at zero", () => {
   assert.equal(t.total(), 0);
 });
 
+test("RunCostTracker: budgetUsd undefined when no constructor arg", () => {
+  const t = new RunCostTracker();
+  assert.equal(t.budgetUsd, undefined);
+});
+
+test("RunCostTracker: budgetUsd carries through when constructed with a value", () => {
+  const t = new RunCostTracker({ budgetUsd: 5 });
+  assert.equal(t.budgetUsd, 5);
+});
+
+test("RunCostTracker: budgetUsd reduces malformed values to undefined", () => {
+  // Defense in depth: cli.ts already filters via resolveBudgetUsd, but a
+  // direct caller (test code, future surfaces) shouldn't poison the SDK
+  // with a NaN/Infinity/negative budget that would either crash the SDK
+  // or be silently misinterpreted as no-cap.
+  assert.equal(new RunCostTracker({ budgetUsd: Number.NaN }).budgetUsd, undefined);
+  assert.equal(
+    new RunCostTracker({ budgetUsd: Number.POSITIVE_INFINITY }).budgetUsd,
+    undefined,
+  );
+  assert.equal(new RunCostTracker({ budgetUsd: -1 }).budgetUsd, undefined);
+});
+
+test("RunCostTracker: zero is a valid budget (Phase-2 decides semantics)", () => {
+  // Mirrors resolveBudgetUsd's treatment — zero is preserved at this
+  // layer so Phase-2 enforcement decides what `--max-cost-usd 0` means
+  // (always-abort vs no-op). The tracker just records.
+  const t = new RunCostTracker({ budgetUsd: 0 });
+  assert.equal(t.budgetUsd, 0);
+});
+
+test("RunCostTracker: remainingBudget undefined when no budget set", () => {
+  // No budget → no per-query cap → SDK runs uncapped on cost. This is
+  // the same behavior the main pass had before issue #98 minus the
+  // 50-turn ceiling.
+  const t = new RunCostTracker();
+  assert.equal(t.remainingBudget(), undefined);
+  t.add(2.5);
+  assert.equal(t.remainingBudget(), undefined);
+});
+
+test("RunCostTracker: remainingBudget shrinks as cost accumulates", () => {
+  const t = new RunCostTracker({ budgetUsd: 10 });
+  assert.equal(t.remainingBudget(), 10);
+  t.add(3);
+  assert.equal(t.remainingBudget(), 7);
+  t.add(4);
+  assert.equal(t.remainingBudget(), 3);
+});
+
+test("RunCostTracker: remainingBudget clamps at zero when exhausted", () => {
+  // Issue #98: returning 0 (rather than a negative) lets callers pass
+  // the value straight to the SDK's maxBudgetUsd, which rejects
+  // negatives. 0 causes the SDK to exit with error_max_budget_usd on
+  // next dispatch — the desired enforcement behavior.
+  const t = new RunCostTracker({ budgetUsd: 5 });
+  t.add(10); // overshoots — reasonable in practice (SDK reports cost
+  // after the query exited, so the tracker can briefly carry a
+  // post-pass value above the budget).
+  assert.equal(t.remainingBudget(), 0);
+});
+
+test("RunCostTracker: remainingBudget zero when budget is zero", () => {
+  const t = new RunCostTracker({ budgetUsd: 0 });
+  assert.equal(t.remainingBudget(), 0);
+});
+
 test("RunCostTracker: accumulates positive values", () => {
   const t = new RunCostTracker();
   t.add(0.25);

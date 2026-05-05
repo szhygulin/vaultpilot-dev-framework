@@ -45,6 +45,11 @@ export const DEFAULT_MIN_CLUSTER_SIZE = 3;
 const HEADING_MAX = 100;
 const BODY_MAX = 6000;
 const RATIONALE_MAX = 800;
+// Top-level model-side `notes` field. Pre-clamp ceiling matches
+// `ProposalPayloadSchema.notes.max(500)`; verbose model commentary used to
+// hard-fail the entire proposal at Zod parse time, which is the wrong
+// failure mode for a cosmetic field that's already advisory.
+const NOTES_MAX = 500;
 
 export interface CompactionCluster {
   /** ≥2 sectionIds from parseClaudeMdSections, all to be merged into one. */
@@ -100,27 +105,32 @@ const ProposalPayloadSchema = z.object({
   notes: z.string().max(500).optional(),
 });
 
-function clampClusterFields(json: unknown): unknown {
+export function clampClusterFields(json: unknown): unknown {
   if (!json || typeof json !== "object") return json;
   const obj = json as Record<string, unknown>;
   const clusters = obj.clusters;
-  if (!Array.isArray(clusters)) return obj;
-  const next = clusters.map((c) => {
-    if (!c || typeof c !== "object") return c;
-    const cluster = c as Record<string, unknown>;
-    const out: Record<string, unknown> = { ...cluster };
-    if (typeof cluster.proposedHeading === "string" && cluster.proposedHeading.length > HEADING_MAX) {
-      out.proposedHeading = cluster.proposedHeading.slice(0, HEADING_MAX - 3) + "...";
-    }
-    if (typeof cluster.proposedBody === "string" && cluster.proposedBody.length > BODY_MAX) {
-      out.proposedBody = cluster.proposedBody.slice(0, BODY_MAX - 16) + "\n[…truncated]";
-    }
-    if (typeof cluster.rationale === "string" && cluster.rationale.length > RATIONALE_MAX) {
-      out.rationale = cluster.rationale.slice(0, RATIONALE_MAX - 16) + "\n[…truncated]";
-    }
-    return out;
-  });
-  return { ...obj, clusters: next };
+  const out: Record<string, unknown> = { ...obj };
+  if (Array.isArray(clusters)) {
+    out.clusters = clusters.map((c) => {
+      if (!c || typeof c !== "object") return c;
+      const cluster = c as Record<string, unknown>;
+      const cOut: Record<string, unknown> = { ...cluster };
+      if (typeof cluster.proposedHeading === "string" && cluster.proposedHeading.length > HEADING_MAX) {
+        cOut.proposedHeading = cluster.proposedHeading.slice(0, HEADING_MAX - 3) + "...";
+      }
+      if (typeof cluster.proposedBody === "string" && cluster.proposedBody.length > BODY_MAX) {
+        cOut.proposedBody = cluster.proposedBody.slice(0, BODY_MAX - 16) + "\n[…truncated]";
+      }
+      if (typeof cluster.rationale === "string" && cluster.rationale.length > RATIONALE_MAX) {
+        cOut.rationale = cluster.rationale.slice(0, RATIONALE_MAX - 16) + "\n[…truncated]";
+      }
+      return cOut;
+    });
+  }
+  if (typeof obj.notes === "string" && (obj.notes as string).length > NOTES_MAX) {
+    out.notes = (obj.notes as string).slice(0, NOTES_MAX - 16) + "\n[…truncated]";
+  }
+  return out;
 }
 
 // ISO-style date matcher: catches `2026-05-05`, `2026-04-28`, etc. Used by
@@ -628,8 +638,13 @@ interface SectionWithOffset extends ParsedSection {
   fileEnd: number;
 }
 
+// Mirrors `SECTION_RE` in split.ts including the optional `tags:` suffix
+// (#142+ summarizer shape). Splicer correctness depends on this matching the
+// same set of sections `parseClaudeMdSections` returns — divergence would
+// mean `cluster.sectionIds` (numbered against split.ts's parse) wouldn't
+// line up with the offsets here.
 const SECTION_RE_WITH_OFFSETS =
-  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
+  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+(?:\s+tags:\S+)?\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
 
 function parseClaudeMdSectionsWithOffsets(md: string): SectionWithOffset[] {
   const out: SectionWithOffset[] = [];

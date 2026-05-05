@@ -654,3 +654,77 @@ test("computeProposalHash: stable across calls on identical inputs, drifts on fi
 // AGENTS_ROOT usage in the test suite is informational — not asserted, but
 // surfaced here so a future reader sees how the tmp-agent dir is computed.
 void AGENTS_ROOT;
+
+// ---------------------------------------------------------------------------
+// Regressions surfaced by running Phase A on production agent CLAUDE.md
+// files post-#165 merge. Both bugs blocked the entire feature on any agent
+// that had received a #142+ summarizer pass — i.e. nearly every active one.
+// ---------------------------------------------------------------------------
+
+import { clampClusterFields } from "./compactClaudeMd.js";
+
+test("parseClaudeMdSections: matches sentinels with the optional `tags:` suffix (#142+ shape)", () => {
+  // Pre-fix, SECTION_RE required `ts:\S+\s*-->`, so any sentinel emitted by
+  // appendBlock with a tags fingerprint was silently skipped — Phase A saw
+  // 3/12 sections in agent-92ff, 3/18 in agent-916a. The fix mirrors the
+  // same allowance already in `SENTINEL_RE` (src/util/sentinels.ts).
+  const md =
+    "<!-- run:run-A issue:#100 outcome:implement ts:2026-05-05T00:00:00.000Z tags:cli-gate,phase-split -->\n" +
+    "## Tagged section\n\nbody-A\n" +
+    "<!-- run:run-B issue:#101 outcome:implement ts:2026-05-05T00:01:00.000Z -->\n" +
+    "## Untagged section\n\nbody-B\n";
+  const sections = parseClaudeMdSections(md);
+  assert.equal(sections.length, 2);
+  assert.equal(sections[0].issueId, 100);
+  assert.equal(sections[0].heading, "Tagged section");
+  assert.equal(sections[1].issueId, 101);
+  assert.equal(sections[1].heading, "Untagged section");
+});
+
+test("clampClusterFields: trims top-level `notes` past the 500-char cap", () => {
+  // Pre-fix, `notes` was schema-capped at 500 chars but never clamped, so a
+  // verbose model commentary tripped Zod and the entire proposal hard-failed
+  // (observed crash on agent-9a77 with a 500+ char notes value).
+  const longNotes = "x".repeat(2000);
+  const clamped = clampClusterFields({
+    clusters: [],
+    unclusteredSectionIds: [],
+    notes: longNotes,
+  }) as { notes: string };
+  assert.ok(
+    clamped.notes.length <= 500,
+    `clamped notes must fit the 500-char cap (got ${clamped.notes.length})`,
+  );
+  assert.match(clamped.notes, /\[…truncated\]$/);
+});
+
+test("clampClusterFields: leaves short notes untouched", () => {
+  const out = clampClusterFields({
+    clusters: [],
+    unclusteredSectionIds: [],
+    notes: "short note",
+  }) as { notes: string };
+  assert.equal(out.notes, "short note");
+});
+
+test("clampClusterFields: still trims cluster body / heading / rationale alongside notes", () => {
+  const out = clampClusterFields({
+    clusters: [
+      {
+        sectionIds: ["s0", "s1", "s2"],
+        proposedHeading: "x".repeat(200),
+        proposedBody: "y".repeat(8000),
+        rationale: "z".repeat(1200),
+      },
+    ],
+    unclusteredSectionIds: [],
+    notes: "n".repeat(700),
+  }) as {
+    clusters: Array<{ proposedHeading: string; proposedBody: string; rationale: string }>;
+    notes: string;
+  };
+  assert.ok(out.clusters[0].proposedHeading.length <= 100);
+  assert.ok(out.clusters[0].proposedBody.length <= 6000);
+  assert.ok(out.clusters[0].rationale.length <= 800);
+  assert.ok(out.notes.length <= 500);
+});

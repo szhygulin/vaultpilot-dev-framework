@@ -103,8 +103,14 @@ export interface ParsedSection {
 // `outcome:compacted` blocks) so re-running parsing on a post-merge file
 // surfaces every compacted block as one section carrying every source ID.
 // Single-issue blocks (`issue:#42`) match the same group with one element.
+//
+// `(?:\s+tags:\S+)?` accepts the optional `tags:t1,t2,...` suffix that
+// `appendBlock` started emitting in #142. Without this, every modern
+// summarizer-emitted sentinel is silently skipped and `parseClaudeMdSections`
+// reports a section count well below the agent's actual lesson count.
+// Mirrors the same allowance already in `SENTINEL_RE` (src/util/sentinels.ts).
 const SECTION_RE =
-  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
+  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+(?:\s+tags:\S+)?\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
 
 export function parseIssueIdsFromCapture(raw: string): number[] {
   // Split `100+#101+#102` → ["100", "#101", "#102"] → [100, 101, 102].

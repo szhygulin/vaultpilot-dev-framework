@@ -547,6 +547,12 @@ async function runOneIssue(opts: {
       prUrl: env.prUrl,
       commentUrl: env.commentUrl,
       partialBranchUrl: result.partialBranchUrl,
+      // Issue #141 (Phase 1 of #134): pass the auto-filed Phase N+1 issue
+      // URL through to the run-state entry when the agent emitted one.
+      // Inert today (no caller renders the workflow prompt's Step N+1 yet);
+      // Phase 2 wires the CLI flag that flips `autoPhaseFollowup` on and
+      // makes this assignment observable.
+      nextPhaseIssueUrl: env.nextPhaseIssueUrl,
     };
     nonCleanExit = env.decision === "error";
   } else {

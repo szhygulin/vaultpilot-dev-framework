@@ -6,12 +6,22 @@
 // Pure functions only — file I/O lives in `specialization.ts`. Tested in
 // `sentinels.test.ts` (node --test glob picks up `dist/src/util/*.test.js`).
 
+// `issue:#(\d+(?:\+#\d+)*)` so `outcome:compacted` blocks (issue #162) —
+// which embed multiple source IDs as `issue:#100+#101+#102` — are still
+// located by the expiry walker. Without this, locateSentinels skips the
+// compacted line, the previous block silently absorbs the compacted
+// block's bytes as part of its body, and dropping the previous block on
+// expiry takes the compacted block out as collateral damage.
 const SENTINEL_RE =
-  /^<!--\s+run:(\S+)\s+issue:#(\d+)\s+outcome:([\w-]+)\s+ts:(\S+?)(?:\s+tags:(\S+))?\s+-->$/;
+  /^<!--\s+run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:([\w-]+)\s+ts:(\S+?)(?:\s+tags:(\S+))?\s+-->$/;
 
 export interface SentinelHeader {
   runId: string;
+  /** Canonical / first issue ID. For non-compacted blocks, the only ID. */
   issueId: number;
+  /** All source issue IDs for `outcome:compacted` blocks (issue #162).
+   * Undefined for single-issue blocks. */
+  issueIds?: number[];
   outcome: string;
   ts: string;
   tags: string[];
@@ -23,13 +33,18 @@ export function parseSentinelHeader(line: string): SentinelHeader | null {
   const tagsRaw = m[5];
   const tags =
     tagsRaw && tagsRaw.length > 0 ? tagsRaw.split(",").filter(Boolean) : [];
-  return {
+  const issueIds = m[2].split("+").map((tok) => Number(tok.replace(/^#/, "")));
+  const header: SentinelHeader = {
     runId: m[1],
-    issueId: Number(m[2]),
+    issueId: issueIds[0],
     outcome: m[3],
     ts: m[4],
     tags,
   };
+  // Only set when the sentinel encodes multiple IDs — keeps the
+  // single-ID shape deep-equal-comparable to the pre-#162 record shape.
+  if (issueIds.length > 1) header.issueIds = issueIds;
+  return header;
 }
 
 export function formatSentinelHeader(input: {

@@ -1,5 +1,9 @@
 // Phase A (issue #158) — advisory-only compaction-via-merge for an agent's
 // CLAUDE.md when growth is in section *depth* rather than section *count*.
+// Phase B (issue #162) — destructive `applyCompaction` rewrite under the
+// same per-file lock used by `appendBlock` / `expireSentinels`, gated by a
+// proposalHash drift check and the validator's hard rejection on dropped
+// past-incident dates.
 //
 // The splitter (src/agent/split.ts) addresses a different overload shape:
 // an agent has accumulated multiple distinct sub-specialties that should
@@ -8,17 +12,18 @@
 // across siblings; the right tool is to merge near-duplicate lessons in
 // place, preserving the specialty.
 //
-// This module is purely advisory: it parses sections, asks an opus model
-// to propose merge clusters, validates the proposal (Zod schema + a
-// collapsed-distinct-rules guard), and emits a dry-run report. No file
-// mutation. The destructive `--apply` path is deferred to issue #162.
-//
-// Usage: `vp-dev agents compact-claude-md <agentId> [--json] [--min-cluster-size N]`.
+// Usage:
+//   vp-dev agents compact-claude-md <agentId> [--json] [--min-cluster-size N]
+//   vp-dev agents compact-claude-md <agentId> --apply
+//   vp-dev agents compact-claude-md <agentId> --confirm <token>
 
+import { promises as fs } from "node:fs";
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeBinPath } from "./sdkBinary.js";
 import { parseClaudeMdSections, type ParsedSection } from "./split.js";
+import { agentClaudeMdPath } from "./specialization.js";
+import { withFileLock } from "../state/locks.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { ORCHESTRATOR_MODEL_SPLIT } from "../orchestrator/models.js";
 import type { AgentRecord } from "../types.js";
@@ -433,12 +438,328 @@ export function formatCompactionProposal(p: CompactionProposal): string {
   lines.push("");
   if (p.warnings.length > 0) {
     lines.push(
-      `⚠ ${p.warnings.length} cluster(s) flagged by the collapsed-distinct-rules validator — review carefully before any --apply path.`,
+      `⚠ ${p.warnings.length} cluster(s) flagged by the collapsed-distinct-rules validator — --apply will reject this proposal until re-run produces a clean output.`,
     );
   } else {
     lines.push(
-      "No validator warnings. (Phase A is advisory only; --apply is tracked at #162.)",
+      "No validator warnings. Pass --apply to mint a confirm token; --confirm <token> to perform the rewrite.",
     );
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Phase B (issue #162): destructive applyCompaction
+// ---------------------------------------------------------------------------
+
+export interface ApplyCompactionInput {
+  agentId: string;
+  /** Proposal recorded in the confirm token at plan time. */
+  proposal: CompactionProposal;
+  /** Hash recorded in the confirm token: sha256(JSON.stringify(proposal) + sha256(file@plan)). */
+  expectedProposalHash: string;
+  /** Compute proposalHash from the live file (re-imported here to avoid a cyclical import). */
+  computeProposalHash: (proposal: CompactionProposal, file: string) => string;
+  /** Synthetic runId stamped into the merged sentinels. Defaults to `merge-<ISO>`. */
+  runId?: string;
+  /** Override `Date.now`/timestamp for deterministic tests. Defaults to `new Date().toISOString()`. */
+  now?: () => string;
+}
+
+export type ApplyCompactionResult =
+  | {
+      kind: "applied";
+      bytesBefore: number;
+      bytesAfter: number;
+      clustersApplied: number;
+      sectionsMerged: number;
+      runId: string;
+    }
+  | {
+      kind: "drift-rejected";
+      reason:
+        | "proposal-hash"
+        | "missing-section"
+        | "warnings-present"
+        | "no-clusters"
+        | "missing-file";
+      details: string;
+    };
+
+/**
+ * Apply a Phase A proposal to the agent's CLAUDE.md.
+ *
+ * Steps (all under `withFileLock(filePath)` so the read/validate/rewrite/
+ * rename sequence is atomic against `appendBlock` / `expireSentinels`):
+ *
+ *  1. Re-read the file. Reject if the proposalHash recomputed against the
+ *     current bytes doesn't match the stored hash (file drifted between
+ *     plan and confirm — re-propose required).
+ *  2. Re-parse sections. Reject if any cluster references a sectionId that
+ *     no longer exists.
+ *  3. Re-run the collapsed-distinct-rules validator against the live
+ *     parse. Phase A treats warnings as advisory; Phase B treats them as
+ *     hard rejections (per #162: "if two source sections cite different
+ *     past-incident dates and the merged body cites only one, reject").
+ *  4. Splice the file: keep the prelude + every non-clustered section
+ *     verbatim, replace each cluster's first source section with one
+ *     synthesized merged block, drop the rest. Emit via tmp + atomic
+ *     rename (same write pattern as `appendBlock`).
+ *
+ * The synthesized sentinel uses the issue spec shape:
+ *   <!-- run:merge-<runId> issue:#<N1>+#<N2>+#<N3> outcome:compacted ts:<ISO> -->
+ * `parseClaudeMdSections` and `parseSentinelHeader` accept this compound ID
+ * shape (see `SECTION_RE` in split.ts and `SENTINEL_RE` in sentinels.ts), so
+ * a compacted block re-parses as a single section carrying every source ID.
+ */
+export async function applyCompaction(
+  input: ApplyCompactionInput,
+): Promise<ApplyCompactionResult> {
+  if (input.proposal.clusters.length === 0) {
+    return {
+      kind: "drift-rejected",
+      reason: "no-clusters",
+      details: "Proposal has zero clusters; nothing to apply.",
+    };
+  }
+  const filePath = agentClaudeMdPath(input.agentId);
+  return withFileLock(filePath, async () => {
+    let currentFile: string;
+    try {
+      currentFile = await fs.readFile(filePath, "utf-8");
+    } catch {
+      return {
+        kind: "drift-rejected",
+        reason: "missing-file",
+        details: `agents/${input.agentId}/CLAUDE.md no longer exists; nothing to compact.`,
+      };
+    }
+
+    const computedHash = input.computeProposalHash(input.proposal, currentFile);
+    if (computedHash !== input.expectedProposalHash) {
+      return {
+        kind: "drift-rejected",
+        reason: "proposal-hash",
+        details:
+          "CLAUDE.md content changed between --apply and --confirm. Re-run --apply to generate a fresh proposal + token.",
+      };
+    }
+
+    const sections = parseClaudeMdSectionsWithOffsets(currentFile);
+    const sectionById = new Map(sections.map((s) => [s.sectionId, s]));
+    for (const c of input.proposal.clusters) {
+      for (const sid of c.sectionIds) {
+        if (!sectionById.has(sid)) {
+          return {
+            kind: "drift-rejected",
+            reason: "missing-section",
+            details: `Cluster references sectionId ${sid} which is not present in the current parse.`,
+          };
+        }
+      }
+    }
+
+    const warnings = findDroppedIncidentDates(
+      { clusters: input.proposal.clusters },
+      sections,
+    );
+    if (warnings.length > 0) {
+      const summary = warnings
+        .map(
+          (w) =>
+            `cluster[${w.clusterIndex}] dropped ${w.missingDates.join(",")}`,
+        )
+        .join("; ");
+      return {
+        kind: "drift-rejected",
+        reason: "warnings-present",
+        details: `Collapsed-distinct-rules validator flagged the proposal at apply time: ${summary}. Re-run --apply.`,
+      };
+    }
+
+    const runId = input.runId ?? defaultMergeRunId(input.now);
+    const ts = input.now?.() ?? new Date().toISOString();
+    const rewritten = spliceCompactedSections({
+      currentFile,
+      sections,
+      clusters: input.proposal.clusters,
+      runId,
+      ts,
+    });
+
+    const tmp = `${filePath}.tmp.${process.pid}`;
+    await fs.writeFile(tmp, rewritten);
+    await fs.rename(tmp, filePath);
+
+    const sectionsMerged = input.proposal.clusters.reduce(
+      (acc, c) => acc + c.sectionIds.length,
+      0,
+    );
+    return {
+      kind: "applied",
+      bytesBefore: Buffer.byteLength(currentFile, "utf-8"),
+      bytesAfter: Buffer.byteLength(rewritten, "utf-8"),
+      clustersApplied: input.proposal.clusters.length,
+      sectionsMerged,
+      runId,
+    };
+  });
+}
+
+function defaultMergeRunId(now?: () => string): string {
+  const iso = now?.() ?? new Date().toISOString();
+  // Match the makeRunId() shape (`run-<ISO with : and . replaced by ->`)
+  // so the runId is filesystem-safe and lex-sorts chronologically. Prefix
+  // with `merge-` so a future audit (`grep run:merge- agents/...`) can
+  // identify compaction-emitted blocks.
+  const safe = iso.replace(/[:.]/g, "-");
+  return `merge-${safe}`;
+}
+
+// Position-aware section parser used by Phase B's splicer. Same regex as
+// `parseClaudeMdSections` (re-imported from split.ts so the shape stays
+// in sync) but capture offsets too. Parallel sectionId numbering matches
+// what `parseClaudeMdSections` produces, so cluster.sectionIds bind
+// stable across both views.
+interface SectionWithOffset extends ParsedSection {
+  /** Char offset of the first char of `<!--` in the section's sentinel. */
+  fileStart: number;
+  /** Char offset just past the section's body (lookahead position). */
+  fileEnd: number;
+}
+
+const SECTION_RE_WITH_OFFSETS =
+  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
+
+function parseClaudeMdSectionsWithOffsets(md: string): SectionWithOffset[] {
+  const out: SectionWithOffset[] = [];
+  let i = 0;
+  for (const m of md.matchAll(SECTION_RE_WITH_OFFSETS)) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    const issueIds = m[2]
+      .split("+")
+      .map((tok) => Number(tok.replace(/^#/, "")));
+    const section: SectionWithOffset = {
+      sectionId: `s${i++}`,
+      runId: m[1],
+      issueId: issueIds[0],
+      outcome: m[3],
+      heading: m[4].trim(),
+      body: m[5].trim(),
+      fileStart: start,
+      fileEnd: end,
+    };
+    if (issueIds.length > 1) section.issueIds = issueIds;
+    out.push(section);
+  }
+  return out;
+}
+
+interface SpliceInput {
+  currentFile: string;
+  sections: SectionWithOffset[];
+  clusters: CompactionCluster[];
+  runId: string;
+  ts: string;
+}
+
+/**
+ * Walk sections in file order. For sections that aren't part of a cluster,
+ * emit their original bytes. For each cluster, emit the merged block once,
+ * at the position of its first source section in file order; drop the
+ * rest. Inter-block separators (the single `\n` between sentinels) follow
+ * the section they precede — when a section is dropped, its leading `\n`
+ * goes with it so the rewritten file stays well-formed.
+ */
+export function spliceCompactedSections(input: SpliceInput): string {
+  const sectionIdOrder = new Map<string, number>();
+  input.sections.forEach((s, idx) => sectionIdOrder.set(s.sectionId, idx));
+
+  // For each cluster, the canonical position is its earliest member in
+  // file order. The other members are dropped during the walk.
+  const clusterByCanonicalId = new Map<string, CompactionCluster>();
+  const skipSectionIds = new Set<string>();
+  for (const c of input.clusters) {
+    let canonicalIdx = Infinity;
+    let canonicalId = c.sectionIds[0];
+    for (const sid of c.sectionIds) {
+      const idx = sectionIdOrder.get(sid);
+      if (idx === undefined) continue;
+      if (idx < canonicalIdx) {
+        canonicalIdx = idx;
+        canonicalId = sid;
+      }
+    }
+    clusterByCanonicalId.set(canonicalId, c);
+    for (const sid of c.sectionIds) {
+      if (sid !== canonicalId) skipSectionIds.add(sid);
+    }
+  }
+
+  if (input.sections.length === 0) return input.currentFile;
+
+  // Prelude = everything before the first section's sentinel.
+  let out = input.currentFile.slice(0, input.sections[0].fileStart);
+
+  for (let i = 0; i < input.sections.length; i++) {
+    const sec = input.sections[i];
+    const isSkipped = skipSectionIds.has(sec.sectionId);
+    if (!isSkipped) {
+      const cluster = clusterByCanonicalId.get(sec.sectionId);
+      if (cluster) {
+        out += renderMergedBlock(cluster, input.runId, input.ts);
+      } else {
+        out += input.currentFile.slice(sec.fileStart, sec.fileEnd);
+      }
+    }
+    if (i < input.sections.length - 1) {
+      const sep = input.currentFile.slice(
+        sec.fileEnd,
+        input.sections[i + 1].fileStart,
+      );
+      // Each section "owns" the separator that follows it. If we dropped
+      // the section, drop the trailing separator too — otherwise we'd
+      // accumulate stray `\n`s where the merged block doesn't need them.
+      if (!isSkipped) out += sep;
+    } else if (!isSkipped) {
+      // Last section was kept — emit any trailing content (typically a
+      // trailing `\n` written by `appendBlock`).
+      out += input.currentFile.slice(sec.fileEnd);
+    } else {
+      // Last section was skipped — preserve trailing content of the file
+      // (the `appendBlock`-written trailing `\n`) so the file still ends
+      // with a newline.
+      out += input.currentFile.slice(sec.fileEnd);
+    }
+  }
+  return out;
+}
+
+/**
+ * Render a single merged block with the issue-#162 sentinel shape:
+ *
+ *   <!-- run:<runId> issue:#<N1>+#<N2>+#<N3> outcome:compacted ts:<ISO> -->
+ *   ## <heading>
+ *
+ *   <body>
+ *
+ * No trailing newline — the caller (splicer) emits inter-block separators.
+ */
+export function renderMergedBlock(
+  cluster: CompactionCluster,
+  runId: string,
+  ts: string,
+): string {
+  const ids = Array.from(
+    new Set(cluster.sourceProvenance.map((p) => p.issueId)),
+  ).sort((a, b) => a - b);
+  // Compound issue token: `#100+#101+#102`. The first `#` is in front of
+  // the literal in the regex (`issue:#(\d+...)`) so each tok includes its
+  // own `#` from index 1 onwards; here we prepend `#` to all and join.
+  const idToken = ids.length > 0 ? ids.map((n) => `#${n}`).join("+") : "#0";
+  const sentinel = `<!-- run:${runId} issue:${idToken} outcome:compacted ts:${ts} -->`;
+  const heading = `## ${cluster.proposedHeading.trim()}`;
+  const body = cluster.proposedBody.trim();
+  return `${sentinel}\n${heading}\n\n${body}`;
 }

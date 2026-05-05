@@ -77,7 +77,11 @@ export interface ParsedSection {
   // partitions. Position-based, stable across calls on the same MD file.
   sectionId: string;
   runId?: string;
+  /** Canonical / first issue ID. For non-compacted blocks, the only ID. */
   issueId?: number;
+  /** Set on `outcome:compacted` blocks (issue #162) — the full list of
+   * source issue IDs the merge spans. Undefined for single-issue blocks. */
+  issueIds?: number[];
   outcome?: string;
   heading: string;
   body: string;
@@ -94,21 +98,36 @@ export interface ParsedSection {
 // so the terminator must look for the literal `-->` rather than excluding
 // hyphens. Section body terminates at the next provenance comment OR at
 // EOF — the summarizer always re-emits the comment per appended block.
+//
+// `issue:#N` accepts compound IDs of the shape `#N1+#N2+#N3` (issue #162's
+// `outcome:compacted` blocks) so re-running parsing on a post-merge file
+// surfaces every compacted block as one section carrying every source ID.
+// Single-issue blocks (`issue:#42`) match the same group with one element.
 const SECTION_RE =
-  /<!--\s*run:(\S+)\s+issue:#(\d+)\s+outcome:(\S+)\s+ts:\S+\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
+  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
+
+export function parseIssueIdsFromCapture(raw: string): number[] {
+  // Split `100+#101+#102` → ["100", "#101", "#102"] → [100, 101, 102].
+  return raw.split("+").map((tok) => Number(tok.replace(/^#/, "")));
+}
 
 export function parseClaudeMdSections(md: string): ParsedSection[] {
   const out: ParsedSection[] = [];
   let i = 0;
   for (const m of md.matchAll(SECTION_RE)) {
-    out.push({
+    const issueIds = parseIssueIdsFromCapture(m[2]);
+    const section: ParsedSection = {
       sectionId: `s${i++}`,
       runId: m[1],
-      issueId: Number(m[2]),
+      issueId: issueIds[0],
       outcome: m[3],
       heading: m[4].trim(),
       body: m[5].trim(),
-    });
+    };
+    // Only set when the section encodes multiple IDs — single-ID
+    // sections stay deep-equal-comparable to the pre-#162 shape.
+    if (issueIds.length > 1) section.issueIds = issueIds;
+    out.push(section);
   }
   return out;
 }

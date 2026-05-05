@@ -79,9 +79,17 @@ import {
 } from "./agent/split.js";
 import {
   DEFAULT_MIN_CLUSTER_SIZE,
+  applyCompaction,
   formatCompactionProposal,
   proposeCompaction,
 } from "./agent/compactClaudeMd.js";
+import {
+  computeProposalHash,
+  deleteCompactConfirmToken,
+  mintToken as mintCompactToken,
+  readCompactConfirmToken,
+  writeCompactConfirmToken,
+} from "./state/compactConfirm.js";
 import {
   applyPruneProposal,
   detectPruneCandidates,
@@ -295,7 +303,7 @@ export function buildCli(): Command {
     .addCommand(
       new Command("compact-claude-md")
         .description(
-          "Phase A (#158): propose merge clusters for an agent's CLAUDE.md when growth is in section depth (few large sections). Advisory only — no file mutation. --apply is tracked at #162.",
+          "Propose merge clusters for an agent's CLAUDE.md (#158 Phase A). With --apply: emit a confirm token (15-min TTL); with --confirm <token>: rewrite the file under the per-file lock (#162 Phase B). Two-step is the human-in-the-loop checkpoint — no single-flag silent bypass.",
         )
         .argument("<agentId>", "Agent to inspect (e.g. agent-916a)")
         .option("--json", "Print machine-readable JSON")
@@ -304,6 +312,14 @@ export function buildCli(): Command {
           "Minimum sections per merge cluster (default 3; 2 is too aggressive per issue #158)",
           parsePositive,
           DEFAULT_MIN_CLUSTER_SIZE,
+        )
+        .option(
+          "--apply",
+          "Compute the proposal AND mint a confirm token under state/compact-confirm-<token>.json (15-min TTL). Re-invoke with --confirm <token> to perform the rewrite.",
+        )
+        .option(
+          "--confirm <token>",
+          "Apply the proposal recorded in the named token, after re-validating against the live file content.",
         )
         .action(async (agentId, opts) => {
           await cmdAgentsCompactClaudeMd(agentId, opts);
@@ -1924,12 +1940,26 @@ async function confirmApply(input: {
 interface AgentsCompactClaudeMdOpts {
   json?: boolean;
   minClusterSize: number;
+  apply?: boolean;
+  confirm?: string;
 }
 
 async function cmdAgentsCompactClaudeMd(
   agentId: string,
   opts: AgentsCompactClaudeMdOpts,
 ): Promise<void> {
+  if (opts.apply && opts.confirm) {
+    process.stderr.write(
+      "ERROR: --apply and --confirm are mutually exclusive. Use --apply first, then --confirm <token>.\n",
+    );
+    process.exit(2);
+  }
+
+  if (opts.confirm) {
+    await cmdAgentsCompactClaudeMdConfirm(agentId, opts);
+    return;
+  }
+
   const reg = await loadRegistry();
   const agent = reg.agents.find((a) => a.agentId === agentId);
   if (!agent) {
@@ -1959,11 +1989,134 @@ async function cmdAgentsCompactClaudeMd(
     minClusterSize: opts.minClusterSize,
   });
 
+  if (!opts.apply) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ agentId, proposal }, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write(formatCompactionProposal(proposal) + "\n");
+    return;
+  }
+
+  // --apply path: refuse to mint a token if the proposal isn't safe to apply.
+  // Per #162, validator warnings are a hard rejection (Phase A surfaces them
+  // as advisory; Phase B treats them as the gate). Empty proposals are also
+  // rejected — there's nothing to confirm.
+  if (proposal.clusters.length === 0) {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, proposal, applyRefused: "no-clusters" }, null, 2) + "\n",
+      );
+      return;
+    }
+    process.stdout.write(formatCompactionProposal(proposal) + "\n");
+    process.stdout.write(
+      "\nERROR: --apply refused; proposal has zero merge clusters. Nothing to confirm.\n",
+    );
+    process.exit(2);
+  }
+  if (proposal.warnings.length > 0) {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify(
+          { agentId, proposal, applyRefused: "warnings-present" },
+          null,
+          2,
+        ) + "\n",
+      );
+      return;
+    }
+    process.stdout.write(formatCompactionProposal(proposal) + "\n");
+    process.stdout.write(
+      `\nERROR: --apply refused; ${proposal.warnings.length} cluster(s) flagged by collapsed-distinct-rules validator. Re-run after the model emits a clean proposal.\n`,
+    );
+    process.exit(2);
+  }
+
+  const token = mintCompactToken();
+  const proposalHash = computeProposalHash(proposal, md);
+  await writeCompactConfirmToken({ token, agentId, proposal, proposalHash });
+
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ agentId, proposal }, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify(
+        {
+          agentId,
+          proposal,
+          confirmToken: token,
+          proposalHash,
+          confirmCommand: `vp-dev agents compact-claude-md ${agentId} --confirm ${token}`,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
     return;
   }
   process.stdout.write(formatCompactionProposal(proposal) + "\n");
+  process.stdout.write(
+    `\nConfirm token: ${token} (15-min TTL, written to state/compact-confirm-${token}.json)\n` +
+      `Apply with:    vp-dev agents compact-claude-md ${agentId} --confirm ${token}\n` +
+      `If the file changes between now and confirm, the token rejects and you'll need to re-run --apply.\n`,
+  );
+}
+
+async function cmdAgentsCompactClaudeMdConfirm(
+  agentId: string,
+  opts: AgentsCompactClaudeMdOpts,
+): Promise<void> {
+  const token = opts.confirm;
+  if (!token) {
+    process.stderr.write("ERROR: --confirm requires a token argument.\n");
+    process.exit(2);
+  }
+  const read = await readCompactConfirmToken(token);
+  if (!read.ok) {
+    process.stderr.write(`ERROR: ${read.message}\n`);
+    process.exit(2);
+  }
+  if (read.record.agentId !== agentId) {
+    process.stderr.write(
+      `ERROR: token ${token} was minted for agent '${read.record.agentId}', not '${agentId}'.\n`,
+    );
+    process.exit(2);
+  }
+
+  const result = await applyCompaction({
+    agentId,
+    proposal: read.record.proposal,
+    expectedProposalHash: read.record.proposalHash,
+    computeProposalHash,
+  });
+
+  if (result.kind === "drift-rejected") {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, token, result }, null, 2) + "\n",
+      );
+    } else {
+      process.stderr.write(
+        `ERROR: --confirm rejected (${result.reason}): ${result.details}\n`,
+      );
+    }
+    // Don't delete the token on drift — operator may want to re-inspect.
+    process.exit(2);
+  }
+
+  await deleteCompactConfirmToken(token);
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify({ agentId, token, result }, null, 2) + "\n",
+    );
+    return;
+  }
+  process.stdout.write(
+    `Compacted ${agentId}/CLAUDE.md\n` +
+      `  ${(result.bytesBefore / 1024).toFixed(1)}KB -> ${(result.bytesAfter / 1024).toFixed(1)}KB ` +
+      `(${result.clustersApplied} cluster(s), ${result.sectionsMerged} sections merged)\n` +
+      `  merge runId: ${result.runId}\n`,
+  );
 }
 
 interface AgentsPruneOpts {

@@ -20,13 +20,28 @@
 // - The Zod-validated parse is split into a pure helper
 //   (`parseDedupResponse`) so tests can exercise the parsing rubric
 //   without spinning up the SDK or paying for a real Opus call.
+// - Issue #156: a content-hash cache (mirroring `triage.ts`'s per-issue
+//   cache) stabilizes both the cluster output AND the per-call cost
+//   across `--plan` → `--confirm` invocations. Without it, the LLM call
+//   re-runs on every invocation: cost varies (LLM is non-deterministic
+//   in token-billing even when the cluster decision is stable), the
+//   `Dedup cost:` line in the gate text drifts, and the previewHash
+//   check rejects the very first `--confirm` after a fresh `--plan`.
+//   The cache also avoids paying for the Opus call twice when a single
+//   user is just walking the two-step flow (plan, then confirm).
 
+import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
+import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { ensureDir } from "../state/locks.js";
 import { ORCHESTRATOR_MODEL_DEDUP } from "./models.js";
 import type { IssueDetail } from "../github/gh.js";
 import type { DuplicateCluster } from "../types.js";
 import type { Logger } from "../log/logger.js";
+
+export const DEDUP_DIR = path.resolve(process.cwd(), "state", "dedup");
 
 // Resolved at module load from `models.ts` (env-overridable). See
 // `src/orchestrator/models.ts` for tier rationale and override env vars.
@@ -47,11 +62,28 @@ const DedupResponseSchema = z.object({
 export interface DetectDuplicatesInput {
   issues: IssueDetail[];
   logger?: Logger;
+  /**
+   * Issue #156: target repo slug ("owner/repo") used to namespace the
+   * dedup cache file under `state/dedup/<owner__repo>.json`. When
+   * omitted (e.g. unit tests that don't care about persistence), the
+   * cache is bypassed entirely — every call hits the model. Production
+   * call-sites (`src/cli.ts`) MUST pass this so the `--plan` → `--confirm`
+   * flow returns identical clusters and identical cost on the second
+   * invocation, keeping the previewHash stable.
+   */
+  targetRepo?: string;
 }
 
 export interface DetectDuplicatesResult {
   clusters: DuplicateCluster[];
   costUsd: number;
+  /**
+   * Issue #156: true when the result was served from the cache (no
+   * model call). Surfaced so the orchestrator can log cache-hit rate
+   * the same way `triage.ts` does, and so the `--plan` / `--confirm`
+   * round-trip can be observed in the run log.
+   */
+  fromCache: boolean;
 }
 
 /**
@@ -71,7 +103,36 @@ export async function detectDuplicates(
   input: DetectDuplicatesInput,
 ): Promise<DetectDuplicatesResult> {
   if (input.issues.length < 2) {
-    return { clusters: [], costUsd: 0 };
+    return { clusters: [], costUsd: 0, fromCache: false };
+  }
+
+  // Issue #156: cache layer mirrors `triage.ts`. Hash is over the input
+  // issue set's content (body + comments + labels) plus the rubric
+  // fingerprint, so the cache invalidates when:
+  //   - any issue's body or comments change (body/comment edits surface
+  //     in the next `gh issue view`)
+  //   - the candidate set itself changes (an issue closes / a new one
+  //     enters the dispatch list, e.g. when triage flips a verdict)
+  //   - the rubric or prompt-builder shape changes (RUBRIC_FINGERPRINT
+  //     bump on `DEDUP_SYSTEM_PROMPT` edits)
+  // When `targetRepo` is omitted (tests / dry-run-with-no-persistence)
+  // the cache is bypassed and every call hits the model.
+  const contentHash = computeContentHash(input.issues);
+  if (input.targetRepo) {
+    const cached = await readCache(input.targetRepo, contentHash);
+    if (cached) {
+      input.logger?.info("dedup.cache_hit", {
+        contentHash,
+        clusterCount: cached.clusters.length,
+        costUsd: cached.costUsd,
+        issueCount: input.issues.length,
+      });
+      return {
+        clusters: cached.clusters,
+        costUsd: cached.costUsd,
+        fromCache: true,
+      };
+    }
   }
 
   const userPrompt = buildPrompt(input.issues);
@@ -98,13 +159,13 @@ export async function detectDuplicates(
           costUsd = msg.total_cost_usd ?? 0;
         } else {
           input.logger?.warn("dedup.model_failed", { subtype: msg.subtype });
-          return { clusters: [], costUsd: 0 };
+          return { clusters: [], costUsd: 0, fromCache: false };
         }
       }
     }
   } catch (err) {
     input.logger?.warn("dedup.exception", { err: (err as Error).message });
-    return { clusters: [], costUsd: 0 };
+    return { clusters: [], costUsd: 0, fromCache: false };
   }
 
   const validIds = new Set(input.issues.map((i) => i.id));
@@ -113,9 +174,25 @@ export async function detectDuplicates(
     input.logger?.warn("dedup.malformed_payload", {
       raw: raw.slice(0, 4000),
     });
-    return { clusters: [], costUsd };
+    // Don't cache parse failures: the next invocation should retry the
+    // model rather than serve `clusters: []` with whatever cost was
+    // billed for the malformed call.
+    return { clusters: [], costUsd, fromCache: false };
   }
-  return { clusters: parsed, costUsd };
+  if (input.targetRepo) {
+    // Best-effort: a cache write failure is not a run blocker. The
+    // caller already has the result; the worst case is the next
+    // `--confirm` re-runs the model and trips previewHash drift, which
+    // surfaces as the documented error rather than silent corruption.
+    try {
+      await writeCache(input.targetRepo, contentHash, parsed, costUsd);
+    } catch (err) {
+      input.logger?.warn("dedup.cache_write_failed", {
+        err: (err as Error).message,
+      });
+    }
+  }
+  return { clusters: parsed, costUsd, fromCache: false };
 }
 
 /**
@@ -217,6 +294,130 @@ function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 3) + "...";
 }
+
+// Issue #156: hash of the rubric + prompt-builder shape, mixed into the
+// per-batch contentHash. Bumping the system prompt or buildPrompt() output
+// shape auto-invalidates previously-cached cluster decisions; without this
+// a rubric edit landing today would still serve yesterday's stale clusters
+// for every cached batch until the candidate set itself changed.
+const RUBRIC_FINGERPRINT = createHash("sha256")
+  .update(DEDUP_SYSTEM_PROMPT)
+  .update("\n--prompt-shape-v1--\n") // bump when buildPrompt() output shape changes
+  .digest("hex")
+  .slice(0, 16);
+
+// Compute a content hash for a batch of issues. Issues are sorted by id so
+// the same input set in different order yields the same hash — the dedup
+// model is order-insensitive and the cache should be too. Comments are
+// keyed by createdAt|author|body (same convention as triage's
+// `commentKey`).
+function computeContentHash(issues: IssueDetail[]): string {
+  const sorted = [...issues].sort((a, b) => a.id - b.id);
+  const h = createHash("sha256");
+  h.update("rubric:" + RUBRIC_FINGERPRINT + "\n");
+  h.update(`count:${sorted.length}\n`);
+  for (const issue of sorted) {
+    h.update(`#${issue.id}|${issue.title}\n`);
+    h.update(`labels:${JSON.stringify(issue.labels)}\n`);
+    h.update("body:\n");
+    h.update(issue.body ?? "");
+    h.update("\n--comments--\n");
+    for (const c of issue.comments) {
+      h.update(`${c.createdAt}|${c.author}|${c.body}\n`);
+    }
+    h.update("\n--issue-end--\n");
+  }
+  return "sha256:" + h.digest("hex").slice(0, 32);
+}
+
+interface DedupCacheEntry {
+  targetRepo: string;
+  contentHash: string;
+  clusters: DuplicateCluster[];
+  // Cost stored on the original cache-miss invocation. Optional for
+  // forward-compat with cache files written by pre-#156 versions; absent
+  // entries degrade to `costUsd: 0` (mirrors triage.ts's pre-#137
+  // forward-compat behavior).
+  costUsd?: number;
+  detectedAt: string;
+}
+
+interface CachedDedup {
+  clusters: DuplicateCluster[];
+  costUsd: number;
+}
+
+function cacheFilePath(targetRepo: string): string {
+  // owner/repo -> owner__repo so the path is a single safe segment.
+  return path.join(DEDUP_DIR, `${targetRepo.replace("/", "__")}.json`);
+}
+
+async function readCache(
+  targetRepo: string,
+  contentHash: string,
+): Promise<CachedDedup | null> {
+  try {
+    const raw = await fs.readFile(cacheFilePath(targetRepo), "utf-8");
+    const entry = JSON.parse(raw) as DedupCacheEntry;
+    if (entry.contentHash !== contentHash) return null;
+    // Re-validate the cached clusters defensively: a corrupted file
+    // would otherwise smuggle invalid shapes back into the orchestrator.
+    if (!Array.isArray(entry.clusters)) return null;
+    const validated: DuplicateCluster[] = [];
+    for (const c of entry.clusters) {
+      const r = DuplicateClusterSchema.safeParse(c);
+      if (!r.success) return null;
+      validated.push({
+        canonical: r.data.canonical,
+        duplicates: r.data.duplicates,
+        rationale: r.data.rationale,
+      });
+    }
+    const costUsd =
+      typeof entry.costUsd === "number" && Number.isFinite(entry.costUsd)
+        ? entry.costUsd
+        : 0;
+    return { clusters: validated, costUsd };
+  } catch {
+    return null;
+  }
+}
+
+async function writeCache(
+  targetRepo: string,
+  contentHash: string,
+  clusters: DuplicateCluster[],
+  costUsd: number,
+): Promise<void> {
+  const entry: DedupCacheEntry = {
+    targetRepo,
+    contentHash,
+    clusters,
+    costUsd,
+    detectedAt: new Date().toISOString(),
+  };
+  const filePath = cacheFilePath(targetRepo);
+  await ensureDir(path.dirname(filePath));
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  await fs.writeFile(tmp, JSON.stringify(entry, null, 2));
+  await fs.rename(tmp, filePath);
+}
+
+// Exported for tests: the cache I/O round-trip is the failure surface for
+// issue #156 (Plan diverged on dedup-cost line). A pure-fs test can
+// validate the round-trip without an Opus call in the loop.
+export const __testInternals = {
+  readCache: (targetRepo: string, contentHash: string) =>
+    readCache(targetRepo, contentHash),
+  writeCache: (
+    targetRepo: string,
+    contentHash: string,
+    clusters: DuplicateCluster[],
+    costUsd: number,
+  ) => writeCache(targetRepo, contentHash, clusters, costUsd),
+  cacheFilePath: (targetRepo: string) => cacheFilePath(targetRepo),
+  computeContentHash: (issues: IssueDetail[]) => computeContentHash(issues),
+};
 
 // Same shape as `triage.ts:parseJsonLoose` — accepts a JSON object in the
 // raw text whether or not the model wrapped it in a ```json fence or

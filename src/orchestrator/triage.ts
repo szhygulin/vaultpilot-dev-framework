@@ -36,6 +36,16 @@ interface CacheEntry {
   issueNumber: number;
   contentHash: string;
   result: TriageResult;
+  // Issue #137: persist the per-issue triage cost from the original (cache-
+  // miss) invocation so a subsequent cache-hit invocation can return the same
+  // cost. Without this, a cold-cache `--plan` reports `triageCostUsd: 0.0241`
+  // and a warm-cache `--confirm` re-invocation reports `triageCostUsd: 0`,
+  // making the gate-text `Triage cost:` line drift between the two — which
+  // changes the previewHash and triggers a spurious "Plan diverged" error on
+  // the very first `--confirm` after every fresh `--plan`. Optional for
+  // forward-compat with cache files written by pre-#137 versions; absent
+  // entries degrade to `costUsd: 0` (the prior behavior).
+  costUsd?: number;
   triagedAt: string;
 }
 
@@ -107,18 +117,27 @@ async function triageOne(input: TriageOneInput): Promise<TriagedIssue> {
     input.logger.info("triage.cache_hit", {
       issueId: input.issue.id,
       contentHash,
-      ready: cached.ready,
+      ready: cached.result.ready,
+      costUsd: cached.costUsd,
     });
+    // Issue #137: return the cost stored on the original cache-miss
+    // invocation. The cache hit itself didn't spend any tokens, but the
+    // gate-text `Triage cost:` line is content-determined: it represents
+    // the triage cost for *this content*, not "tokens spent in this
+    // process invocation". Returning `0` here for a cache hit was the
+    // root cause of the "Plan diverged" recurrence — `--plan` (cold
+    // cache, real cost) and `--confirm` (warm cache, $0) rendered
+    // different `Triage cost:` lines and previewHash drifted.
     return {
       issue: input.issue,
-      result: cached,
+      result: cached.result,
       fromCache: true,
-      costUsd: 0,
+      costUsd: cached.costUsd,
     };
   }
 
   const fresh = await callTriageModel(detail, input.logger);
-  await writeCache(input.targetRepo, input.issue.id, contentHash, fresh.result);
+  await writeCache(input.targetRepo, input.issue.id, contentHash, fresh.result, fresh.costUsd);
   input.logger.info("triage.evaluated", {
     issueId: input.issue.id,
     contentHash,
@@ -309,17 +328,47 @@ function cacheFilePath(targetRepo: string, issueNumber: number): string {
   return path.join(repoCacheDir(targetRepo), `${issueNumber}.json`);
 }
 
+// Exported for tests: the cache I/O round-trip is the failure surface for
+// issue #137 (Plan diverged). A pure-fs test can validate the costUsd
+// persistence behavior without the haiku model in the loop.
+export const __testInternals = {
+  readCache: (targetRepo: string, issueNumber: number, contentHash: string) =>
+    readCache(targetRepo, issueNumber, contentHash),
+  writeCache: (
+    targetRepo: string,
+    issueNumber: number,
+    contentHash: string,
+    result: TriageResult,
+    costUsd: number,
+  ) => writeCache(targetRepo, issueNumber, contentHash, result, costUsd),
+  cacheFilePath: (targetRepo: string, issueNumber: number) =>
+    cacheFilePath(targetRepo, issueNumber),
+};
+
+interface CachedTriage {
+  result: TriageResult;
+  // Cost stored on the original cache-miss invocation. `0` for entries
+  // written before issue #137 (no `costUsd` field) — fail-soft so older
+  // caches keep working but don't reproduce the bug for content already
+  // re-triaged after the fix lands.
+  costUsd: number;
+}
+
 async function readCache(
   targetRepo: string,
   issueNumber: number,
   contentHash: string,
-): Promise<TriageResult | null> {
+): Promise<CachedTriage | null> {
   try {
     const raw = await fs.readFile(cacheFilePath(targetRepo, issueNumber), "utf-8");
     const entry = JSON.parse(raw) as CacheEntry;
     if (entry.contentHash !== contentHash) return null;
     const parsed = TriageResultSchema.safeParse(entry.result);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) return null;
+    const costUsd = typeof entry.costUsd === "number" && Number.isFinite(entry.costUsd)
+      ? entry.costUsd
+      : 0;
+    return { result: parsed.data, costUsd };
   } catch {
     return null;
   }
@@ -330,12 +379,14 @@ async function writeCache(
   issueNumber: number,
   contentHash: string,
   result: TriageResult,
+  costUsd: number,
 ): Promise<void> {
   const entry: CacheEntry = {
     targetRepo,
     issueNumber,
     contentHash,
     result,
+    costUsd,
     triagedAt: new Date().toISOString(),
   };
   const filePath = cacheFilePath(targetRepo, issueNumber);

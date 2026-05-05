@@ -52,6 +52,14 @@ export interface RunConfirmParams {
 export interface RunConfirmToken {
   token: string;
   previewHash: string;
+  // Issue #137: persist the rendered preview text alongside the hash so a
+  // confirm-time mismatch can surface a unified diff instead of generic
+  // prose blame ("Registry, open-issue set, or triage outcome changed").
+  // Optional for forward-compat: tokens written by pre-#137 versions still
+  // load and exit with the legacy prose error path. Token files live under
+  // `state/` (gitignored) and expire after 15 min, so persisting a few KB
+  // of preview text is safe.
+  previewText?: string;
   createdAt: string;
   expiresAt: string;
   params: RunConfirmParams;
@@ -75,12 +83,14 @@ function tokenFilePath(token: string): string {
 export async function writeRunConfirmToken(input: {
   token: string;
   previewHash: string;
+  previewText?: string;
   params: RunConfirmParams;
 }): Promise<RunConfirmToken> {
   const now = new Date();
   const record: RunConfirmToken = {
     token: input.token,
     previewHash: input.previewHash,
+    previewText: input.previewText,
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + TOKEN_TTL_MS).toISOString(),
     params: input.params,

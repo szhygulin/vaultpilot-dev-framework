@@ -106,6 +106,7 @@ import {
 import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
 import { formatRunCompletedSentinel } from "./util/runCompletedSentinel.js";
 import { formatRunReport } from "./util/runReport.js";
+import { diffPreview } from "./util/previewDiff.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary, ResumeContext, RunState } from "./types.js";
 import { STATE_DIR } from "./state/runState.js";
 import { defaultRunLogPath, loadRunActivity } from "./state/runActivity.js";
@@ -662,6 +663,9 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     const record = await writeRunConfirmToken({
       token,
       previewHash: hashPreview(previewText),
+      // Issue #137: persist the preview text so a confirm-time mismatch can
+      // surface a unified line diff instead of a generic blame line.
+      previewText,
       params: {
         agents: opts.agents,
         targetRepo: opts.targetRepo,
@@ -697,10 +701,33 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       console.error(
         "ERROR: Plan diverged: the preview at confirm time does not match the preview at plan time.",
       );
+      const storedText = confirmRecord.record.previewText;
+      if (storedText) {
+        // Issue #137: emit a unified line diff so the user sees which line
+        // actually drifted ("Triage cost: ~$0.0241" → "Triage cost:
+        // ~$0.0000", a new triage-skipped entry, an agent score shift,
+        // etc) instead of generic prose blame.
+        console.error("  Drift detected (- plan-time / + confirm-time):");
+        const diff = diffPreview(storedText, previewText);
+        for (const line of diff.split("\n")) {
+          console.error(`    ${line}`);
+        }
+      } else {
+        // Pre-#137 token without persisted preview text: fall back to the
+        // legacy prose error.
+        console.error(
+          "  Registry, open-issue set, or triage outcome changed between --plan and --confirm.",
+        );
+      }
       console.error(
-        "  Registry, open-issue set, or triage outcome changed between --plan and --confirm.",
+        "  Re-run with --plan to see the updated preview, then --confirm the new token.",
       );
-      console.error("  Re-run with --plan to see the updated preview, then --confirm the new token.");
+      console.error(
+        `  Stored hash:  ${confirmRecord.record.previewHash.slice(0, 16)}...`,
+      );
+      console.error(
+        `  Current hash: ${currentHash.slice(0, 16)}...`,
+      );
       process.exit(2);
     }
     process.stdout.write(`Plan token ${opts.confirm} verified. Launching run.\n`);

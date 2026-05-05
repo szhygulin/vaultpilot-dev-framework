@@ -217,6 +217,16 @@ const SUMMARIZER_SYSTEM_PROMPT = `You are a distillation agent. After a coding a
 
 Style: match the dense rule-form of an existing CLAUDE.md section. Lead with the rule itself in bold. Then a **Why:** line (the reason — often a past incident, a hidden constraint, a strong preference). Then a **How to apply:** line (when this guidance kicks in). Use **Tells:** sparingly to list signals of the situation. Markdown hyperlinks (\`[label](url)\`) over raw URLs.
 
+Cross-agent promotion (optional, gated by human review):
+- If a piece of the lesson would help SIBLING agents in the same domain — not just THIS agent — wrap that piece inside the \`body\` between two HTML comments:
+    <!-- promote-candidate:<domain> -->
+    <descriptive observation, multiple lines OK>
+    <!-- /promote-candidate -->
+- The \`<domain>\` MUST be one of the agent's current tags listed under "Pre-run agent tags" or "Tags added this run" — that's how we keep domain taxonomy stable.
+- The wrapped content must read as a DESCRIPTIVE OBSERVATION, not an instruction to other agents. Avoid "you must / should", "the agent must" — use indicative voice: "Solana RPC X behaves like Y" / "ERC-4626 rounds shares DOWN on deposit".
+- Cap the wrapped content at ~40 non-empty lines / ~1500 chars. Anything longer is too coarse to share.
+- Promote-candidates are queued for human review; they do NOT auto-promote. Use sparingly — most lessons stay agent-local.
+
 Hard rules:
 - If there is no GENERALIZABLE lesson — only a one-off fix, a routine implementation, a trivial pushback — return {"skip": true, "skipReason": "<one short sentence>"}. Empty learnings beat noisy ones.
 - If the agent failed (decision="error"), default to skip unless there's a clear lesson about the failure mode itself.

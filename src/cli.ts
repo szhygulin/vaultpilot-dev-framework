@@ -48,6 +48,7 @@ import {
 } from "./git/worktree.js";
 import { findOpenVpDevPrs } from "./git/openPrs.js";
 import { formatStatusJson, formatStatusText } from "./state/statusFormatter.js";
+import { resolveRenderMode, watchStatus } from "./util/statusWatcher.js";
 import {
   DEFAULT_INCOMPLETE_RETENTION_DAYS,
   filterByRetention,
@@ -165,6 +166,21 @@ export function buildCli(): Command {
     .description("Print summary of a run + per-agent state + per-issue detail. With no args: shows the active run if one exists. Pass <runId> to inspect a specific past run, or --latest for the most recent run on disk.")
     .option("--latest", "Inspect the most recent run-<ts>.json on disk regardless of completion")
     .option("--json", "Print machine-readable JSON")
+    .option(
+      "--watch",
+      "Re-render the status block on an interval until the run reaches a terminal state or SIGINT (#124). TTY: clear-and-home + redraw; non-TTY: separator + append; --json: NDJSON one object per tick.",
+    )
+    .option(
+      "--interval <seconds>",
+      "Refresh interval for --watch in seconds (default 10)",
+      parsePositive,
+      10,
+    )
+    .option(
+      "--max-iterations <n>",
+      "Escape hatch for --watch: stop after N ticks even if the run hasn't completed",
+      parsePositive,
+    )
     .action(async (runIdArg, opts) => {
       await cmdStatus(runIdArg, opts);
     });
@@ -1027,6 +1043,9 @@ async function runResume(opts: RunOpts): Promise<void> {
 interface StatusOpts {
   latest?: boolean;
   json?: boolean;
+  watch?: boolean;
+  interval?: number;
+  maxIterations?: number;
 }
 
 async function cmdStatus(runIdArg?: string, opts: StatusOpts = {}): Promise<void> {
@@ -1049,6 +1068,20 @@ async function cmdStatus(runIdArg?: string, opts: StatusOpts = {}): Promise<void
     return;
   }
 
+  // Resolve names from registry once (best-effort — keep status read-only).
+  // For --watch we reuse this map across ticks; agent registry edits during
+  // a run are vanishingly rare and the cost of re-reading every tick isn't
+  // worth the freshness gain.
+  const reg = await loadRegistry();
+  const agentNames = new Map<string, string | undefined>(
+    reg.agents.map((a) => [a.agentId, a.name]),
+  );
+
+  if (opts.watch) {
+    await runStatusWatch(runId, opts, agentNames);
+    return;
+  }
+
   let state;
   try {
     state = await loadRunState(runId);
@@ -1057,17 +1090,53 @@ async function cmdStatus(runIdArg?: string, opts: StatusOpts = {}): Promise<void
     process.exit(2);
   }
 
-  // Resolve names from registry (best-effort — keep status read-only).
-  const reg = await loadRegistry();
-  const agentNames = new Map<string, string | undefined>(
-    reg.agents.map((a) => [a.agentId, a.name]),
-  );
-
   if (opts.json) {
     process.stdout.write(JSON.stringify(formatStatusJson(state, { agentNames }), null, 2) + "\n");
     return;
   }
   process.stdout.write(formatStatusText(state, { agentNames }));
+}
+
+async function runStatusWatch(
+  runId: string,
+  opts: StatusOpts,
+  agentNames: Map<string, string | undefined>,
+): Promise<void> {
+  const intervalSec = opts.interval ?? 10;
+  const intervalMs = intervalSec * 1000;
+  const isTty = Boolean(process.stdout.isTTY);
+  const mode = resolveRenderMode({ json: Boolean(opts.json), isTty });
+
+  const ac = new AbortController();
+  const onSigint = () => ac.abort();
+  process.on("SIGINT", onSigint);
+
+  try {
+    const result = await watchStatus({
+      tickFn: async () => {
+        const state = await loadRunState(runId);
+        const output = opts.json
+          ? JSON.stringify(formatStatusJson(state, { agentNames }))
+          : formatStatusText(state, { agentNames });
+        return { done: isRunComplete(state), output };
+      },
+      intervalMs,
+      mode,
+      maxIterations: opts.maxIterations,
+      signal: ac.signal,
+    });
+    // Surface a one-line trailer to stderr in text modes so the operator
+    // can tell why the loop stopped (run-complete vs ctrl-c vs cap). JSON
+    // mode stays pure NDJSON for downstream parsers.
+    if (mode !== "json") {
+      process.stderr.write(`\n[watch] exited (${result.reason}) after ${result.iterations} tick(s)\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`ERROR: watch failed for ${runId}: ${(err as Error).message}\n`);
+    process.exit(2);
+  } finally {
+    process.off("SIGINT", onSigint);
+  }
 }
 
 interface AgentsSpecialtiesOpts {

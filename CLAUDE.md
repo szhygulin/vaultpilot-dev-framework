@@ -31,10 +31,18 @@ Three supported approval paths:
 - **Don't add a config-file option that silently bypasses** the gate. Convenience flags that hide the cost of a multi-agent run are exactly what this gate exists to prevent. The two-step flow is allowed because it surfaces the cost between invocations; single-flag silent bypasses are not.
 - The gate text MUST surface the planned cost (agent count × issue range × model tier) so the user has the data to refuse. Edits that reduce the surfaced detail are regressions.
 
-## Target repo's `CLAUDE.md` seeds fresh agents
-The orchestrator reads the target repo's `CLAUDE.md` (`--target-repo-path/CLAUDE.md`, default `$HOME/dev/<repo-name>/CLAUDE.md`) and seeds every fresh "general" agent with it. Specialists carry their own `agents/<agent-id>/CLAUDE.md` from prior successful runs.
+## Target repo's `CLAUDE.md` seeds fresh agents AND is loaded live every dispatch
+The orchestrator reads the target repo's `CLAUDE.md` (`--target-repo-path/CLAUDE.md`, default `$HOME/dev/<repo-name>/CLAUDE.md`). Two paths use it:
+1. **Fork-time seed** — `forkClaudeMd()` writes a verbatim copy into `agents/<agent-id>/CLAUDE.md` once when an agent is first minted. The per-agent file then drifts (summarizer-edited, hand-edited).
+2. **Live load every dispatch** — `buildAgentSystemPrompt()` reads the *current* target-repo `CLAUDE.md` on every coding-agent run and prepends it as a "Project rules (live)" section, with overlapping `##` headings deduped against the per-agent copy (live wins). This means edits to the target-repo `CLAUDE.md` reach existing specialists immediately, without re-forking.
 - **When the target repo has no `CLAUDE.md`**, fall back to the generic seed in `src/agent/prompt.ts`. Don't refuse to run — many target repos won't have one.
 - **Don't modify the target repo's `CLAUDE.md` from within a run.** The seed is a read-only input, not a write surface. If a coding agent's output legitimately wants to update the target's CLAUDE.md, that lands as a normal PR through the agent's branch, not as a side-effect write.
+
+## Pre-dispatch scope-fit check
+- **Issues whose feature-plan touches >5 files should be split into Phase 1 / Phase 2 before dispatch.** Coding agents have a 50-turn budget; multi-file features with read→edit→re-read cycles exhaust it on file 6-7, hitting `error_max_turns` mid-edit with no PR and no envelope. Split along architectural seams (data layer / measurement vs. enforcement / abort flow), not arbitrary halves.
+- **Tells**: `feature-plans/issue-N-*.md` lists >5 files in "Critical files"; plan mixes data-layer changes with orchestrator-lifecycle changes; both an interface-extension and an integration land in one issue; tags include both `cli-gate` / `cost-surface` / `ux-hardening` AND a state-layer concept.
+- **How to apply**: before `vp-dev run --issues N`, read `feature-plans/issue-N-*.md` if present. If file count >5, file the split (Phase 1 = measurement / data layer; Phase 2 = enforcement / lifecycle integration) and close the original as superseded. Don't dispatch and hope.
+- Past incident 2026-05-04: issue #34 ("Hard cost ceiling per run with graceful abort") had a 9-file plan, dispatched twice, both `error_max_turns`, ~$8.30 burned, zero PRs. Split into [#85](https://github.com/szhygulin/vaultpilot-development-agents/issues/85) (Phase 1, measurement) + [#86](https://github.com/szhygulin/vaultpilot-development-agents/issues/86) (Phase 2, enforcement); #85 succeeded on first dispatch as PR [#93](https://github.com/szhygulin/vaultpilot-development-agents/pull/93).
 
 ## Per-agent `CLAUDE.md` grows from successful runs
 After every successful issue-resolution run, a separate sonnet summarizer rewrites `agents/<agent-id>/CLAUDE.md` to fold in lessons from the run. The file is gitignored — local-only memory.

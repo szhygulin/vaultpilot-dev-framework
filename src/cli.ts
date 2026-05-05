@@ -106,6 +106,7 @@ import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
 import { formatRunCompletedSentinel } from "./util/runCompletedSentinel.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary, ResumeContext, RunState } from "./types.js";
 import { STATE_DIR } from "./state/runState.js";
+import { defaultRunLogPath, loadRunActivity } from "./state/runActivity.js";
 import path from "node:path";
 
 const DEFAULT_STALLED_THRESHOLD_DAYS = 14;
@@ -1151,11 +1152,27 @@ async function cmdStatus(runIdArg?: string, opts: StatusOpts = {}): Promise<void
     process.exit(2);
   }
 
+  // Issue #131: best-effort load of the JSONL log so the status output
+  // can surface tool counts, time-since-last-activity, and a recent
+  // events tail. Fresh runs may not have any events on disk yet —
+  // `loadRunActivity` returns an empty activity for ENOENT; other I/O
+  // errors are surfaced as a warning so the formatter still gets to
+  // render the per-issue status block (the original pre-#131 view).
+  const activity = await tryLoadRunActivity(runId);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(formatStatusJson(state, { agentNames }), null, 2) + "\n");
+    process.stdout.write(JSON.stringify(formatStatusJson(state, { agentNames, activity }), null, 2) + "\n");
     return;
   }
-  process.stdout.write(formatStatusText(state, { agentNames }));
+  process.stdout.write(formatStatusText(state, { agentNames, activity }));
+}
+
+async function tryLoadRunActivity(runId: string) {
+  try {
+    return await loadRunActivity({ logPath: defaultRunLogPath(runId) });
+  } catch (err) {
+    process.stderr.write(`WARN: could not read run log for ${runId}: ${(err as Error).message}\n`);
+    return undefined;
+  }
 }
 
 async function runStatusWatch(
@@ -1176,9 +1193,14 @@ async function runStatusWatch(
     const result = await watchStatus({
       tickFn: async () => {
         const state = await loadRunState(runId);
+        // Re-load the JSONL log every tick so cost-burn, tool counts,
+        // and the recent-events tail track in-flight progress. Cheap
+        // on small log files; if this becomes a bottleneck on long
+        // runs, switch to a tail-position cache here.
+        const activity = await tryLoadRunActivity(runId);
         const output = opts.json
-          ? JSON.stringify(formatStatusJson(state, { agentNames }))
-          : formatStatusText(state, { agentNames });
+          ? JSON.stringify(formatStatusJson(state, { agentNames, activity }))
+          : formatStatusText(state, { agentNames, activity });
         return { done: isRunComplete(state), output };
       },
       intervalMs,

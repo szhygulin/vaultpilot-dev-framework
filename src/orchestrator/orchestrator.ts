@@ -82,9 +82,21 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
 
   const inFlight = new Map<string, Promise<void>>();
 
+  // Persist the running USD total into RunState before each save so
+  // `vp-dev status` (issue #131) can render the live cost-burn signal
+  // off-disk without re-attaching to this process. The tracker's
+  // `total()` is monotonic; a missing tracker leaves the field
+  // undefined (matches the no-budget run shape).
+  const persistCost = (): void => {
+    if (input.costTracker) {
+      input.state.costAccumulatedUsd = input.costTracker.total();
+    }
+  };
+
   while (!isRunComplete(input.state) && input.state.tickCount < input.maxTicks) {
     input.state.tickCount += 1;
     input.state.lastTickAt = new Date().toISOString();
+    persistCost();
     await saveRunState(input.state);
 
     const pending = pendingIssueIds(input.state)
@@ -136,6 +148,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         if (!agent || !issue) continue;
 
         markInFlight(input.state, agent.agentId, assignment.issueId);
+        persistCost();
         await saveRunState(input.state);
 
         const promise = runOneIssue({
@@ -155,6 +168,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
             err: (err as Error).message,
           });
           markFailed(input.state, agent.agentId, issue.id, (err as Error).message);
+          persistCost();
           await saveRunState(input.state);
         }).finally(() => {
           inFlight.delete(`${agent.agentId}:${issue.id}`);
@@ -194,12 +208,14 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         inFlightAtAbort: inFlight.size,
       });
       for (const id of stillPending) markAborted(input.state, id);
+      persistCost();
       await saveRunState(input.state);
       break;
     }
   }
 
   await Promise.allSettled(inFlight.values());
+  persistCost();
   await saveRunState(input.state);
 }
 

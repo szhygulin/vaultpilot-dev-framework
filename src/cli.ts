@@ -103,6 +103,7 @@ import {
   type AgentRollup,
 } from "./state/outcomes.js";
 import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
+import { formatRunCompletedSentinel } from "./util/runCompletedSentinel.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary, ResumeContext, RunState } from "./types.js";
 import { STATE_DIR } from "./state/runState.js";
 import path from "node:path";
@@ -766,6 +767,11 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     }
   }
 
+  // Issue #128: capture the run's wall-clock start so the terminal sentinel
+  // can include `durationMs`. Watchers (`tail -F | awk '/^run\.completed
+  // /{print; exit}'`) anchor on that final line as their clean-exit signal.
+  const runStartMs = Date.now();
+  let runError: unknown = undefined;
   try {
     await pruneWorktrees(repoPath);
     const sweep = await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
@@ -809,10 +815,29 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       );
     }
     if (isRunComplete(state)) await clearCurrentRunId();
+  } catch (err) {
+    runError = err;
   } finally {
     await logger.close();
+    // Per-run summary line (existing behavior, now in the finally block so
+    // it fires on the throw path too — operators want the log path even
+    // when something blew up). Always precedes the terminal sentinel.
+    process.stdout.write(`Run ${runId} log: logs/${runId}.jsonl\n`);
+    // Terminal sentinel (issue #128) — MUST be the very last stdout line so
+    // external watchers grepping `^run.completed ` can `print; exit` on it.
+    // Fires uniformly across success / dry-run / aborted-budget / failure
+    // / orchestrator-throw paths, ensuring exactly one terminal line per
+    // launched run.
+    process.stdout.write(
+      formatRunCompletedSentinel({
+        runId,
+        state,
+        totalCostUsd: costTracker.total(),
+        durationMs: Date.now() - runStartMs,
+      }),
+    );
   }
-  process.stdout.write(`Run ${runId} log: logs/${runId}.jsonl\n`);
+  if (runError) throw runError;
 }
 
 /**
@@ -1000,6 +1025,11 @@ async function runResume(opts: RunOpts): Promise<void> {
     issueCount: issues.length,
     maxCostUsd: budgetUsd ?? null,
   });
+  // Issue #128: same terminal-sentinel discipline as cmdRun — captured here
+  // so a resumed run also emits exactly one `run.completed` line on stdout
+  // for external watchers to anchor their exit on.
+  const runStartMs = Date.now();
+  let runError: unknown = undefined;
   try {
     const sweep = await pruneStaleAgentBranches(repoPath, state.targetRepo, logger);
     if (sweep.unprunable.length > 0) {
@@ -1035,9 +1065,23 @@ async function runResume(opts: RunOpts): Promise<void> {
       );
     }
     if (isRunComplete(state)) await clearCurrentRunId();
+  } catch (err) {
+    runError = err;
   } finally {
     await logger.close();
+    // Terminal sentinel (issue #128) — last stdout line, fires uniformly
+    // across all exit paths so `tail -F | awk '/^run.completed /{exit}'`
+    // watchers terminate cleanly on resumed runs too.
+    process.stdout.write(
+      formatRunCompletedSentinel({
+        runId,
+        state,
+        totalCostUsd: costTracker.total(),
+        durationMs: Date.now() - runStartMs,
+      }),
+    );
   }
+  if (runError) throw runError;
 }
 
 interface StatusOpts {

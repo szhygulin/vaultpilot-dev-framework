@@ -78,6 +78,11 @@ import {
   readAgentClaudeMdBytes,
 } from "./agent/split.js";
 import {
+  DEFAULT_MIN_CLUSTER_SIZE,
+  formatCompactionProposal,
+  proposeCompaction,
+} from "./agent/compactClaudeMd.js";
+import {
   applyPruneProposal,
   detectPruneCandidates,
   formatPruneProposals,
@@ -285,6 +290,23 @@ export function buildCli(): Command {
         .option("--yes", "Skip the apply confirmation prompt (required for non-TTY environments).")
         .action(async (opts) => {
           await cmdAgentsPrune(opts);
+        }),
+    )
+    .addCommand(
+      new Command("compact-claude-md")
+        .description(
+          "Phase A (#158): propose merge clusters for an agent's CLAUDE.md when growth is in section depth (few large sections). Advisory only — no file mutation. --apply is tracked at #162.",
+        )
+        .argument("<agentId>", "Agent to inspect (e.g. agent-916a)")
+        .option("--json", "Print machine-readable JSON")
+        .option(
+          "--min-cluster-size <n>",
+          "Minimum sections per merge cluster (default 3; 2 is too aggressive per issue #158)",
+          parsePositive,
+          DEFAULT_MIN_CLUSTER_SIZE,
+        )
+        .action(async (agentId, opts) => {
+          await cmdAgentsCompactClaudeMd(agentId, opts);
         }),
     )
     .addCommand(
@@ -1897,6 +1919,51 @@ async function confirmApply(input: {
   } finally {
     rl.close();
   }
+}
+
+interface AgentsCompactClaudeMdOpts {
+  json?: boolean;
+  minClusterSize: number;
+}
+
+async function cmdAgentsCompactClaudeMd(
+  agentId: string,
+  opts: AgentsCompactClaudeMdOpts,
+): Promise<void> {
+  const reg = await loadRegistry();
+  const agent = reg.agents.find((a) => a.agentId === agentId);
+  if (!agent) {
+    process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+    process.exit(2);
+  }
+  if (agent.archived) {
+    process.stderr.write(
+      `ERROR: agent '${agentId}' is already archived; compaction is for active agents.\n`,
+    );
+    process.exit(2);
+  }
+  const { md, bytes } = await readAgentClaudeMdBytes(agentId);
+  if (bytes === 0) {
+    process.stderr.write(
+      `ERROR: agent '${agentId}' has no CLAUDE.md on disk yet — nothing to compact.\n`,
+    );
+    process.exit(2);
+  }
+
+  process.stdout.write(
+    `Generating compaction proposal for ${agentId} (min-cluster-size=${opts.minClusterSize})...\n`,
+  );
+  const proposal = await proposeCompaction({
+    agent,
+    claudeMd: md,
+    minClusterSize: opts.minClusterSize,
+  });
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ agentId, proposal }, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(formatCompactionProposal(proposal) + "\n");
 }
 
 interface AgentsPruneOpts {

@@ -70,12 +70,21 @@ export async function findLatestRunId(): Promise<string | null> {
   } catch {
     return null;
   }
-  const runFiles = entries
-    .filter((e) => e.startsWith("run-") && e.endsWith(".json"))
-    .sort();
+  return pickLatestRunIdFromEntries(entries);
+}
+
+// Run-state files match `run-<ISO-timestamp>.json` (per `makeRunId`'s
+// `toISOString().replace(/[:.]/g, "-")`). The anchored regex is what
+// keeps `run-confirm-<token>.json` (and any future `run-*-<x>.json`
+// kinds) out of the latest-run picker — `startsWith("run-")` was too
+// loose, lex-sorted `run-confirm-*` ahead of real runs, and crashed
+// `formatStatusText` on a confirm-token's RunConfirmToken shape (#125).
+const RUN_STATE_FILE_RE = /^run-\d{4}-\d{2}-\d{2}T.*\.json$/;
+
+export function pickLatestRunIdFromEntries(entries: string[]): string | null {
+  const runFiles = entries.filter((e) => RUN_STATE_FILE_RE.test(e)).sort();
   if (runFiles.length === 0) return null;
-  const last = runFiles[runFiles.length - 1];
-  return last.replace(/\.json$/, "");
+  return runFiles[runFiles.length - 1].replace(/\.json$/, "");
 }
 
 export function newRunState(opts: {

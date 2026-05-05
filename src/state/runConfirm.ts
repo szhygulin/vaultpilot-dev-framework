@@ -39,6 +39,14 @@ export interface RunConfirmParams {
   // already binds the rationale-line annotation, so dropping or changing
   // the field invalidates the token.
   preferAgentId?: string;
+  // Issue #118 Phase 1: persisted intent flag for resuming from a
+  // salvageable `*-incomplete-<runId>` branch. Phase 1 only records and
+  // logs; Phase 2 (separate issue) is responsible for the actual
+  // worktree-creation lifecycle change. Carrying the flag through
+  // `--plan` → `--confirm` is necessary even before Phase 2 ships so
+  // that the two-step approval flow surfaces the same intent at confirm
+  // time as at plan time.
+  resumeIncomplete?: boolean;
 }
 
 export interface RunConfirmToken {

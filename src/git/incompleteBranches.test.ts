@@ -7,6 +7,7 @@ import {
   filterByRetention,
   lookupRunStateRef,
   parseIncompleteRefs,
+  parseLsRemoteIncompleteRefs,
   resolveRetentionDays,
   DEFAULT_INCOMPLETE_RETENTION_DAYS,
 } from "./incompleteBranches.js";
@@ -197,6 +198,59 @@ test("lookupRunStateRef: malformed JSON treated as 'missing' (no throw)", async 
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+// ---- parseLsRemoteIncompleteRefs (issue #118 Phase 1) -------------------
+
+test("parseLsRemoteIncompleteRefs: extracts (issue, agent, runId) from ls-remote --heads output", () => {
+  // Real `git ls-remote --heads origin <pattern>` output: `<sha>\trefs/heads/<branch>`
+  const lines = [
+    "deadbeef0000000000000000000000000000beef\trefs/heads/vp-dev/agent-75a0/issue-88-incomplete-run-2026-05-01T12-00-00-000Z",
+    "cafebabe0000000000000000000000000000cafe\trefs/heads/vp-dev/agent-ef41/issue-1234-incomplete-run-2026-05-02T08-30-00-000Z",
+  ];
+  const out = parseLsRemoteIncompleteRefs(lines);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[0], {
+    issueId: 88,
+    agentId: "agent-75a0",
+    branchName: "vp-dev/agent-75a0/issue-88-incomplete-run-2026-05-01T12-00-00-000Z",
+    runId: "run-2026-05-01T12-00-00-000Z",
+  });
+  assert.equal(out[1].issueId, 1234);
+  assert.equal(out[1].agentId, "agent-ef41");
+});
+
+test("parseLsRemoteIncompleteRefs: drops non-matching refs (regular vp-dev branches, malformed lines)", () => {
+  // The ls-remote glob may also surface uninteresting refs if a future
+  // caller widens the pattern; the parser must drop them silently rather
+  // than throwing.
+  const lines = [
+    "sha1\trefs/heads/vp-dev/agent-aa00/issue-1", // regular vp-dev branch — no -incomplete- suffix
+    "sha2\trefs/heads/main",
+    "no-tab-line", // entire line missing the SHA\tref shape
+    "", // blank line (often present at the trailing newline of stdout)
+    "sha3\trefs/heads/vp-dev/agent-AB/issue-1-incomplete-run-x", // uppercase agent id rejected
+    "sha4\trefs/heads/vp-dev/agent-bb11/issue-42-incomplete-run-OK", // valid
+  ];
+  const out = parseLsRemoteIncompleteRefs(lines);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].issueId, 42);
+  assert.equal(out[0].runId, "run-OK");
+});
+
+test("parseLsRemoteIncompleteRefs: tolerates refs not prefixed with `refs/heads/` (defensive)", () => {
+  // Some git invocations / future format flags may emit short refs.
+  // Parser strips the prefix when present but also accepts unprefixed.
+  const lines = [
+    "sha1\tvp-dev/agent-bb11/issue-7-incomplete-run-Z",
+  ];
+  const out = parseLsRemoteIncompleteRefs(lines);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].branchName, "vp-dev/agent-bb11/issue-7-incomplete-run-Z");
+});
+
+test("parseLsRemoteIncompleteRefs: empty input yields empty output", () => {
+  assert.deepEqual(parseLsRemoteIncompleteRefs([]), []);
 });
 
 test("lookupRunStateRef: matches across multiple issues in the state file", async () => {

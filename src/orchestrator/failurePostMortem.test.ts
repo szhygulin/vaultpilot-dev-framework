@@ -161,6 +161,21 @@ test("detectPendingPostMortem: 'fix landed' resolution keyword (multi-word) is r
   assert.equal(result.pending, false);
 });
 
+test("detectPendingPostMortem: 'resume' keyword (issue #118) lifts the gate", () => {
+  // Phase 1 of #118 added `resume` as a generic unblock signal so a human
+  // who intends to re-attempt with --resume-incomplete on the next run can
+  // flip triage back to ready without having to remember the older
+  // `retry`/`unblock` vocabulary.
+  const result = detectPendingPostMortem([
+    comment(
+      "## vp-dev failure post-mortem (run-A, agent-1)\n\nfailed",
+      "2026-05-05T10:00:00Z",
+    ),
+    comment("resume on next dispatch — partial branch looks salvageable", "2026-05-05T11:00:00Z", "alice"),
+  ]);
+  assert.equal(result.pending, false);
+});
+
 test("detectPendingPostMortem: an ambient unrelated comment does NOT lift the gate", () => {
   // A human comment that does NOT contain a resolution keyword leaves the
   // gate in place. Only explicit signals lift it.

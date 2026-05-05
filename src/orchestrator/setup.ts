@@ -36,6 +36,19 @@ export interface OpenPrSkipped {
   prUrl: string;
 }
 
+// Phase 1 of resume-from-incomplete (#118). One entry per
+// `vp-dev/agent-*/issue-N-incomplete-<runId>` ref discovered on `origin`
+// for a candidate dispatch issue. Surfaced in the setup preview so the
+// human sees salvage state exists before y/N. Phase 1 is informational
+// only — `--resume-incomplete` records the flag but does not change
+// worktree shape; Phase 2 wires the rebase-on-main + threading.
+export interface IncompleteBranchAvailable {
+  issueId: number;
+  agentId: string;
+  branchName: string;
+  runId: string;
+}
+
 export interface SetupPreview {
   targetRepo: string;
   targetRepoPath: string;
@@ -87,6 +100,16 @@ export interface SetupPreview {
    * active at plan time.
    */
   preferAgentId?: string;
+  /**
+   * Issue #118 Phase 1: salvageable `*-incomplete-<runId>` branches
+   * discovered on `origin` for the candidate dispatch issues. Always
+   * populated when the helper succeeds, regardless of whether
+   * `--resume-incomplete` was passed — the section is informational so
+   * the user can see partial state exists before approving y/N. The
+   * field is bound into the previewHash so a `--plan` token whose set of
+   * salvage refs drifted between plan and confirm forces a fresh plan.
+   */
+  incompleteBranchesAvailable: IncompleteBranchAvailable[];
 }
 
 export interface BuildPreviewInput {
@@ -112,6 +135,12 @@ export interface BuildPreviewInput {
    *  `--plan` token is bound to the override that was active at plan
    *  time. */
   preferAgentId?: string;
+  /** Issue #118 Phase 1: caller-provided list of salvageable
+   *  `*-incomplete-<runId>` branches on `origin` for the candidate
+   *  dispatch issues. Optional — callers that don't have a target-repo
+   *  clone (or are running in a test harness) pass `[]` / omit; the
+   *  preview renders no section in that case. */
+  incompleteBranchesAvailable?: IncompleteBranchAvailable[];
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -153,6 +182,7 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     budgetExceededSkipped: input.budgetExceededSkipped ?? [],
     budgetUsd: input.budgetUsd,
     preferAgentId: input.preferAgentId,
+    incompleteBranchesAvailable: input.incompleteBranchesAvailable ?? [],
   };
 }
 
@@ -276,6 +306,25 @@ export function formatSetupPreview(p: SetupPreview): string {
     }
     lines.push(
       `  Override: raise --max-cost-usd, or split the issue per CLAUDE.md "Pre-dispatch scope-fit check" rule.`,
+    );
+    lines.push("");
+  }
+
+  // Issue #118 Phase 1: surface salvageable `-incomplete-<runId>` refs on
+  // origin so the user can see partial work exists for a candidate issue.
+  // Phase 1 is informational only — the section explains that the actual
+  // resume behavior (rebase-on-main, conflict surfacing, threading) is
+  // Phase 2 territory. The `--resume-incomplete` flag is recorded for
+  // future use but does not change worktree shape today.
+  if (p.incompleteBranchesAvailable.length > 0) {
+    lines.push(
+      `${p.incompleteBranchesAvailable.length} partial branch(es) available on origin (Phase 1 detection — Phase 2 will wire actual resume):`,
+    );
+    for (const b of p.incompleteBranchesAvailable) {
+      lines.push(`  #${b.issueId}  ${b.branchName}  (${b.runId}, ${b.agentId})`);
+    }
+    lines.push(
+      "  Pass --resume-incomplete to record the intent (Phase 1 logs + carries into --plan/--confirm; no behavior change yet).",
     );
     lines.push("");
   }

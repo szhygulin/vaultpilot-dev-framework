@@ -1,5 +1,6 @@
 import {
   isRunComplete,
+  markAborted,
   pendingIssueIds,
   saveRunState,
 } from "../state/runState.js";
@@ -39,6 +40,17 @@ export interface OrchestratorInput {
    * Optional so the orchestrator can be exercised without one in tests.
    */
   costTracker?: RunCostTracker;
+  /**
+   * Per-run cost ceiling in USD (#86 Phase 2 — enforcement). Once
+   * `costTracker.exceedsBudget(budgetUsd)` returns true, the orchestrator
+   * stops dispatching new work, marks every remaining `pending` issue
+   * `aborted-budget`, lets in-flight issues finish naturally, and drains.
+   *
+   * Optional: when undefined or when no `costTracker` was supplied, the
+   * budget gate is a no-op and the run completes on the original
+   * issues-exhausted condition.
+   */
+  budgetUsd?: number;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
@@ -102,6 +114,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
           logger: input.logger,
           state: input.state,
           costTracker: input.costTracker,
+          budgetUsd: input.budgetUsd,
         }).catch(async (err) => {
           input.logger.error("agent.uncaught", {
             agentId: agent.agentId,
@@ -125,6 +138,32 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       break;
     }
     await Promise.race(inFlight.values());
+
+    // Per-run cost ceiling check (#86 Phase 2). Runs after every
+    // Promise.race resolution so the gate engages at the earliest natural
+    // sync point: as soon as one in-flight issue finishes and the loop
+    // would otherwise schedule more work. Graceful shutdown: stop
+    // dispatching, mark remaining `pending` issues `aborted-budget`, drop
+    // out of the dispatch loop. The outer `Promise.allSettled` then drains
+    // currently in-flight issues to their natural completion (no hard
+    // kill, so partial PRs / git refs stay in valid states).
+    if (
+      input.budgetUsd !== undefined &&
+      input.costTracker?.exceedsBudget(input.budgetUsd)
+    ) {
+      const total = input.costTracker.total();
+      const stillPending = pendingIssueIds(input.state);
+      input.logger.warn("run.budget_exceeded", {
+        tick: input.state.tickCount,
+        total,
+        budget: input.budgetUsd,
+        abortedIssueCount: stillPending.length,
+        inFlightAtAbort: inFlight.size,
+      });
+      for (const id of stillPending) markAborted(input.state, id);
+      await saveRunState(input.state);
+      break;
+    }
   }
 
   await Promise.allSettled(inFlight.values());
@@ -349,6 +388,7 @@ async function runOneIssue(opts: {
   logger: Logger;
   state: RunState;
   costTracker?: RunCostTracker;
+  budgetUsd?: number;
 }): Promise<void> {
   const result = await runIssueCore({
     agent: opts.agent,
@@ -359,6 +399,7 @@ async function runOneIssue(opts: {
     dryRun: opts.dryRun,
     logger: opts.logger,
     costTracker: opts.costTracker,
+    budgetUsd: opts.budgetUsd,
   });
 
   // Track whether this run was a non-clean exit so the post-mortem comment

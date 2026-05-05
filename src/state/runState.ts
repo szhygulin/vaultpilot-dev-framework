@@ -63,6 +63,7 @@ export function newRunState(opts: {
   parallelism: number;
   issueIds: number[];
   dryRun: boolean;
+  maxCostUsd?: number;
 }): RunState {
   const issues: Record<string, RunIssueEntry> = {};
   for (const id of opts.issueIds) {
@@ -80,14 +81,57 @@ export function newRunState(opts: {
     lastTickAt: now,
     startedAt: now,
     dryRun: opts.dryRun,
+    ...(opts.maxCostUsd !== undefined ? { maxCostUsd: opts.maxCostUsd } : {}),
   };
 }
 
+// Terminal statuses for completion checks: `done`, `failed`, and (since #86)
+// `aborted-budget`. The orchestrator's `runOrchestrator` loop exits when
+// `isRunComplete` returns true, so adding `aborted-budget` here is what lets
+// the run wind down after the cost ceiling is crossed.
 export function isRunComplete(state: RunState): boolean {
   for (const entry of Object.values(state.issues)) {
-    if (entry.status !== "done" && entry.status !== "failed") return false;
+    if (
+      entry.status !== "done" &&
+      entry.status !== "failed" &&
+      entry.status !== "aborted-budget"
+    ) {
+      return false;
+    }
   }
   return true;
+}
+
+/**
+ * Mark a single pending issue as `aborted-budget` — the per-run cost ceiling
+ * (#86) was crossed and the orchestrator stopped dispatching. Parallel to
+ * `markFailed` in shape: writes the issue entry with `outcome: "error"` so
+ * any consumer that filters by `outcome` continues to see this as a
+ * non-success path, but the `status` distinguishes "operator policy abort"
+ * from "coding agent crashed".
+ *
+ * Idempotent on already-terminal issues: if `status` is already `done`,
+ * `failed`, or `aborted-budget`, leaves the entry untouched. Only flips
+ * `pending` (and defensively `in-flight`, though the orchestrator avoids
+ * that path) to `aborted-budget`.
+ */
+export function markAborted(state: RunState, issueId: number): void {
+  const key = String(issueId);
+  const existing = state.issues[key];
+  if (!existing) return;
+  if (
+    existing.status === "done" ||
+    existing.status === "failed" ||
+    existing.status === "aborted-budget"
+  ) {
+    return;
+  }
+  state.issues[key] = {
+    status: "aborted-budget",
+    agentId: existing.agentId,
+    outcome: "error",
+    error: "aborted-budget: per-run cost ceiling exceeded",
+  };
 }
 
 export function pendingIssueIds(state: RunState): number[] {

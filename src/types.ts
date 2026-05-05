@@ -7,7 +7,18 @@ export type IssueRangeSpec =
 
 export type AgentStatus = "idle" | "in-flight";
 
-export type IssueStatus = "pending" | "in-flight" | "done" | "failed";
+// `aborted-budget` is a terminal state distinct from `failed`: not a coding-agent
+// error, an operator policy decision. Set by the orchestrator on issues that
+// were still `pending` when the per-run cost ceiling (--max-cost-usd, #86) was
+// crossed — the dispatcher stops, in-flight issues are allowed to finish
+// naturally, and remaining pending work is marked here so post-run audits
+// don't conflate "agent failed" with "operator pulled the plug on cost".
+export type IssueStatus =
+  | "pending"
+  | "in-flight"
+  | "done"
+  | "failed"
+  | "aborted-budget";
 
 export type AgentDecision = "implement" | "pushback" | "error";
 
@@ -117,6 +128,11 @@ export interface RunState {
   // Populated by the stale-branch sweep at run start. Optional for
   // back-compat with run states written before #63.
   unprunableStaleBranches?: UnprunableStaleBranch[];
+  // Per-run cost ceiling persisted into the run-state file so `vp-dev run
+  // --resume` re-applies the same ceiling without the operator having to
+  // remember the original flag. Optional for back-compat with run states
+  // written before #86 and for runs dispatched without --max-cost-usd.
+  maxCostUsd?: number;
 }
 
 export const ResultEnvelopeSchema = z.object({

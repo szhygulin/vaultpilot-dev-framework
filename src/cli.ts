@@ -80,8 +80,18 @@ import {
 import {
   listSharedLessonDomains,
   MAX_POOL_LINES,
+  sharedLessonsPath,
   type LessonTier,
 } from "./agent/sharedLessons.js";
+import {
+  applyTrimProposal,
+  formatTrimProposal,
+  proposeTrim,
+  type ApplyTrimResult,
+  type PoolFile,
+  type TrimProposal,
+} from "./agent/trimPool.js";
+import { isValidDomain } from "./util/promotionMarkers.js";
 import {
   loadAllOutcomes,
   pollOutcomes,
@@ -253,6 +263,17 @@ export function buildCli(): Command {
         .option("--global", "Append accepted entries to the global pool (~/.vaultpilot/shared-lessons/) instead of the per-target pool")
         .action(async (opts) => {
           await cmdLessonsReview(opts);
+        }),
+    )
+    .addCommand(
+      new Command("trim")
+        .description("LLM-driven proposal to drop low-signal entries from a shared-lesson pool that hit the line cap")
+        .argument("<domain>", "Pool domain to trim (e.g. 'solana'). Must match an existing pool file under agents/.shared/lessons/.")
+        .option("--json", "Print the ranked proposal as JSON and exit (no mutation)")
+        .option("--yes", "Auto-accept the LLM's proposal (required for non-TTY environments)")
+        .option("--drop-maybes", "Treat 'maybe' verdicts as drops too (default: keep them)")
+        .action(async (domain, opts) => {
+          await cmdLessonsTrim(domain, opts);
         }),
     );
   program.addCommand(lessonsCmd);
@@ -1711,6 +1732,100 @@ async function cmdCleanupIncompleteBranches(
   );
   process.stdout.write(
     "  git push origin --delete <branch>   (per branch; review before running)\n",
+  );
+}
+
+interface LessonsTrimOpts {
+  json?: boolean;
+  yes?: boolean;
+  dropMaybes?: boolean;
+}
+
+async function cmdLessonsTrim(domain: string, opts: LessonsTrimOpts): Promise<void> {
+  if (!isValidDomain(domain)) {
+    process.stderr.write(
+      `ERROR: invalid domain '${domain}': expected lowercase dash-separated tag (e.g. 'solana', 'eip-712').\n`,
+    );
+    process.exit(2);
+  }
+  const filePath = sharedLessonsPath("target", domain);
+  try {
+    await fs.access(filePath);
+  } catch {
+    process.stderr.write(
+      `ERROR: no shared-lesson pool found for domain '${domain}' at ${filePath}.\n`,
+    );
+    process.exit(2);
+  }
+
+  process.stderr.write(`Generating trim proposal for '${domain}'...\n`);
+  const runId = `trim-${new Date().toISOString().replace(/[:.]/g, "-")}-${domain}`;
+  const logger = new Logger({ runId, verbose: false });
+  await logger.open();
+  let result: { proposal: TrimProposal; file: PoolFile };
+  try {
+    result = await proposeTrim({ domain, logger });
+  } catch (err) {
+    process.stderr.write(`ERROR: trim proposal failed: ${(err as Error).message}\n`);
+    await logger.close();
+    process.exit(2);
+  } finally {
+    await logger.close();
+  }
+
+  const { proposal, file } = result;
+  const dropMaybes = !!opts.dropMaybes;
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify({ proposal, dropMaybes }, null, 2) + "\n",
+    );
+    return;
+  }
+
+  if (proposal.totalEntries === 0) {
+    process.stdout.write(`Pool for '${domain}' has no entries — nothing to trim.\n`);
+    return;
+  }
+
+  process.stdout.write(formatTrimProposal(file, proposal, { dropMaybes }) + "\n\n");
+
+  if (!opts.yes) {
+    if (!process.stdin.isTTY) {
+      process.stderr.write(
+        "ERROR: stdin is not a TTY and --yes was not passed. Re-run with --yes to auto-accept, or pipe to a TTY.\n",
+      );
+      process.exit(2);
+    }
+    const { createInterface } = await import("node:readline/promises");
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    let answer: string;
+    try {
+      answer = (await rl.question("Apply this trim? [y/N] ")).trim().toLowerCase();
+    } finally {
+      rl.close();
+    }
+    if (answer !== "y" && answer !== "yes") {
+      process.stdout.write("Aborted — no mutation.\n");
+      return;
+    }
+  } else {
+    process.stdout.write("Auto-confirmed (--yes).\n");
+  }
+
+  const applied: ApplyTrimResult = await applyTrimProposal({
+    proposal,
+    file,
+    dropMaybes,
+  });
+  if (applied.kind === "still-over-cap") {
+    process.stderr.write(
+      `REFUSED: trimmed pool would still be ${applied.totalLines}/${MAX_POOL_LINES} lines. The model didn't drop enough — re-run \`vp-dev lessons trim ${domain}\` (optionally with --drop-maybes) or edit ${applied.filePath} by hand.\n`,
+    );
+    process.exit(2);
+  }
+  process.stdout.write(
+    `Trimmed '${domain}': kept ${applied.kept}, dropped ${applied.dropped}, ${applied.totalLines}/${MAX_POOL_LINES} lines. (${applied.filePath})\n`,
   );
 }
 

@@ -55,6 +55,22 @@ export interface RunConfirmParams {
   // for back-compat: tokens written before #142 default to `false` /
   // `undefined` and the existing no-auto-file behavior is preserved.
   autoPhaseFollowup?: boolean;
+  // Issue #148 Phase 2b of #133: persisted intent flag for the
+  // destructive `--apply-dedup` close path. When `true`, every cluster's
+  // non-canonical members are commented + closed with `--reason
+  // not_planned` BEFORE `pickAgents` so dispatch sees only canonicals.
+  // The previewHash already binds the cluster set rendered in the gate;
+  // carrying the flag in the token means a `--plan` token written
+  // without `--apply-dedup` cannot be reused at `--confirm` time WITH
+  // the flag (and vice versa) without forcing a fresh plan.
+  applyDedup?: boolean;
+  // Issue #148 Phase 2b of #133: persisted intent flag for bypassing
+  // the dedup pass entirely (no LLM call, no `dedupCostUsd` line in the
+  // gate). Mutually exclusive with `applyDedup` at the CLI layer; the
+  // flag pair is bound into the token so a token written under one
+  // mode cannot be confirmed under the other. Optional for back-compat
+  // with tokens written before #148.
+  skipDedup?: boolean;
 }
 
 export interface RunConfirmToken {

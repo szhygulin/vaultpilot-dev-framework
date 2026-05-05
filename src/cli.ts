@@ -13,7 +13,14 @@ import {
 } from "./state/runState.js";
 import { createAgent, loadRegistry, mutateRegistry } from "./state/registry.js";
 import { parseRangeSpec, describeRange } from "./github/range.js";
-import { getIssue, getIssueDetail, resolveRangeToIssues, type IssueDetail } from "./github/gh.js";
+import {
+  closeIssueAsDuplicate,
+  getIssue,
+  getIssueDetail,
+  postIssueComment,
+  resolveRangeToIssues,
+  type IssueDetail,
+} from "./github/gh.js";
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
 import { detectDuplicates } from "./orchestrator/dedup.js";
 import {
@@ -166,6 +173,14 @@ export function buildCli(): Command {
     .option(
       "--auto-phase-followup",
       "Phase 2 of #134 (#142): when set, every coding agent dispatched in this run gets the workflow prompt's Step N+1 'Auto-file next phase' section rendered (#141). Agents working on phase-marked issues (title 'Phase X:' or '## Phases' body section) file a follow-up Phase N+1 issue after `gh pr create` succeeds and surface its URL via the envelope's `nextPhaseIssueUrl`. Off by default — explicit opt-in.",
+    )
+    .option(
+      "--apply-dedup",
+      "Phase 2b of #133 (#148): close non-canonical duplicates with cross-reference comments BEFORE dispatch. After approval, every cluster member that isn't the canonical is commented (`Closing as duplicate of #N per pre-dispatch dedup (run-XXX)`) and closed with `--reason not_planned`; the canonical receives a summary comment listing all closed dups. Mutually exclusive with --skip-dedup. Bound into the --plan/--confirm previewHash so a token written without the flag cannot be confirmed with it.",
+    )
+    .option(
+      "--skip-dedup",
+      "Phase 2b of #133 (#148): bypass the pre-dispatch dedup pass entirely (no Opus call, no `dedupCostUsd` line in the gate, no clusters surfaced). Useful for cost-sensitive runs against issue sets known to have no overlap. Mutually exclusive with --apply-dedup.",
     )
     .option(
       "--no-report",
@@ -389,6 +404,18 @@ interface RunOpts {
   // default. Persisted into the confirm token so a `--plan` → `--confirm`
   // round-trip preserves the operator's opt-in.
   autoPhaseFollowup?: boolean;
+  // Issue #148 (Phase 2b of #133): destructive close path. Mutually
+  // exclusive with `skipDedup`. When set, every non-canonical cluster
+  // member from the dedup detection pass is commented + closed with
+  // `--reason not_planned` AFTER approval but BEFORE the orchestrator
+  // dispatches, so the run sees only canonicals. Carried through the
+  // confirm token; bound into the previewHash via the canonicals-only
+  // dispatch list and the rendered cluster block.
+  applyDedup?: boolean;
+  // Issue #148 (Phase 2b of #133): skip the dedup pass entirely (no
+  // model call, no cost line, no clusters surfaced). Mutually exclusive
+  // with `applyDedup`.
+  skipDedup?: boolean;
   // Commander `--no-report` auto-generates `report: boolean` on opts: true
   // by default, false when `--no-report` is passed. Issue #136.
   report?: boolean;
@@ -420,6 +447,16 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   }
   if (opts.confirm && opts.yes) {
     console.error("ERROR: --confirm and --yes are mutually exclusive (a verified plan token is itself the approval).");
+    process.exit(2);
+  }
+  // Issue #148 Phase 2b of #133: --apply-dedup performs the destructive
+  // close path; --skip-dedup bypasses dedup detection entirely. The two
+  // are contradictory intents — there is no "skip detection but apply
+  // closes" mode (closes need detection). Reject the contradiction
+  // before any work is done so the operator sees a clear error rather
+  // than discovering at confirm-time that one flag silently won.
+  if (opts.applyDedup && opts.skipDedup) {
+    console.error("ERROR: --apply-dedup and --skip-dedup are mutually exclusive.");
     process.exit(2);
   }
 
@@ -456,6 +493,14 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // #142 Phase 2: same plan→confirm carry for the auto-phase-followup
     // opt-in. Token-roundtrip-tested in `runConfirm.test.ts`.
     opts.autoPhaseFollowup = p.autoPhaseFollowup;
+    // #148 Phase 2b: same plan→confirm carry for the dedup close-path
+    // and skip-pass opt-ins. The previewHash already binds the cluster
+    // set + the canonicals-only dispatch list at apply-dedup time, but
+    // the flag itself must persist so the confirm-side launch performs
+    // the actual closes (or skips detection) on the same intent the
+    // operator authorized at plan time.
+    opts.applyDedup = p.applyDedup;
+    opts.skipDedup = p.skipDedup;
   }
 
   if (opts.agents === undefined || !opts.targetRepo) {
@@ -564,10 +609,11 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   // Issue #151 (Phase 2a-ii of #133): pre-dispatch dedup pass.
   // Runs against the triage-passed set so the operator sees clusters of
   // semantically-overlapping candidates in the gate. Phase 2a-ii is
-  // advisory only — all cluster members still dispatch. Phase 2b layers
-  // `--apply-dedup` to optionally close duplicates with a canonical
-  // cross-reference. Single Opus call (`maxTurns: 1`); fail-soft inside
-  // `detectDuplicates` so a flaky model never blocks a run.
+  // advisory only — all cluster members still dispatch. Phase 2b (#148)
+  // layers `--apply-dedup` to close non-canonicals before dispatch and
+  // `--skip-dedup` to bypass the pass entirely. Single Opus call
+  // (`maxTurns: 1`); fail-soft inside `detectDuplicates` so a flaky
+  // model never blocks a run.
   const dedupLogger = new Logger({
     runId: `dedup-${new Date().toISOString().replace(/[:.]/g, "-")}`,
     verbose: !!opts.verbose,
@@ -576,7 +622,16 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   let duplicateClusters: DuplicateCluster[] = [];
   let dedupCostUsd: number | undefined;
   try {
-    if (dispatchIssues.length < 2) {
+    if (opts.skipDedup) {
+      // Issue #148: --skip-dedup bypasses detection entirely. No model
+      // call → no cost line in the gate, no clusters surfaced. The gate
+      // text omits "Dedup cost:" the same way it omits "Triage cost:"
+      // when --include-non-ready is passed (per #55).
+      dedupLogger.info("dedup.bypassed", {
+        reason: "--skip-dedup",
+        issueCount: dispatchIssues.length,
+      });
+    } else if (dispatchIssues.length < 2) {
       dedupLogger.info("dedup.bypassed", {
         reason: "fewer than 2 candidate issues",
         issueCount: dispatchIssues.length,
@@ -616,6 +671,40 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     }
   } finally {
     await dedupLogger.close();
+  }
+
+  // Issue #148 (Phase 2b of #133): when --apply-dedup is set, shrink the
+  // candidate dispatch list to canonicals-only BEFORE the open-PR /
+  // cost-partition / preview stages. The actual `gh issue close` calls
+  // run AFTER approval (a destructive side-effect must not happen
+  // before the human authorizes the run); pre-filtering here ensures
+  // pickAgents and the rendered preview describe the canonical set the
+  // run will actually dispatch. The clusters themselves stay rendered
+  // in the advisory block so the operator sees what's about to close.
+  let plannedDuplicateCloses: { issueId: number; canonical: number }[] = [];
+  if (opts.applyDedup && duplicateClusters.length > 0) {
+    const candidateIds = new Set(dispatchIssues.map((i) => i.id));
+    const dupIdsInCandidateSet = new Set<number>();
+    for (const cluster of duplicateClusters) {
+      for (const dupId of cluster.duplicates) {
+        // Only close duplicates that are still in the candidate set.
+        // A duplicate already filtered by triage / open-PR / budget
+        // doesn't need closing as part of this run.
+        if (candidateIds.has(dupId)) {
+          dupIdsInCandidateSet.add(dupId);
+          plannedDuplicateCloses.push({ issueId: dupId, canonical: cluster.canonical });
+        }
+      }
+    }
+    dispatchIssues = dispatchIssues.filter(
+      (i) => !dupIdsInCandidateSet.has(i.id),
+    );
+    if (dispatchIssues.length === 0) {
+      console.error(
+        `ERROR: --apply-dedup would close all ${plannedDuplicateCloses.length} candidate issue(s) as duplicates. Inspect the cluster set and re-run without --apply-dedup, or narrow --issues to include the canonicals.`,
+      );
+      process.exit(2);
+    }
   }
 
   // Issues with an open vp-dev PR can't be re-dispatched: `git worktree add
@@ -757,6 +846,14 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         // value between plan and confirm rebuilds the preview text and
         // rejects with a drift diff.
         autoPhaseFollowup: opts.autoPhaseFollowup,
+        // #148 Phase 2b: persist the dedup mode flags. --apply-dedup
+        // shrinks the dispatch list (preview text changes → previewHash
+        // changes), so a token written under --apply-dedup cannot be
+        // confirmed without it (and vice versa). --skip-dedup omits
+        // both the cluster block and the dedup-cost line from the
+        // preview, so the same hash protection holds.
+        applyDedup: opts.applyDedup,
+        skipDedup: opts.skipDedup,
       },
     });
     process.stdout.write("Plan saved. No agents launched.\n");
@@ -883,7 +980,107 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // audits can confirm what tier was actually used (especially when the
     // operator overrode a default via VP_DEV_*_MODEL env vars).
     models: resolvedModelTiers(),
+    // Issue #148 Phase 2b: surface the apply-dedup close intent and the
+    // count of duplicate issues queued for closure on the started line
+    // so post-run audits can attribute closes to a specific run without
+    // grepping for individual `dedup.apply.*` events.
+    applyDedup: !!opts.applyDedup,
+    skipDedup: !!opts.skipDedup,
+    plannedDuplicateCloseCount: plannedDuplicateCloses.length,
   });
+
+  // Issue #148 Phase 2b of #133: --apply-dedup close path. Runs AFTER
+  // the gate (approval or token-verify) and AFTER the run logger opens
+  // so each close lands as a structured `dedup.apply.*` event under the
+  // run's JSONL log. The candidate dispatch list was already shrunk to
+  // canonicals-only above (so pickAgents and the rendered preview
+  // reflect the canonical set); this loop performs the actual side
+  // effects.
+  //
+  // Errors are caught per-cluster — a failed close on one issue (gh
+  // network blip, branch protection edge case, etc.) is logged and
+  // surfaced via the run-state JSONL log, but never aborts the run. The
+  // canonical-side summary still posts even if some duplicate closes
+  // failed; it lists only the closes that actually succeeded so the
+  // canonical comment doesn't lie about the cross-reference chain.
+  if (opts.applyDedup && plannedDuplicateCloses.length > 0) {
+    const targetRepo = opts.targetRepo;
+    // Group closes per canonical so we can post a single summary
+    // comment on each canonical naming the dups that yielded to it.
+    const closesByCanonical = new Map<number, { issueId: number; commentUrl: string }[]>();
+    let successCount = 0;
+    let failureCount = 0;
+    for (const planned of plannedDuplicateCloses) {
+      try {
+        const r = await closeIssueAsDuplicate(
+          targetRepo,
+          planned.issueId,
+          planned.canonical,
+          runId,
+          { dryRun: !!opts.dryRun },
+        );
+        successCount += 1;
+        const list = closesByCanonical.get(planned.canonical) ?? [];
+        list.push({ issueId: planned.issueId, commentUrl: r.commentUrl });
+        closesByCanonical.set(planned.canonical, list);
+        logger.info("dedup.apply.closed", {
+          issueId: planned.issueId,
+          canonical: planned.canonical,
+          commentUrl: r.commentUrl,
+          closedAt: r.closedAt,
+          dryRun: !!opts.dryRun,
+        });
+      } catch (err) {
+        failureCount += 1;
+        logger.warn("dedup.apply.close_failed", {
+          issueId: planned.issueId,
+          canonical: planned.canonical,
+          err: (err as Error).message,
+        });
+      }
+    }
+    // Canonical-side summary: one comment per canonical listing each
+    // successfully-closed duplicate. Failures are excluded so the
+    // cross-reference chain matches reality. Dry-run emits a synthetic
+    // URL so downstream consumers (transcripts, run-log replays) can
+    // see what would have happened.
+    for (const [canonical, closes] of closesByCanonical) {
+      if (closes.length === 0) continue;
+      const lines = [
+        `Pre-dispatch dedup (${runId}) closed the following duplicate(s) of this issue:`,
+        ...closes.map(
+          (c) => `- #${c.issueId} — ${c.commentUrl}`,
+        ),
+      ];
+      const body = lines.join("\n");
+      try {
+        let commentUrl: string | null;
+        if (opts.dryRun) {
+          commentUrl = `https://dry-run/issue-comment/${targetRepo}/${canonical}`;
+        } else {
+          commentUrl = await postIssueComment(targetRepo, canonical, body);
+        }
+        logger.info("dedup.apply.canonical_summary_posted", {
+          canonical,
+          duplicateCount: closes.length,
+          commentUrl,
+          dryRun: !!opts.dryRun,
+        });
+      } catch (err) {
+        logger.warn("dedup.apply.canonical_summary_failed", {
+          canonical,
+          err: (err as Error).message,
+        });
+      }
+    }
+    logger.info("dedup.apply.completed", {
+      planned: plannedDuplicateCloses.length,
+      succeeded: successCount,
+      failed: failureCount,
+      canonicalsCommented: closesByCanonical.size,
+      dryRun: !!opts.dryRun,
+    });
+  }
 
   // Issue #119 Phase 2: when --resume-incomplete is set, build the
   // per-issue ResumeContext map from the salvage refs already enumerated

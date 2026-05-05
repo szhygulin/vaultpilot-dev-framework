@@ -102,6 +102,77 @@ test("runConfirm token round-trip: omitted autoPhaseFollowup stays undefined (ba
   }
 });
 
+// Issue #148 (Phase 2b of #133): both --apply-dedup and --skip-dedup
+// must round-trip the token so a `--plan` token written under one mode
+// cannot be silently confirmed under the other. The previewHash check
+// catches preview-text drift; these tests pin the persistence-layer
+// invariant the hash check depends on.
+
+test("runConfirm token round-trip: applyDedup === true persists", async () => {
+  await ensureStateDir();
+  const token = mintToken();
+  await writeRunConfirmToken({
+    token,
+    previewHash: hashPreview("preview-applyDedup-1"),
+    params: { ...baseParams, applyDedup: true },
+  });
+  try {
+    const r = await readRunConfirmToken(token);
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.record.params.applyDedup, true);
+      assert.equal(r.record.params.skipDedup, undefined);
+    }
+  } finally {
+    await deleteRunConfirmToken(token);
+  }
+});
+
+test("runConfirm token round-trip: skipDedup === true persists", async () => {
+  await ensureStateDir();
+  const token = mintToken();
+  await writeRunConfirmToken({
+    token,
+    previewHash: hashPreview("preview-skipDedup-1"),
+    params: { ...baseParams, skipDedup: true },
+  });
+  try {
+    const r = await readRunConfirmToken(token);
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.record.params.skipDedup, true);
+      assert.equal(r.record.params.applyDedup, undefined);
+    }
+  } finally {
+    await deleteRunConfirmToken(token);
+  }
+});
+
+test("runConfirm token round-trip: omitted applyDedup/skipDedup stay undefined (back-compat)", async () => {
+  // Tokens written before #148 carry neither field. The read path must
+  // surface both as `undefined`, not coerce to false — `cmdRun`'s
+  // mutex check uses `if (opts.applyDedup && opts.skipDedup)`, which
+  // tolerates undefined naturally; tokens written under the new
+  // schema without either flag should match the same default-off shape.
+  await ensureStateDir();
+  const token = mintToken();
+  await writeRunConfirmToken({
+    token,
+    previewHash: hashPreview("preview-default-dedup"),
+    params: { ...baseParams }, // no applyDedup, no skipDedup
+  });
+  try {
+    const r = await readRunConfirmToken(token);
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.record.params.applyDedup, undefined);
+      assert.equal(r.record.params.skipDedup, undefined);
+    }
+  } finally {
+    await deleteRunConfirmToken(token);
+  }
+});
+
 test("runConfirm token round-trip: pre-#142 token shape (no autoPhaseFollowup field on disk) reads cleanly", async () => {
   // Hand-write a token file shaped like a pre-#142 plan: no
   // `autoPhaseFollowup` key at all, no `resumeIncomplete` either —

@@ -314,12 +314,16 @@ export function formatSetupPreview(p: SetupPreview): string {
 
   // Issue #151 (Phase 2a-ii of #133): advisory dedup block. Phase 2a-ii
   // is awareness-only — every cluster member still dispatches. Phase 2b
-  // layers `--apply-dedup` to optionally close duplicates with a
-  // canonical cross-reference comment. Rendering the cluster set here
-  // also binds it into `previewHash` (via `formatSetupPreview`), so a
-  // dedup outcome that drifts between `--plan` and `--confirm` rejects
-  // the confirm and forces a fresh plan — same protection #149 already
-  // gives triage.
+  // (#148) ships `--apply-dedup` (close non-canonicals before dispatch)
+  // and `--skip-dedup` (bypass detection entirely). When --apply-dedup
+  // is active, the candidate-shrink step in `cli.ts` drops cluster
+  // non-canonicals from `dispatchIssues` BEFORE the preview is built,
+  // so both the rendered preview and the underlying dispatch list
+  // reflect the canonical-only set the run will actually dispatch.
+  // Rendering the cluster set here also binds it into `previewHash`
+  // (via `formatSetupPreview`), so a dedup outcome that drifts between
+  // `--plan` and `--confirm` rejects the confirm and forces a fresh
+  // plan — same protection #149 already gives triage.
   if (p.duplicateClusters.length > 0) {
     lines.push(
       `${p.duplicateClusters.length} duplicate cluster(s) detected (advisory — all issues still dispatch):`,
@@ -330,7 +334,7 @@ export function formatSetupPreview(p: SetupPreview): string {
       lines.push(`    ${c.rationale}`);
     }
     lines.push(
-      "  Phase 2b will add --apply-dedup to optionally close duplicates with a canonical cross-reference.",
+      "  Pass --apply-dedup to close duplicates with a canonical cross-reference comment before dispatch.",
     );
     lines.push("");
   }

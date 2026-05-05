@@ -324,3 +324,69 @@ test("formatStatusJson: liveActivity + recentEvents undefined when activity not 
   const json = formatStatusJson(fixture());
   assert.equal(json.recentEvents, undefined);
 });
+
+// Issue #149 (follow-up to #142 / #141 Phase 1): surface nextPhaseIssueUrl
+// in both formatters so the auto-filed Phase N+1 follow-up issue is
+// discoverable from `vp-dev status` without scraping run-state JSON.
+
+test("formatStatusText: surfaces nextPhaseIssueUrl on a 'next phase:' addendum line when set", () => {
+  const text = formatStatusText(
+    fixture({
+      issues: {
+        "142": {
+          status: "done",
+          agentId: "agent-92ff",
+          outcome: "implement",
+          prUrl: "https://github.com/x/y/pull/200",
+          nextPhaseIssueUrl: "https://github.com/x/y/issues/201",
+        },
+      },
+    }),
+  );
+  assert.match(text, /next phase: https:\/\/github\.com\/x\/y\/issues\/201/);
+});
+
+test("formatStatusText: omits 'next phase:' line when nextPhaseIssueUrl absent (back-compat)", () => {
+  const text = formatStatusText(
+    fixture({
+      issues: {
+        "142": {
+          status: "done",
+          agentId: "agent-92ff",
+          outcome: "implement",
+          prUrl: "https://github.com/x/y/pull/200",
+        },
+      },
+    }),
+  );
+  assert.doesNotMatch(text, /next phase:/);
+});
+
+test("formatStatusJson: includes nextPhaseIssueUrl on per-issue object when set", () => {
+  const json = formatStatusJson(
+    fixture({
+      issues: {
+        "142": {
+          status: "done",
+          agentId: "agent-92ff",
+          outcome: "implement",
+          prUrl: "https://github.com/x/y/pull/200",
+          nextPhaseIssueUrl: "https://github.com/x/y/issues/201",
+        },
+      },
+    }),
+  );
+  assert.equal(
+    json.issues[0].nextPhaseIssueUrl,
+    "https://github.com/x/y/issues/201",
+  );
+});
+
+test("formatStatusJson: nextPhaseIssueUrl undefined on per-issue object when entry omits it (back-compat)", () => {
+  const json = formatStatusJson(
+    fixture({
+      issues: { "142": { status: "done", agentId: "agent-92ff", outcome: "implement" } },
+    }),
+  );
+  assert.equal(json.issues[0].nextPhaseIssueUrl, undefined);
+});

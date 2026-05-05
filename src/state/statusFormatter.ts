@@ -172,6 +172,14 @@ export interface StatusJson {
     error?: string;
     errorSubtype?: string;
     parseError?: string;
+    /**
+     * URL of the auto-filed Phase N+1 follow-up issue (issue #141 Phase 1
+     * persists this onto `RunIssueEntry`; #142 wires the CLI flag that
+     * actually populates it; #149 surfaces it through the formatter). Absent
+     * for runs dispatched without `--auto-phase-followup`, agents that ran
+     * pushback / error paths, and pre-#141 run-state entries.
+     */
+    nextPhaseIssueUrl?: string;
     /** Present only when `opts.activity` was supplied and the issue had any events. */
     liveActivity?: IssueLiveActivityJson;
   }[];
@@ -226,6 +234,7 @@ export function formatStatusJson(state: RunState, opts: StatusFormatOpts = {}): 
           error: e.error,
           errorSubtype: e.errorSubtype,
           parseError: e.parseError,
+          nextPhaseIssueUrl: e.nextPhaseIssueUrl,
           liveActivity: issueActivity
             ? {
                 lastEventTs: issueActivity.lastEventTs,
@@ -293,6 +302,13 @@ function renderIssueLines(
   }
   if (e.commentUrl && e.prUrl) {
     out.push(`           comment: ${e.commentUrl}`);
+  }
+  // Issue #149 (follow-up to #142 / #141 Phase 1): surface the auto-filed
+  // Phase N+1 follow-up issue URL when the orchestrator persisted one onto
+  // the entry. Mirrors the `partial:` indent so multi-line addenda stay
+  // visually aligned in the per-issue block.
+  if (e.nextPhaseIssueUrl) {
+    out.push(`           next phase: ${e.nextPhaseIssueUrl}`);
   }
   return out;
 }

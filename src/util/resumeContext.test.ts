@@ -78,6 +78,73 @@ test("buildResumeContextMap: enriches from state/<runId>.json when present", asy
   }
 });
 
+test("buildResumeContextMap: resolves agentName from registry when match exists (issue #129)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-ctx-"));
+  try {
+    const runId = "run-2026-05-05T08-00-00-000Z";
+    const branch = `vp-dev/agent-08c4/issue-86-incomplete-${runId}`;
+    const incomplete = new Map([
+      [86, [{ issueId: 86, agentId: "agent-08c4", branchName: branch, runId }]],
+    ]);
+    const map = await buildResumeContextMap({
+      incompleteOrigin: incomplete,
+      stateDir: dir,
+      agents: [
+        {
+          agentId: "agent-08c4",
+          name: "Khwarizmi",
+          createdAt: "2026-05-01T00:00:00.000Z",
+          tags: [],
+          issuesHandled: 0,
+          implementCount: 0,
+          pushbackCount: 0,
+          errorCount: 0,
+          lastActiveAt: "2026-05-01T00:00:00.000Z",
+        },
+      ],
+    });
+    const ctx = map.get(86);
+    assert.ok(ctx);
+    assert.equal(ctx!.agentName, "Khwarizmi");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildResumeContextMap: leaves agentName undefined when no registry match (issue #129)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-ctx-"));
+  try {
+    const runId = "run-2026-05-05T09-00-00-000Z";
+    const branch = `vp-dev/agent-zz99/issue-77-incomplete-${runId}`;
+    const incomplete = new Map([
+      [77, [{ issueId: 77, agentId: "agent-zz99", branchName: branch, runId }]],
+    ]);
+    // Registry contains a different agent.
+    const map = await buildResumeContextMap({
+      incompleteOrigin: incomplete,
+      stateDir: dir,
+      agents: [
+        {
+          agentId: "agent-08c4",
+          name: "Khwarizmi",
+          createdAt: "2026-05-01T00:00:00.000Z",
+          tags: [],
+          issuesHandled: 0,
+          implementCount: 0,
+          pushbackCount: 0,
+          errorCount: 0,
+          lastActiveAt: "2026-05-01T00:00:00.000Z",
+        },
+      ],
+    });
+    const ctx = map.get(77);
+    assert.ok(ctx);
+    assert.equal(ctx!.agentName, undefined);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("buildResumeContextMap: degrades cleanly when state file is missing", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-ctx-"));
   try {

@@ -72,13 +72,27 @@ export function resolveMinClusterSize(opts: {
 // and a 100-char clamp truncates them with a literal `...` (issue #167).
 // 160 covers observed natural lengths without admitting essay-length headings.
 const HEADING_MAX = 160;
-const BODY_MAX = 6000;
+// Bumped from 6000 to 10000 (issue #175) — the prior ceiling forced the
+// clamp to fire on otherwise-valid merges of 3-6 dense source sections;
+// truncated bodies then leaked the `[…truncated]` marker through Phase B's
+// --apply path because the validator only checks for dropped past-incident
+// dates, not for the marker itself. Raising the cap reduces how often the
+// clamp fires; the new `findClampedBodies` validator (also #175) refuses
+// --apply when it does.
+const BODY_MAX = 10000;
 const RATIONALE_MAX = 800;
 // Top-level model-side `notes` field. Pre-clamp ceiling matches
 // `ProposalPayloadSchema.notes.max(500)`; verbose model commentary used to
 // hard-fail the entire proposal at Zod parse time, which is the wrong
 // failure mode for a cosmetic field that's already advisory.
 const NOTES_MAX = 500;
+
+// Literal sentinel `clampClusterFields` appends to over-long bodies and
+// rationales (`<truncated content>\n[…truncated]`). The clamp is for
+// schema-validation safety (Zod cap is the hard ceiling); the post-hoc
+// detector below catches when it fires so --apply can refuse to write the
+// truncated marker into the file (issue #175).
+const TRUNCATED_MARKER = "\n[…truncated]";
 
 export interface CompactionCluster {
   /** ≥2 sectionIds from parseClaudeMdSections, all to be merged into one. */
@@ -112,14 +126,21 @@ export interface CompactionProposal {
   warnings: CompactionWarning[];
 }
 
-export type CompactionWarning = {
-  kind: "dropped-incident-date";
-  clusterIndex: number;
-  /** Dates present in source section bodies but missing from the merged body. */
-  missingDates: string[];
-  /** sectionIds of the source sections whose dates were dropped. */
-  fromSectionIds: string[];
-};
+export type CompactionWarning =
+  | {
+      kind: "dropped-incident-date";
+      clusterIndex: number;
+      /** Dates present in source section bodies but missing from the merged body. */
+      missingDates: string[];
+      /** sectionIds of the source sections whose dates were dropped. */
+      fromSectionIds: string[];
+    }
+  | {
+      kind: "clamped-body";
+      clusterIndex: number;
+      /** Which fields ended in the truncation marker (model exceeded the byte cap). */
+      fields: Array<"proposedBody" | "rationale">;
+    };
 
 const ClusterSchema = z.object({
   sectionIds: z.array(z.string().min(1)).min(2),
@@ -222,6 +243,38 @@ export function findDroppedIncidentDates(
         missingDates: missing,
         fromSectionIds: Array.from(fromIds).sort(),
       });
+    }
+  });
+  return warnings;
+}
+
+/**
+ * Clamp-leak validator (per issue #175).
+ *
+ * `clampClusterFields` truncates `proposedBody` / `rationale` past their
+ * byte caps and tacks on a `\n[…truncated]` marker so the schema-validation
+ * gate doesn't hard-fail an otherwise-good proposal on a slightly-verbose
+ * cluster. The clamp is necessary safety, but the truncated content then
+ * flows through `applyCompaction` → `spliceCompactedSections` → atomic
+ * rename, leaving a literal `[…truncated]` marker in the file.
+ *
+ * `findDroppedIncidentDates` only checks for dropped ISO-style dates, not
+ * for the marker itself. This detector catches the marker directly so the
+ * `--apply` path's `warnings.length > 0` refusal gate fires before the
+ * rewrite. Match against the literal sentinel `\n[…truncated]` only at
+ * end-of-field — bodies citing the marker mid-text (e.g. quoting prior
+ * incidents) are ignored.
+ */
+export function findClampedBodies(proposal: {
+  clusters: CompactionCluster[];
+}): CompactionWarning[] {
+  const warnings: CompactionWarning[] = [];
+  proposal.clusters.forEach((c, idx) => {
+    const fields: Array<"proposedBody" | "rationale"> = [];
+    if (c.proposedBody.endsWith(TRUNCATED_MARKER)) fields.push("proposedBody");
+    if (c.rationale.endsWith(TRUNCATED_MARKER)) fields.push("rationale");
+    if (fields.length > 0) {
+      warnings.push({ kind: "clamped-body", clusterIndex: idx, fields });
     }
   });
   return warnings;
@@ -340,7 +393,10 @@ export async function proposeCompaction(
     .filter((id) => !seenIds.has(id));
 
   const estimatedBytesSaved = computeEstimatedBytesSaved(clusters, sectionById);
-  const warnings = findDroppedIncidentDates({ clusters }, sections);
+  const warnings: CompactionWarning[] = [
+    ...findDroppedIncidentDates({ clusters }, sections),
+    ...findClampedBodies({ clusters }),
+  ];
 
   return {
     ...baseProposal,
@@ -465,6 +521,10 @@ export function formatCompactionProposal(p: CompactionProposal): string {
         lines.push(
           `     ⚠ DROPPED DATES: ${w.missingDates.join(", ")} (from ${w.fromSectionIds.join(", ")})`,
         );
+      } else if (w.kind === "clamped-body") {
+        lines.push(
+          `     ⚠ CLAMPED FIELDS: ${w.fields.join(", ")} (model emission exceeded byte cap; detail dropped at truncation)`,
+        );
       }
     }
     lines.push("");
@@ -477,7 +537,7 @@ export function formatCompactionProposal(p: CompactionProposal): string {
   lines.push("");
   if (p.warnings.length > 0) {
     lines.push(
-      `⚠ ${p.warnings.length} cluster(s) flagged by the collapsed-distinct-rules validator — --apply will reject this proposal until re-run produces a clean output.`,
+      `⚠ ${p.warnings.length} validator finding(s) (dropped-incident-date or clamped-body) — --apply will reject this proposal until re-run produces a clean output.`,
     );
   } else {
     lines.push(
@@ -598,21 +658,26 @@ export async function applyCompaction(
       }
     }
 
-    const warnings = findDroppedIncidentDates(
-      { clusters: input.proposal.clusters },
-      sections,
-    );
+    const warnings: CompactionWarning[] = [
+      ...findDroppedIncidentDates(
+        { clusters: input.proposal.clusters },
+        sections,
+      ),
+      ...findClampedBodies({ clusters: input.proposal.clusters }),
+    ];
     if (warnings.length > 0) {
       const summary = warnings
-        .map(
-          (w) =>
-            `cluster[${w.clusterIndex}] dropped ${w.missingDates.join(",")}`,
-        )
+        .map((w) => {
+          if (w.kind === "dropped-incident-date") {
+            return `cluster[${w.clusterIndex}] dropped ${w.missingDates.join(",")}`;
+          }
+          return `cluster[${w.clusterIndex}] clamped ${w.fields.join(",")}`;
+        })
         .join("; ");
       return {
         kind: "drift-rejected",
         reason: "warnings-present",
-        details: `Collapsed-distinct-rules validator flagged the proposal at apply time: ${summary}. Re-run --apply.`,
+        details: `Compaction validator flagged the proposal at apply time: ${summary}. Re-run --apply.`,
       };
     }
 

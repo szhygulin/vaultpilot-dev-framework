@@ -2068,7 +2068,7 @@ async function cmdAgentsCompactClaudeMd(
     }
     process.stdout.write(formatCompactionProposal(proposal) + "\n");
     process.stdout.write(
-      `\nERROR: --apply refused; ${proposal.warnings.length} cluster(s) flagged by collapsed-distinct-rules validator. Re-run after the model emits a clean proposal.\n`,
+      `\nERROR: --apply refused; ${proposal.warnings.length} validator finding(s) (dropped-incident-date or clamped-body — see proposal output). Re-run after the model emits a clean proposal.\n`,
     );
     process.exit(2);
   }

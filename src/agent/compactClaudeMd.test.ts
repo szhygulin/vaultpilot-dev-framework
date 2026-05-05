@@ -65,6 +65,7 @@ test("findDroppedIncidentDates: flags cluster where merged body drops a source d
 
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].kind, "dropped-incident-date");
+  if (warnings[0].kind !== "dropped-incident-date") return;
   assert.deepEqual(warnings[0].missingDates, ["2026-04-28"]);
   assert.deepEqual(warnings[0].fromSectionIds, ["s0"]);
 });
@@ -148,6 +149,7 @@ test("findDroppedIncidentDates: clusterIndex matches the position in the input a
   );
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].clusterIndex, 1);
+  if (warnings[0].kind !== "dropped-incident-date") return;
   assert.deepEqual(warnings[0].missingDates, ["2026-04-04"]);
 });
 
@@ -201,7 +203,7 @@ test("formatCompactionProposal: surfaces dropped-date warnings inline per cluste
   assert.match(out, /merging 3 sections/);
   assert.match(out, /provenance: #100, #101/);
   assert.match(out, /DROPPED DATES: 2026-04-28/);
-  assert.match(out, /1 cluster\(s\) flagged/);
+  assert.match(out, /1 validator finding\(s\)/);
   assert.match(out, /Unclustered \(1\): s3/);
 });
 
@@ -703,7 +705,7 @@ void AGENTS_ROOT;
 // that had received a #142+ summarizer pass — i.e. nearly every active one.
 // ---------------------------------------------------------------------------
 
-import { clampClusterFields } from "./compactClaudeMd.js";
+import { clampClusterFields, findClampedBodies } from "./compactClaudeMd.js";
 
 test("parseClaudeMdSections: matches sentinels with the optional `tags:` suffix (#142+ shape)", () => {
   // Pre-fix, SECTION_RE required `ts:\S+\s*-->`, so any sentinel emitted by
@@ -755,7 +757,7 @@ test("clampClusterFields: still trims cluster body / heading / rationale alongsi
       {
         sectionIds: ["s0", "s1", "s2"],
         proposedHeading: "x".repeat(200),
-        proposedBody: "y".repeat(8000),
+        proposedBody: "y".repeat(12000),
         rationale: "z".repeat(1200),
       },
     ],
@@ -766,7 +768,156 @@ test("clampClusterFields: still trims cluster body / heading / rationale alongsi
     notes: string;
   };
   assert.ok(out.clusters[0].proposedHeading.length <= 160);
-  assert.ok(out.clusters[0].proposedBody.length <= 6000);
+  // Issue #175: BODY_MAX raised from 6000 to 10000 to give the model
+  // room for dense 3-6 source-section merges without firing the clamp.
+  assert.ok(out.clusters[0].proposedBody.length <= 10000);
   assert.ok(out.clusters[0].rationale.length <= 800);
   assert.ok(out.notes.length <= 500);
+});
+
+// ---------------------------------------------------------------------------
+// Issue #175: clamp-leak validator. clampClusterFields tacks on `\n[…truncated]`
+// when a body or rationale exceeds the byte cap; findClampedBodies surfaces
+// that as a CompactionWarning so the --apply gate refuses to write the marker
+// into the file.
+// ---------------------------------------------------------------------------
+
+test("findClampedBodies: flags clusters whose proposedBody ends in the truncation marker", () => {
+  const warnings = findClampedBodies({
+    clusters: [
+      {
+        sectionIds: ["s0", "s1", "s2"],
+        proposedHeading: "Merged",
+        // The literal sentinel clampClusterFields appends.
+        proposedBody: "Combined content...\n[…truncated]",
+        rationale: "shared thesis",
+        sourceProvenance: [],
+      },
+    ],
+  });
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].kind, "clamped-body");
+  assert.equal(warnings[0].clusterIndex, 0);
+  if (warnings[0].kind !== "clamped-body") return;
+  assert.deepEqual(warnings[0].fields, ["proposedBody"]);
+});
+
+test("findClampedBodies: flags clusters whose rationale ends in the truncation marker", () => {
+  const warnings = findClampedBodies({
+    clusters: [
+      {
+        sectionIds: ["s0", "s1", "s2"],
+        proposedHeading: "Merged",
+        proposedBody: "Combined content (clean).",
+        rationale: "shared thesis is...\n[…truncated]",
+        sourceProvenance: [],
+      },
+    ],
+  });
+  assert.equal(warnings.length, 1);
+  if (warnings[0].kind !== "clamped-body") return;
+  assert.deepEqual(warnings[0].fields, ["rationale"]);
+});
+
+test("findClampedBodies: reports both fields when both were clamped on the same cluster", () => {
+  const warnings = findClampedBodies({
+    clusters: [
+      {
+        sectionIds: ["s0", "s1", "s2"],
+        proposedHeading: "Merged",
+        proposedBody: "Body content...\n[…truncated]",
+        rationale: "Rationale content...\n[…truncated]",
+        sourceProvenance: [],
+      },
+    ],
+  });
+  assert.equal(warnings.length, 1);
+  if (warnings[0].kind !== "clamped-body") return;
+  assert.deepEqual(warnings[0].fields, ["proposedBody", "rationale"]);
+});
+
+test("findClampedBodies: clean cluster with no clamping yields no warning", () => {
+  const warnings = findClampedBodies({
+    clusters: [
+      {
+        sectionIds: ["s0", "s1", "s2"],
+        proposedHeading: "Merged",
+        proposedBody: "Combined content (clean).",
+        rationale: "shared thesis",
+        sourceProvenance: [],
+      },
+    ],
+  });
+  assert.equal(warnings.length, 0);
+});
+
+test("findClampedBodies: marker mid-body (not at end) is ignored — only end-of-field clamps are flagged", () => {
+  // Operators may legitimately quote prior incidents that contain the marker
+  // inside a longer body. Only the end-of-field clamp (clampClusterFields'
+  // own emission) counts as a true clamp leak.
+  const warnings = findClampedBodies({
+    clusters: [
+      {
+        sectionIds: ["s0", "s1", "s2"],
+        proposedHeading: "Merged",
+        proposedBody:
+          "Past incident: the model output ended with `\n[…truncated]` and then we followed up with this clean paragraph.",
+        rationale: "shared",
+        sourceProvenance: [],
+      },
+    ],
+  });
+  assert.equal(warnings.length, 0);
+});
+
+test("findClampedBodies: clusterIndex matches the position in the input array", () => {
+  const warnings = findClampedBodies({
+    clusters: [
+      {
+        sectionIds: ["s0", "s1"],
+        proposedHeading: "Clean",
+        proposedBody: "clean body",
+        rationale: "ok",
+        sourceProvenance: [],
+      },
+      {
+        sectionIds: ["s2", "s3"],
+        proposedHeading: "Clamped",
+        proposedBody: "clamped...\n[…truncated]",
+        rationale: "ok",
+        sourceProvenance: [],
+      },
+    ],
+  });
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].clusterIndex, 1);
+});
+
+test("formatCompactionProposal: surfaces clamped-body warnings inline per cluster", () => {
+  const proposal: CompactionProposal = {
+    agentId: "agent-test",
+    clusters: [
+      {
+        sectionIds: ["s0", "s1", "s2"],
+        proposedHeading: "Merged rule",
+        proposedBody: "body ending in...\n[…truncated]",
+        rationale: "shared thesis",
+        sourceProvenance: [],
+      },
+    ],
+    unclusteredSectionIds: [],
+    estimatedBytesSaved: 1024,
+    inputBytes: 8192,
+    sectionCount: 3,
+    warnings: [
+      {
+        kind: "clamped-body",
+        clusterIndex: 0,
+        fields: ["proposedBody"],
+      },
+    ],
+  };
+  const out = formatCompactionProposal(proposal);
+  assert.match(out, /CLAMPED FIELDS: proposedBody/);
+  assert.match(out, /1 validator finding\(s\)/);
 });

@@ -9,6 +9,7 @@ import { promises as fs } from "node:fs";
 import {
   appendLessonToPool,
   type AppendLessonOutcome,
+  type LessonTier,
 } from "./sharedLessons.js";
 import { agentClaudeMdPath } from "./specialization.js";
 import { withFileLock } from "../state/locks.js";
@@ -78,11 +79,20 @@ export interface AcceptResult {
  */
 export async function acceptCandidate(input: {
   pending: PendingCandidate;
+  /**
+   * Destination tier for the accepted entry. "target" appends to
+   * `agents/.shared/lessons/<domain>.md`; "global" appends to the
+   * cross-target-repo pool under `~/.vaultpilot/shared-lessons/<domain>.md`.
+   * The source-CLAUDE.md sentinel rewrite is the same for both — only the
+   * write target differs (#101).
+   */
+  tier: LessonTier;
   ts?: string;
   issueId?: number;
 }): Promise<AcceptResult> {
   const ts = input.ts ?? new Date().toISOString();
   const appendOutcome = await appendLessonToPool({
+    tier: input.tier,
     domain: input.pending.candidate.domain,
     body: input.pending.candidate.body,
     sourceAgentId: input.pending.agentId,

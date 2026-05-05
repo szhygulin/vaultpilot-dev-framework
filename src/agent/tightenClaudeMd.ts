@@ -37,6 +37,20 @@ const TIGHTEN_MODEL = ORCHESTRATOR_MODEL_SPLIT;
 // nuance. Operator-tunable from CLI.
 export const DEFAULT_MAX_SAVINGS_PCT = 40;
 
+// Below this byte-savings floor the per-rewrite diff is low signal — a
+// trivial trim that doesn't merit a wall-of-diff. Falls back to the
+// single-line `[sN] X.YYKB saved` summary instead. Picked at 50 bytes
+// per issue #176: catches "drop one filler phrase" (~30-50B) but lets
+// substantive rewrites surface their diff.
+export const MIN_DIFF_SAVINGS_BYTES = 50;
+
+// Cap on per-rewrite diff body lines. 60 keeps the largest rewrite
+// readable in a terminal scrollback without becoming a wall-of-text on
+// near-total rewrites. Beyond the cap, the formatter appends a
+// `… (N more lines truncated)` marker. Operator can re-run with `--json`
+// (which carries `rewrittenBody` in full) to see the untruncated body.
+export const DEFAULT_MAX_DIFF_LINES = 60;
+
 // Per-field caps on the LLM proposal payload. `rewrittenBody` lower-bound
 // is 1 (a section with empty body shouldn't appear in source — the parser
 // trims whitespace, but a one-char body is technically valid). Upper bound
@@ -448,7 +462,109 @@ function indent(s: string, prefix: string): string {
     .join("\n");
 }
 
-export function formatTightenProposal(p: TightenProposal): string {
+/**
+ * Line-level LCS diff. Returns an edit script of `eq` (line in both
+ * source and rewrite, in order), `del` (source only), and `add` (rewrite
+ * only) ops. O(M·N) time and memory; bounded by `BODY_MAX = 6000` chars
+ * per body so worst case is a few hundred lines × few hundred lines —
+ * trivial.
+ */
+type DiffOp = { kind: "eq" | "del" | "add"; line: string };
+
+export function lineDiff(srcLines: string[], dstLines: string[]): DiffOp[] {
+  const m = srcLines.length;
+  const n = dstLines.length;
+  const lcs: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array<number>(n + 1).fill(0),
+  );
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (srcLines[i - 1] === dstLines[j - 1]) {
+        lcs[i][j] = lcs[i - 1][j - 1] + 1;
+      } else {
+        lcs[i][j] = Math.max(lcs[i - 1][j], lcs[i][j - 1]);
+      }
+    }
+  }
+  const ops: DiffOp[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && srcLines[i - 1] === dstLines[j - 1]) {
+      ops.push({ kind: "eq", line: srcLines[i - 1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || lcs[i][j - 1] >= lcs[i - 1][j])) {
+      ops.push({ kind: "add", line: dstLines[j - 1] });
+      j--;
+    } else {
+      ops.push({ kind: "del", line: srcLines[i - 1] });
+      i--;
+    }
+  }
+  return ops.reverse();
+}
+
+/**
+ * Render a unified diff for a single section rewrite. Headers are
+ * `--- <sectionId> (source)` / `+++ <sectionId> (rewrite)`, followed by
+ * a single hunk header `@@ -1,M +1,N @@` and the prefixed edit script.
+ * Output is capped at `maxLines` body lines (excluding the three header
+ * lines); on overflow a `… (N more lines truncated)` marker is appended.
+ */
+export function formatRewriteDiff(opts: {
+  sectionId: string;
+  sourceBody: string;
+  rewrittenBody: string;
+  maxLines?: number;
+}): string {
+  const maxLines = opts.maxLines ?? DEFAULT_MAX_DIFF_LINES;
+  const srcLines = opts.sourceBody.split("\n");
+  const dstLines = opts.rewrittenBody.split("\n");
+  const ops = lineDiff(srcLines, dstLines);
+  const out: string[] = [];
+  out.push(`--- ${opts.sectionId} (source)`);
+  out.push(`+++ ${opts.sectionId} (rewrite)`);
+  out.push(`@@ -1,${srcLines.length} +1,${dstLines.length} @@`);
+  let body: string[] = [];
+  for (const op of ops) {
+    const prefix = op.kind === "eq" ? "  " : op.kind === "del" ? "- " : "+ ";
+    body.push(prefix + op.line);
+  }
+  if (body.length > maxLines) {
+    const remaining = body.length - maxLines;
+    body = body.slice(0, maxLines);
+    body.push(`… (${remaining} more lines truncated)`);
+  }
+  return [...out, ...body].join("\n");
+}
+
+export interface FormatTightenProposalOpts {
+  /** When true (default), each rewrite with savings ≥ `MIN_DIFF_SAVINGS_BYTES`
+   *  is followed by an inline unified diff against its source body. CLI
+   *  exposes the inverse as `--no-diff` for batch / wall-of-rewrites runs.
+   *  When false, falls back to the prior savings-only summary. */
+  showDiffs?: boolean;
+  /** Cap on diff body lines per rewrite. Default `DEFAULT_MAX_DIFF_LINES`. */
+  maxDiffLines?: number;
+  /** Per-section source bodies, keyed by `sectionId`. Required for diff
+   *  rendering; if a sectionId is absent from the map, the formatter
+   *  silently falls back to the savings-only line for that rewrite (the
+   *  proposal is still complete; the operator just loses the diff for
+   *  that one section). The caller (CLI / tests) builds this from
+   *  `parseClaudeMdSections(claudeMd)` since the proposal payload itself
+   *  intentionally omits source bodies (see #176 out-of-scope: keep the
+   *  --json payload lean). */
+  sources?: Map<string, string>;
+}
+
+export function formatTightenProposal(
+  p: TightenProposal,
+  opts?: FormatTightenProposalOpts,
+): string {
+  const showDiffs = opts?.showDiffs ?? true;
+  const maxDiffLines = opts?.maxDiffLines ?? DEFAULT_MAX_DIFF_LINES;
+  const sources = opts?.sources;
   const lines: string[] = [];
   const heading = `Tighten proposal for ${p.agentId}`;
   lines.push(heading);
@@ -483,6 +599,27 @@ export function formatTightenProposal(p: TightenProposal): string {
         lines.push(
           `     ⚠ EXCESSIVE SAVINGS: ${w.savingsPct}% > ${w.maxSavingsPct}% (likely paraphrasing-with-loss)`,
         );
+      }
+    }
+    // Per-rewrite diff. Emitted only when (a) the operator hasn't opted
+    // out via --no-diff, (b) savings clear the low-signal floor, and
+    // (c) the caller supplied a source body for this section. Indented
+    // 5 cols to nest under the `-> [sN]` summary line.
+    if (
+      showDiffs &&
+      r.estimatedBytesSaved >= MIN_DIFF_SAVINGS_BYTES &&
+      sources?.has(r.sectionId)
+    ) {
+      const sourceBody = sources.get(r.sectionId)!;
+      const diff = formatRewriteDiff({
+        sectionId: r.sectionId,
+        sourceBody,
+        rewrittenBody: r.rewrittenBody,
+        maxLines: maxDiffLines,
+      });
+      lines.push("     diff:");
+      for (const dl of diff.split("\n")) {
+        lines.push(`       ${dl}`);
       }
     }
   }

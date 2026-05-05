@@ -2,8 +2,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { ensureDir, withFileLock } from "../state/locks.js";
 import {
-  expireFailureLessonsInContent,
+  expireSentinelsInContent,
   formatSentinelHeader,
+  type ExpiryPolicy,
   type SentinelHeader,
 } from "../util/sentinels.js";
 
@@ -154,20 +155,19 @@ export type ExpireOutcome =
   | { kind: "expired"; dropped: SentinelHeader[]; totalBytes: number };
 
 /**
- * Walk the agent's CLAUDE.md and drop `outcome:failure-lesson` blocks
- * that have ≥ k subsequent `outcome:implement` blocks sharing at least
- * one tag with the lesson. Idempotent — re-running on the same content
- * with the same `k` is a no-op. Conservative on legacy sentinels with
- * no `tags:` field: those are never expired.
+ * Walk the agent's CLAUDE.md and drop sentinel blocks per the supplied
+ * policies. Idempotent — re-running on the same content with the same
+ * policies is a no-op. Conservative on legacy sentinels with no `tags:`
+ * field: those are never expired.
  *
  * Wired from `runIssueCore` after a successful implement run, matching
  * the issue's "summarizer rewrites the file after a successful run"
  * trigger. Shares the same per-file lock as `appendBlock` so the
  * read-rewrite-write sequence is atomic against concurrent appends.
  */
-export async function expireFailureLessons(
+export async function expireSentinels(
   agentId: string,
-  k: number,
+  policies: ExpiryPolicy[],
 ): Promise<ExpireOutcome> {
   const filePath = agentClaudeMdPath(agentId);
   return withFileLock(filePath, async () => {
@@ -179,7 +179,7 @@ export async function expireFailureLessons(
       // forkClaudeMd / appendBlock's job.
       return { kind: "no-op" };
     }
-    const result = expireFailureLessonsInContent(current, k);
+    const result = expireSentinelsInContent(current, policies);
     if (result.droppedHeaders.length === 0) return { kind: "no-op" };
 
     const tmp = `${filePath}.tmp.${process.pid}`;
@@ -191,4 +191,23 @@ export async function expireFailureLessons(
       totalBytes: Buffer.byteLength(result.content, "utf-8"),
     };
   });
+}
+
+/**
+ * Backward-compatible wrapper: drop only failure-lesson blocks with the
+ * legacy single-K rule. New callers should use `expireSentinels` with
+ * `resolveExpiryPolicies()` to cover all sentinel kinds.
+ */
+export async function expireFailureLessons(
+  agentId: string,
+  k: number,
+): Promise<ExpireOutcome> {
+  return expireSentinels(agentId, [
+    {
+      kind: "failure-lesson",
+      k,
+      supersededBy: ["implement"],
+      overlap: { mode: "any-shared-tag" },
+    },
+  ]);
 }

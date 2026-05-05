@@ -9,7 +9,7 @@ import { buildAgentSystemPrompt } from "./prompt.js";
 import { extractEnvelope } from "./parseResult.js";
 import { reconcileFromState, type ReconcileState } from "./reconcile.js";
 import { claudeBinPath } from "./sdkBinary.js";
-import type { AgentRecord, ResultEnvelope } from "../types.js";
+import type { AgentRecord, ResultEnvelope, ResumeContext } from "../types.js";
 import type { Logger } from "../log/logger.js";
 import type { RunCostTracker } from "../util/costTracker.js";
 
@@ -30,6 +30,14 @@ export interface CodingAgentInput {
    * scope) can omit it; orchestrator-driven runs always pass one.
    */
   costTracker?: RunCostTracker;
+  /**
+   * Issue #119 Phase 2: per-issue resume context. Forwarded to
+   * `buildAgentSystemPrompt` so the seed renders a "## Previous attempt
+   * (resumed)" section pointing at the salvaged work the agent should
+   * build on. Worktree-side rebase has already happened by the time we
+   * get here (see `createWorktree(resumeFromBranch)`).
+   */
+  resumeContext?: ResumeContext;
 }
 
 export interface CodingAgentResult {
@@ -82,6 +90,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       agentName: input.agent.name,
     },
     targetRepoPath: input.targetRepoPath,
+    resumeContext: input.resumeContext,
   });
 
   const userPrompt = `Work on issue #${input.issueId} in ${input.targetRepo} per the workflow above. Emit the JSON envelope as your final message.`;

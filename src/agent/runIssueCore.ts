@@ -18,7 +18,7 @@ import {
   type WorktreeHandle,
 } from "../git/worktree.js";
 import type { Logger } from "../log/logger.js";
-import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
+import type { AgentRecord, IssueSummary, ResultEnvelope, ResumeContext } from "../types.js";
 import type { RunCostTracker } from "../util/costTracker.js";
 
 export interface RunIssueCoreInput {
@@ -46,6 +46,15 @@ export interface RunIssueCoreInput {
    * orchestrator was about to abort. Optional and a no-op when absent.
    */
   budgetUsd?: number;
+  /**
+   * Issue #119 Phase 2: per-issue resume context. When set, `createWorktree`
+   * branches off the named salvage ref + rebases onto origin/main, and the
+   * coding agent's seed gets a "## Previous attempt (resumed)" section.
+   * Built upstream by the CLI from `findIncompleteBranchesOnOrigin` when
+   * `--resume-incomplete` is passed; orchestrator looks up the per-issue
+   * entry from its map before invoking this helper.
+   */
+  resumeContext?: ResumeContext;
 }
 
 export interface RunIssueCoreResult {
@@ -92,12 +101,15 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       repoPath: input.targetRepoPath,
       agentId: input.agent.agentId,
       issueId: input.issue.id,
+      resumeFromBranch: input.resumeContext?.branch,
     });
     input.logger.info("agent.spawned", {
       agentId: input.agent.agentId,
       issueId: input.issue.id,
       worktree: worktree.path,
       branch: worktree.branch,
+      resumedFrom: input.resumeContext?.branch,
+      resumedRunId: input.resumeContext?.runId,
     });
 
     const result = await runCodingAgent({
@@ -111,6 +123,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       logger: input.logger,
       inspectPaths: input.inspectPaths,
       costTracker: input.costTracker,
+      resumeContext: input.resumeContext,
     });
 
     envelope = result.envelope;

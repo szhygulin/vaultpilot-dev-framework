@@ -100,7 +100,9 @@ import {
   type AgentRollup,
 } from "./state/outcomes.js";
 import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
-import type { AgentRecord, IssueRangeSpec, IssueSummary, RunState } from "./types.js";
+import type { AgentRecord, IssueRangeSpec, IssueSummary, ResumeContext, RunState } from "./types.js";
+import { STATE_DIR } from "./state/runState.js";
+import path from "node:path";
 
 const DEFAULT_STALLED_THRESHOLD_DAYS = 14;
 
@@ -702,22 +704,46 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // distinguish "Phase-1 run with no cap" from "older log without
     // cost-tracking columns" without parsing the runId timestamp.
     maxCostUsd: budgetUsd ?? null,
-    // Issue #118 Phase 1: surfaced as a flat boolean so log consumers can
-    // count how often the flag is being passed before Phase 2 ships. The
-    // count of salvageable refs is informational; we record it but the
-    // actual resume routing remains "from main" until Phase 2 lands.
+    // Issue #118 Phase 1 / #119 Phase 2: surfaced as a flat boolean so log
+    // consumers can count how often the flag is being passed. With Phase 2
+    // shipped, when the flag is set AND at least one salvage ref is found
+    // for a candidate issue, the orchestrator branches its worktree off
+    // that ref + rebases onto origin/main; agents see the prior work as
+    // their starting commit.
     resumeIncomplete: !!opts.resumeIncomplete,
     incompleteBranchesAvailableCount: incompleteBranchesAvailable.length,
   });
+
+  // Issue #119 Phase 2: when --resume-incomplete is set, build the
+  // per-issue ResumeContext map from the salvage refs already enumerated
+  // for the gate (`incompleteOrigin`). For each issue with at least one
+  // ref, pick the most recent (lex-sorted runId desc — runIds are
+  // ISO-timestamped). Enrich with errorSubtype / error / partialBranchUrl
+  // from `state/<runId>.json` when available so the agent's seed can show
+  // the failure mode + last meaningful action of the prior attempt.
+  let resumeContextByIssue: Map<number, ResumeContext> | undefined;
   if (opts.resumeIncomplete) {
-    process.stdout.write(
-      "[--resume-incomplete recorded; Phase 2 wiring not yet shipped — this run still routes from main]\n",
-    );
-    logger.info("run.resume_incomplete_recorded", {
-      runId,
-      phase: 1,
-      incompleteBranchesAvailableCount: incompleteBranchesAvailable.length,
+    resumeContextByIssue = await buildResumeContextMap({
+      incompleteOrigin,
+      logger,
     });
+    logger.info("run.resume_incomplete_resolved", {
+      runId,
+      resumeContextCount: resumeContextByIssue.size,
+      issueIds: [...resumeContextByIssue.keys()],
+    });
+    if (resumeContextByIssue.size > 0) {
+      const lines = [...resumeContextByIssue.values()].map(
+        (r) => `  #${parseIssueIdFromBranch(r.branch)}  ${r.branch}`,
+      );
+      process.stdout.write(
+        `Resuming ${resumeContextByIssue.size} issue(s) from salvage refs (Phase 2):\n${lines.join("\n")}\n`,
+      );
+    } else {
+      process.stdout.write(
+        "[--resume-incomplete set but no salvage refs found for any candidate issue — this run routes from main]\n",
+      );
+    }
   }
 
   try {
@@ -739,6 +765,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       targetRepoPath: repoPath,
       costTracker,
       budgetUsd,
+      resumeContextByIssue,
     });
     const abortedBudgetCount = countByStatus(state, "aborted-budget");
     logger.info("run.completed", {
@@ -766,6 +793,96 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     await logger.close();
   }
   process.stdout.write(`Run ${runId} log: logs/${runId}.jsonl\n`);
+}
+
+/**
+ * Issue #119 Phase 2: build the per-issue ResumeContext map from the
+ * salvage-ref enumeration the gate already ran (`incompleteOrigin`).
+ *
+ * Picks the most recent salvage ref per issue (lex-sorted runId desc —
+ * runIds are ISO-8601 stamped so lexicographic order matches chronological
+ * order). Enriches each entry from `state/<runId>.json` when that file is
+ * still on disk so the agent's seed surfaces the failure mode + last
+ * meaningful action of the prior attempt; missing state file degrades to
+ * a context with only the branch / runId / agentId fields populated.
+ *
+ * Pure-ish: reads from disk (run-state JSON) but does not mutate.
+ *
+ * Exported for unit testing.
+ */
+export async function buildResumeContextMap(opts: {
+  incompleteOrigin: Map<number, { issueId: number; agentId: string; branchName: string; runId: string }[]>;
+  logger?: Logger;
+  /** Override `STATE_DIR` for deterministic tests. */
+  stateDir?: string;
+}): Promise<Map<number, ResumeContext>> {
+  const stateDir = opts.stateDir ?? STATE_DIR;
+  const out = new Map<number, ResumeContext>();
+  for (const [issueId, refs] of opts.incompleteOrigin.entries()) {
+    if (refs.length === 0) continue;
+    // Lex-sort runId desc — runIds are `run-<ISO8601>` so newest-first.
+    const sorted = [...refs].sort((a, b) => (a.runId > b.runId ? -1 : a.runId < b.runId ? 1 : 0));
+    const pick = sorted[0];
+    const enriched = await loadResumeEnrichment(pick.runId, issueId, stateDir).catch((err) => {
+      opts.logger?.warn("resume.enrich_failed", {
+        runId: pick.runId,
+        issueId,
+        err: (err as Error).message,
+      });
+      return undefined;
+    });
+    out.set(issueId, {
+      branch: pick.branchName,
+      runId: pick.runId,
+      agentId: pick.agentId,
+      ...(enriched ?? {}),
+    });
+  }
+  return out;
+}
+
+interface ResumeEnrichment {
+  errorSubtype?: string;
+  finalText?: string;
+  partialBranchUrl?: string;
+}
+
+async function loadResumeEnrichment(
+  runId: string,
+  issueId: number,
+  stateDir: string,
+): Promise<ResumeEnrichment | undefined> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(stateDir, `${runId}.json`), "utf-8");
+  } catch {
+    return undefined;
+  }
+  let state: { issues?: Record<string, { error?: string; errorSubtype?: string; partialBranchUrl?: string }> };
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const entry = state.issues?.[String(issueId)];
+  if (!entry) return undefined;
+  return {
+    errorSubtype: entry.errorSubtype,
+    finalText: entry.error,
+    partialBranchUrl: entry.partialBranchUrl,
+  };
+}
+
+/**
+ * Pull the integer issue id out of a `vp-dev/agent-X/issue-N-incomplete-...`
+ * branch name for log / preview rendering. Returns `0` for unparseable
+ * inputs — the helper is best-effort, used only for human-facing strings.
+ *
+ * Exported for unit testing.
+ */
+export function parseIssueIdFromBranch(branch: string): number {
+  const m = /\/issue-(\d+)-incomplete-/.exec(branch);
+  return m ? parseInt(m[1], 10) : 0;
 }
 
 /**

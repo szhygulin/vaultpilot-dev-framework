@@ -26,6 +26,12 @@ export const POST_MORTEM_SENTINEL = /^## vp-dev failure post-mortem\b/im;
  * later comment's body. Word-boundary anchored so "fix landed" inside an
  * unrelated sentence ("hope a fix landed somewhere") still resolves —
  * intentional: a human writing such a sentence is signaling progress.
+ *
+ * `resume` was added under issue #118 Phase 1. It signals "I want vp-dev
+ * to re-attempt this issue, possibly with --resume-incomplete on the next
+ * run". Phase 1 only makes the keyword recognized as a generic unblock
+ * signal so triage marks the issue ready; Phase 2 (separate issue) is
+ * responsible for auto-flipping `--resume-incomplete: true` based on it.
  */
 export const RESOLUTION_KEYWORDS = [
   "retry",
@@ -33,6 +39,7 @@ export const RESOLUTION_KEYWORDS = [
   "scope changed",
   "unblock",
   "proceed",
+  "resume",
 ] as const;
 
 export interface FailurePostMortemInput {

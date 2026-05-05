@@ -72,6 +72,19 @@ export interface IncompleteBranchInfo {
   runStateRef: RunStateRef;
 }
 
+/**
+ * Origin-side counterpart to `IncompleteBranchInfo`. Lighter shape because
+ * `git ls-remote` does not surface committer-date metadata — Phase 1 only
+ * needs the (issueId, branchName, runId, agentId) tuple to render the
+ * "salvage available" section in the setup preview (issue #118).
+ */
+export interface OriginIncompleteBranch {
+  issueId: number;
+  agentId: string;
+  branchName: string;
+  runId: string;
+}
+
 /** Raw output of a single `git for-each-ref` line, pre-parse. */
 export interface RawIncompleteRef {
   branch: string;
@@ -258,6 +271,88 @@ export async function pruneIncompleteBranches(opts: {
     }
   }
   return { deleted, failed };
+}
+
+/**
+ * Pure parser — extract `OriginIncompleteBranch` records from raw
+ * `git ls-remote --heads origin <pattern>` output lines. Each line is
+ * `<sha>\t<refspec>` with the refspec carrying a `refs/heads/` prefix; we
+ * strip that and apply the same `INCOMPLETE_BRANCH_RE` shape match used by
+ * the local-branch parser. Lines that don't match are dropped silently.
+ *
+ * Unit-tested in `incompleteBranches.test.ts` so the regex / strip stays
+ * stable independent of git plumbing or future ls-remote format tweaks.
+ */
+export function parseLsRemoteIncompleteRefs(lines: string[]): OriginIncompleteBranch[] {
+  const out: OriginIncompleteBranch[] = [];
+  for (const raw of lines) {
+    if (!raw) continue;
+    const tab = raw.indexOf("\t");
+    if (tab < 0) continue;
+    let ref = raw.slice(tab + 1).trim();
+    if (ref.startsWith("refs/heads/")) ref = ref.slice("refs/heads/".length);
+    const m = INCOMPLETE_BRANCH_RE.exec(ref);
+    if (!m) continue;
+    const [, agentId, issueIdStr, runId] = m;
+    out.push({
+      issueId: parseInt(issueIdStr, 10),
+      agentId,
+      branchName: ref,
+      runId,
+    });
+  }
+  return out;
+}
+
+/**
+ * Enumerate the labeled-incomplete refs (matching the same shape used by
+ * `INCOMPLETE_BRANCH_PATTERN` above) on `origin` for a given set of issue
+ * ids. Single `git ls-remote` over that glob, then in-memory regex parse +
+ * filter. No mutation, no fetch — refs are read directly from the remote
+ * without updating local tracking.
+ *
+ * Returned as `Map<issueId, OriginIncompleteBranch[]>` so the setup
+ * preview can render a per-issue salvage-available section
+ * (issue #118 Phase 1). The list is empty for issues with no salvage
+ * refs; we never return a key for an issue not in the input filter.
+ *
+ * Failure mode: any `git ls-remote` failure returns an empty map and
+ * emits a `setup.incomplete_origin_list_failed` warning. This matches
+ * the `findOpenVpDevPrs` failure pattern — the surface is informational
+ * only, so a transient network blip should not block the run.
+ */
+export async function findIncompleteBranchesOnOrigin(opts: {
+  repoPath: string;
+  issueIds: number[];
+  logger?: Logger;
+}): Promise<Map<number, OriginIncompleteBranch[]>> {
+  const allowed = new Set(opts.issueIds);
+  if (allowed.size === 0) return new Map();
+  let stdout = "";
+  try {
+    const result = await execFile(
+      "git",
+      ["ls-remote", "--heads", "origin", `refs/heads/${INCOMPLETE_BRANCH_PATTERN}`],
+      { cwd: opts.repoPath, maxBuffer: 50 * 1024 * 1024 },
+    );
+    stdout = result.stdout;
+  } catch (err) {
+    opts.logger?.warn("setup.incomplete_origin_list_failed", {
+      err:
+        (err as { stderr?: string; message?: string }).stderr ??
+        (err as Error).message,
+    });
+    return new Map();
+  }
+  const parsed = parseLsRemoteIncompleteRefs(stdout.split("\n"));
+  const map = new Map<number, OriginIncompleteBranch[]>();
+  for (const p of parsed) {
+    if (!allowed.has(p.issueId)) continue;
+    const list = map.get(p.issueId) ?? [];
+    list.push(p);
+    map.set(p.issueId, list);
+  }
+  return map;
 }
 
 /**

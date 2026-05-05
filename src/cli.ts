@@ -49,6 +49,7 @@ import { findOpenVpDevPrs } from "./git/openPrs.js";
 import {
   DEFAULT_INCOMPLETE_RETENTION_DAYS,
   filterByRetention,
+  findIncompleteBranchesOnOrigin,
   listIncompleteBranches,
   pruneIncompleteBranches,
   resolveRetentionDays,
@@ -146,6 +147,10 @@ export function buildCli(): Command {
     .option(
       "--prefer-agent <agentId>",
       "Force-pick the named agent for this run. Bumps its score by +1.0 in pickAgents() and the dispatcher's deterministic fallback so it leads regardless of natural Jaccard fit. Validated against the registry before the gate; archived agents are rejected.",
+    )
+    .option(
+      "--resume-incomplete",
+      "Phase 1 (#118): record the intent to resume from a salvageable `*-incomplete-<runId>` branch on origin. Phase 1 only logs the intent + carries it through --plan/--confirm; the actual worktree-from-partial-branch behavior is Phase 2's territory (still routes from main today).",
     )
     .action(async (opts) => {
       await cmdRun(opts);
@@ -338,6 +343,7 @@ interface RunOpts {
   includeNonReady?: boolean;
   maxCostUsd?: string;
   preferAgent?: string;
+  resumeIncomplete?: boolean;
 }
 
 async function cmdRun(opts: RunOpts): Promise<void> {
@@ -391,6 +397,10 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // matches "no ceiling" semantics.
     opts.maxCostUsd = p.maxCostUsd;
     opts.preferAgent = p.preferAgentId;
+    // #118 Phase 1: carry the resume intent across --plan → --confirm.
+    // Phase 1 has no behavior coupling beyond the run-start log line, but
+    // the flag must persist so Phase 2 can light up cleanly.
+    opts.resumeIncomplete = p.resumeIncomplete;
   }
 
   if (opts.agents === undefined || !opts.targetRepo) {
@@ -565,6 +575,22 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.exit(2);
   }
 
+  // Issue #118 Phase 1: enumerate salvageable `*-incomplete-<runId>` refs
+  // on `origin` for the candidate dispatch issues so the preview can
+  // surface them under the existing skip blocks. The lookup is purely
+  // informational — failures degrade to "no salvage refs visible" rather
+  // than blocking the run. Always runs regardless of --resume-incomplete
+  // because the section's purpose is to show the user that partial state
+  // exists *before* they decide whether to pass the flag.
+  // No logger here — the triage logger is already closed and the run-id
+  // logger is not yet open. The helper is best-effort: an `ls-remote`
+  // failure simply yields an empty section.
+  const incompleteOrigin = await findIncompleteBranchesOnOrigin({
+    repoPath,
+    issueIds: dispatchIssues.map((i) => i.id),
+  });
+  const incompleteBranchesAvailable = [...incompleteOrigin.values()].flat();
+
   const registry = await loadRegistry();
   const preview = await buildSetupPreview({
     targetRepo: opts.targetRepo,
@@ -583,6 +609,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     budgetExceededSkipped,
     budgetUsd,
     preferAgentId: opts.preferAgent,
+    incompleteBranchesAvailable,
   });
 
   if (opts.plan) {
@@ -605,6 +632,8 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         includeNonReady: !!opts.includeNonReady,
         verbose: !!opts.verbose,
         maxCostUsd: opts.maxCostUsd,
+        // #118 Phase 1: carry the resume intent across --plan → --confirm.
+        resumeIncomplete: opts.resumeIncomplete,
       },
     });
     process.stdout.write("Plan saved. No agents launched.\n");
@@ -673,7 +702,23 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // distinguish "Phase-1 run with no cap" from "older log without
     // cost-tracking columns" without parsing the runId timestamp.
     maxCostUsd: budgetUsd ?? null,
+    // Issue #118 Phase 1: surfaced as a flat boolean so log consumers can
+    // count how often the flag is being passed before Phase 2 ships. The
+    // count of salvageable refs is informational; we record it but the
+    // actual resume routing remains "from main" until Phase 2 lands.
+    resumeIncomplete: !!opts.resumeIncomplete,
+    incompleteBranchesAvailableCount: incompleteBranchesAvailable.length,
   });
+  if (opts.resumeIncomplete) {
+    process.stdout.write(
+      "[--resume-incomplete recorded; Phase 2 wiring not yet shipped — this run still routes from main]\n",
+    );
+    logger.info("run.resume_incomplete_recorded", {
+      runId,
+      phase: 1,
+      incompleteBranchesAvailableCount: incompleteBranchesAvailable.length,
+    });
+  }
 
   try {
     await pruneWorktrees(repoPath);

@@ -191,6 +191,14 @@ export interface ResumeContext {
   runId: string;
   /** Agent id parsed from the `vp-dev/<agentId>/...` segment. */
   agentId: string;
+  /**
+   * Display name of the originating agent, looked up from the registry by
+   * `agentId`. Optional — absent when the originating agent has been pruned
+   * or never had a name assigned. Used by the workflow prompt's co-signature
+   * instruction (issue #129) so resumed PRs preserve attribution to the
+   * originating agent.
+   */
+  agentName?: string;
   /** SDK error subtype recorded by the originating run, when known. */
   errorSubtype?: string;
   /**

@@ -7,6 +7,21 @@ export interface WorkflowVars {
   inspectPaths?: string[];
   agentId: string;
   agentName?: string;
+  /**
+   * Issue #129: when the run is resuming partial work from a prior agent
+   * (`--resume-incomplete`), pass the originating agent's identity so the
+   * workflow's PR-body signature instruction renders an extra co-signature
+   * line above the resuming agent's signature. Both lines together preserve
+   * cross-PR attribution to whoever did the bulk of the work.
+   *
+   * Optional fields are intentionally narrow — only what's needed for the
+   * signature line. `agentName` falls back to `agentId` when undefined.
+   */
+  resumeContext?: {
+    agentId: string;
+    agentName?: string;
+    runId: string;
+  };
 }
 
 export function renderWorkflow(v: WorkflowVars): string {
@@ -62,7 +77,7 @@ Emit the JSON envelope with decision="pushback" and the comment URL.
      Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 5. Push:
      git push -u origin ${v.branchName}
-6. Open the PR — body MUST start with "Closes #${v.issueId}" on its own line so GitHub auto-closes. The body MUST also end with a single-line signature \`— ${v.agentName ?? v.agentId} (${v.agentId})\` so the human reader can tell which agent opened the PR.
+6. Open the PR — body MUST start with "Closes #${v.issueId}" on its own line so GitHub auto-closes. The body MUST also end with a single-line signature \`— ${v.agentName ?? v.agentId} (${v.agentId})\` so the human reader can tell which agent opened the PR.${v.resumeContext ? `\n   **Resumed run (issue #129)** — because you're picking up partial work from a previous attempt (see the "Previous attempt (resumed)" section above), ADD a co-signature line IMMEDIATELY ABOVE yours naming the originating agent: \`— ${v.resumeContext.agentName ?? v.resumeContext.agentId} (${v.resumeContext.agentId}, partial — ${v.resumeContext.runId})\`. Order matters: originating-agent line first, then your line. Both lines together preserve cross-PR attribution so post-hoc audits (\`gh pr list --search 'in:body "${v.resumeContext.agentId}"'\`) find both contributors.` : ''}
    Write the PR body to a tmp file using the **\`Write\` tool** (same reason as Pushback path: heredoc chained with \`gh pr create\` trips the dry-run gate). Then run \`gh pr create\` as its OWN top-level Bash invocation:
      gh pr create --repo ${v.targetRepo} --base main --head ${v.branchName} --title <short title> --body-file <tmp>
 7. Format the returned PR URL as a Markdown hyperlink in your reasoning.

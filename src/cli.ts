@@ -746,6 +746,10 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     resumeContextByIssue = await buildResumeContextMap({
       incompleteOrigin,
       logger,
+      // Issue #129: pass the registry's agent records so the originating
+      // agent's display name can be resolved and included in the seed —
+      // resumed runs render a co-signature line on the PR body.
+      agents: registry.agents,
     });
     logger.info("run.resume_incomplete_resolved", {
       runId,
@@ -835,8 +839,19 @@ export async function buildResumeContextMap(opts: {
   logger?: Logger;
   /** Override `STATE_DIR` for deterministic tests. */
   stateDir?: string;
+  /**
+   * Optional registry agent records used to resolve the originating agent's
+   * display name from `agentId` (issue #129). When omitted or no match is
+   * found, the resulting context's `agentName` is left undefined and the
+   * workflow's co-signature falls back to the agent id alone.
+   */
+  agents?: AgentRecord[];
 }): Promise<Map<number, ResumeContext>> {
   const stateDir = opts.stateDir ?? STATE_DIR;
+  const nameById = new Map<string, string>();
+  for (const a of opts.agents ?? []) {
+    if (a.name) nameById.set(a.agentId, a.name);
+  }
   const out = new Map<number, ResumeContext>();
   for (const [issueId, refs] of opts.incompleteOrigin.entries()) {
     if (refs.length === 0) continue;
@@ -851,10 +866,12 @@ export async function buildResumeContextMap(opts: {
       });
       return undefined;
     });
+    const agentName = nameById.get(pick.agentId);
     out.set(issueId, {
       branch: pick.branchName,
       runId: pick.runId,
       agentId: pick.agentId,
+      ...(agentName ? { agentName } : {}),
       ...(enriched ?? {}),
     });
   }

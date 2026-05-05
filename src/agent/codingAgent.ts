@@ -88,6 +88,16 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       inspectPaths: input.inspectPaths,
       agentId: input.agent.agentId,
       agentName: input.agent.name,
+      // Issue #129: surface the originating agent's identity to the
+      // workflow prompt so a resumed run renders a co-signature line on
+      // the PR body. Pass through only what the signature needs.
+      resumeContext: input.resumeContext
+        ? {
+            agentId: input.resumeContext.agentId,
+            agentName: input.resumeContext.agentName,
+            runId: input.resumeContext.runId,
+          }
+        : undefined,
     },
     targetRepoPath: input.targetRepoPath,
     resumeContext: input.resumeContext,

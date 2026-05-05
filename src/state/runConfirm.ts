@@ -33,6 +33,12 @@ export interface RunConfirmParams {
   // at confirm-time. Snapshotted by #86's enforcement; consumed by #99's
   // pre-dispatch partition. Optional: undefined = no ceiling.
   maxCostUsd?: string;
+  // Issue #84: per-run override that forces the named agent to lead
+  // dispatch regardless of natural Jaccard fit. Persisted in the token so
+  // a `--plan` → `--confirm` two-step keeps the override; the previewHash
+  // already binds the rationale-line annotation, so dropping or changing
+  // the field invalidates the token.
+  preferAgentId?: string;
 }
 
 export interface RunConfirmToken {

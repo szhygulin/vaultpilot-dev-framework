@@ -79,6 +79,14 @@ export interface SetupPreview {
   // alongside the triage line and as the anchor for "remaining budget"
   // arithmetic in the per-issue forecast block.
   budgetUsd?: number;
+  /**
+   * Issue #84: per-run agent override echoed into the preview so a)
+   * `formatSetupPreview` can annotate the matching rationale line with
+   * `(preferred via --prefer-agent)`, and b) the previewHash that gates
+   * the `--plan`/`--confirm` flow is bound to the override that was
+   * active at plan time.
+   */
+  preferAgentId?: string;
 }
 
 export interface BuildPreviewInput {
@@ -97,6 +105,13 @@ export interface BuildPreviewInput {
   costForecast?: IssueCostForecastEntry[];
   budgetExceededSkipped?: BudgetExceededSkipped[];
   budgetUsd?: number;
+  /** Issue #84: per-run agent override. When set, the preview's
+   *  rationale line for the matching agent gets a `(preferred via
+   *  --prefer-agent)` annotation so the user sees the override took
+   *  effect. The string is also incorporated into the previewHash, so a
+   *  `--plan` token is bound to the override that was active at plan
+   *  time. */
+  preferAgentId?: string;
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -104,6 +119,7 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     reg: input.registry,
     pendingIssues: input.openIssues,
     maxParallelism: input.parallelism,
+    preferAgentId: input.preferAgentId,
   });
   // Surface overload warnings for any picked agent that has crossed the
   // split threshold. Cheap (one fs.readFile per picked agent) and runs
@@ -136,6 +152,7 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     costForecast: input.costForecast ?? [],
     budgetExceededSkipped: input.budgetExceededSkipped ?? [],
     budgetUsd: input.budgetUsd,
+    preferAgentId: input.preferAgentId,
   };
 }
 
@@ -183,8 +200,13 @@ export function formatSetupPreview(p: SetupPreview): string {
     for (const r of p.reusedAgents) {
       const tagStr = r.agent.tags.length > 0 ? r.agent.tags.join(",") : "general";
       const label = r.agent.name ? `${r.agent.name} (${r.agent.agentId})` : r.agent.agentId;
+      // Issue #84: surface --prefer-agent overrides on the rationale line
+      // so the user sees the override took effect before y/N. The
+      // annotation is bound into the previewHash so a `--plan` token
+      // can't silently outlive a flag change.
+      const preferTag = r.preferred ? "  (preferred via --prefer-agent)" : "";
       lines.push(
-        `  ${label}  rationale=${r.rationale}  tags=[${tagStr}]  issuesHandled=${r.agent.issuesHandled}  score=${r.score.toFixed(3)}`,
+        `  ${label}  rationale=${r.rationale}  tags=[${tagStr}]  issuesHandled=${r.agent.issuesHandled}  score=${r.score.toFixed(3)}${preferTag}`,
       );
     }
   }

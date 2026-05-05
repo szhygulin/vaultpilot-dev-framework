@@ -51,6 +51,14 @@ export interface OrchestratorInput {
    * issues-exhausted condition.
    */
   budgetUsd?: number;
+  /**
+   * Issue #84: per-run agent override. When set, the named agent gets a
+   * +1.0 score bump in both `pickAgents()` (summoning) and the
+   * dispatcher's deterministic fallback (per-tick routing). Existence and
+   * non-archived state are validated by the CLI before the gate; the
+   * orchestrator trusts the validated string here.
+   */
+  preferAgentId?: string;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
@@ -75,6 +83,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       state: input.state,
       pendingIssues: pending,
       targetRepoPath: repoPath,
+      preferAgentId: input.preferAgentId,
     });
 
     const idleAgents = summonedAgents.filter(
@@ -84,12 +93,22 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
     const cap = Math.min(idleAgents.length, pending.length, input.parallelism - inFlight.size);
 
     if (cap > 0) {
+      // Pin the preferred agent into the cap-limited idle slice so the
+      // dispatcher can actually see it. With many idle agents and a small
+      // cap, slicing the first N would otherwise drop the preferred agent
+      // when it sorts past position N — silently negating the override.
+      const idleSlice = sliceIdleWithPreferred({
+        idle: idleAgents,
+        cap,
+        preferAgentId: input.preferAgentId,
+      });
       const proposal = await dispatch({
-        idleAgents: idleAgents.slice(0, cap),
+        idleAgents: idleSlice,
         pendingIssues: pending,
         cap,
         logger: input.logger,
         costTracker: input.costTracker,
+        preferAgentId: input.preferAgentId,
       });
       input.logger.info("tick.proposal", {
         tick: input.state.tickCount,
@@ -175,6 +194,14 @@ export interface PickAgentsInput {
   pendingIssues: IssueSummary[];
   /** User-authorized maximum: hard cap on team size. */
   maxParallelism: number;
+  /**
+   * Issue #84: per-run agent override. When set, the named agent's score
+   * is bumped by `PREFER_AGENT_BUMP` so it lands first in pass 1
+   * regardless of natural Jaccard overlap. Validation (existence,
+   * non-archived) is the CLI's responsibility; the picker trusts the
+   * string and silently no-ops when the id doesn't match a live agent.
+   */
+  preferAgentId?: string;
 }
 
 export interface PickedAgent {
@@ -182,7 +209,23 @@ export interface PickedAgent {
   score: number;
   /** Why this agent was picked: matched a specialty, or fills a generalist seat. */
   rationale: "specialist" | "general" | "fresh-general";
+  /**
+   * True when this agent was force-picked via `--prefer-agent`. The setup
+   * preview surfaces this with a `(preferred via --prefer-agent)`
+   * annotation on the rationale line so the user sees the override took
+   * effect. Does not influence routing — the bumped score already did.
+   */
+  preferred?: boolean;
 }
+
+/**
+ * Bump applied to the preferred agent's score in `pickAgents()` and the
+ * dispatcher's deterministic fallback. Jaccard caps at 1.0 and the
+ * issuesHandled bonus is 0.05*log(...), so +1.0 is comfortably larger
+ * than any natural tiebreak gap. Kept exported so the test files can
+ * assert against the same constant.
+ */
+export const PREFER_AGENT_BUMP = 1.0;
 
 export interface PickResult {
   reusedAgents: PickedAgent[];
@@ -205,8 +248,23 @@ export function pickAgents(input: PickAgentsInput): PickResult {
   // to children.
   const live = input.reg.agents.filter((a) => !a.archived);
   // Score every agent against the issue set, then bucket by rationale.
+  // The preferred agent (issue #84) gets a +PREFER_AGENT_BUMP nudge so it
+  // sorts first regardless of natural overlap. We track the natural score
+  // separately so a preferred agent with zero natural fit lands as
+  // `general` in the rationale label rather than masquerading as a
+  // specialist.
   const scored = live
-    .map((a) => ({ agent: a, score: agentSetScore(a, input.pendingIssues) }))
+    .map((a) => {
+      const natural = agentSetScore(a, input.pendingIssues);
+      const isPreferred =
+        input.preferAgentId !== undefined && a.agentId === input.preferAgentId;
+      return {
+        agent: a,
+        score: natural + (isPreferred ? PREFER_AGENT_BUMP : 0),
+        naturalScore: natural,
+        isPreferred,
+      };
+    })
     .sort(
       (p, q) =>
         q.score - p.score || cmpDateDesc(p.agent.lastActiveAt, q.agent.lastActiveAt),
@@ -218,22 +276,38 @@ export function pickAgents(input: PickAgentsInput): PickResult {
   // Pass 1 — pick specialists (positive score = some Jaccard overlap or a
   // recency bonus on a previously-used agent). Keep going until the cap is
   // hit OR we've covered enough issues that adding more agents has nothing
-  // to chew on.
+  // to chew on. The preferred agent always lands here because its bumped
+  // score is > 0; if its natural score was 0 we tag the rationale as
+  // `general` so the specialist/general counts on the gate text stay
+  // honest.
   for (const s of scored) {
     if (reused.length >= cap) break;
     if (reused.length >= issueCount) break;
     if (s.score <= 0) break;
-    reused.push({ agent: s.agent, score: s.score, rationale: "specialist" });
+    const rationale: PickedAgent["rationale"] =
+      s.isPreferred && s.naturalScore <= 0 ? "general" : "specialist";
+    reused.push({
+      agent: s.agent,
+      score: s.score,
+      rationale,
+      ...(s.isPreferred ? { preferred: true } : {}),
+    });
     takenIds.add(s.agent.agentId);
   }
-  const specialistCount = reused.length;
+  const specialistCount = reused.filter((r) => r.rationale === "specialist").length;
+  // Snapshot of generals already on the roster from pass 1 (only ever
+  // non-zero when the preferred agent had zero natural overlap and landed
+  // labeled `general`). Pass 2's break condition counts pass-2 additions
+  // only, so we don't double-count and short-circuit when a preferred
+  // general was already seated.
+  const passOneGenerals = reused.length - specialistCount;
 
   // Pass 2 — fill remaining seats with general agents from the registry,
   // bounded by issue count. Don't summon more than there are issues.
   const generalReserveTarget = Math.min(cap - reused.length, issueCount - reused.length);
   if (generalReserveTarget > 0) {
     for (const s of scored) {
-      if (reused.length - specialistCount >= generalReserveTarget) break;
+      if (reused.length - specialistCount - passOneGenerals >= generalReserveTarget) break;
       if (takenIds.has(s.agent.agentId)) continue;
       reused.push({ agent: s.agent, score: s.score, rationale: "general" });
       takenIds.add(s.agent.agentId);
@@ -261,6 +335,7 @@ async function summonAgents(opts: {
   state: RunState;
   pendingIssues: IssueSummary[];
   targetRepoPath: string;
+  preferAgentId?: string;
 }): Promise<AgentRecord[]> {
   const minted: AgentRecord[] = [];
 
@@ -269,6 +344,7 @@ async function summonAgents(opts: {
       reg,
       pendingIssues: opts.pendingIssues,
       maxParallelism: opts.maxParallelism,
+      preferAgentId: opts.preferAgentId,
     });
     const taken: AgentRecord[] = pick.reusedAgents.map((p) => p.agent);
 
@@ -290,6 +366,29 @@ async function summonAgents(opts: {
     await forkClaudeMd(m.agentId, opts.targetRepoPath);
   }
   return summoned;
+}
+
+/**
+ * Issue #84: when the orchestrator's per-tick cap is smaller than the idle
+ * roster, slice the first `cap` agents but guarantee the preferred agent
+ * (if any) is included. Without this, a `--prefer-agent` whose natural
+ * sort position lands past `cap` would be silently dropped before the
+ * dispatcher even sees it. Order otherwise unchanged.
+ */
+export function sliceIdleWithPreferred(opts: {
+  idle: AgentRecord[];
+  cap: number;
+  preferAgentId?: string;
+}): AgentRecord[] {
+  if (opts.cap >= opts.idle.length) return opts.idle.slice(0, opts.cap);
+  const head = opts.idle.slice(0, opts.cap);
+  if (!opts.preferAgentId) return head;
+  if (head.some((a) => a.agentId === opts.preferAgentId)) return head;
+  const preferred = opts.idle.find((a) => a.agentId === opts.preferAgentId);
+  if (!preferred) return head;
+  // Preferred agent missing from the head slice — drop the last entry
+  // and append the preferred. Keeps `cap` invariant.
+  return [...head.slice(0, opts.cap - 1), preferred];
 }
 
 function agentSetScore(agent: AgentRecord, issues: IssueSummary[]): number {

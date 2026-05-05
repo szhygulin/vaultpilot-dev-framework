@@ -143,6 +143,10 @@ export function buildCli(): Command {
       "--max-cost-usd <usd>",
       "Per-run cost ceiling in USD (e.g. 5.0). Once the per-run total exceeds this value the orchestrator stops dispatching, marks remaining pending issues 'aborted-budget', and lets in-flight issues finish naturally (#86). Env fallback: VP_DEV_MAX_COST_USD.",
     )
+    .option(
+      "--prefer-agent <agentId>",
+      "Force-pick the named agent for this run. Bumps its score by +1.0 in pickAgents() and the dispatcher's deterministic fallback so it leads regardless of natural Jaccard fit. Validated against the registry before the gate; archived agents are rejected.",
+    )
     .action(async (opts) => {
       await cmdRun(opts);
     });
@@ -333,6 +337,7 @@ interface RunOpts {
   confirm?: string;
   includeNonReady?: boolean;
   maxCostUsd?: string;
+  preferAgent?: string;
 }
 
 async function cmdRun(opts: RunOpts): Promise<void> {
@@ -385,6 +390,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // plan-time. Older tokens (pre-#86/#99) leave this undefined which
     // matches "no ceiling" semantics.
     opts.maxCostUsd = p.maxCostUsd;
+    opts.preferAgent = p.preferAgentId;
   }
 
   if (opts.agents === undefined || !opts.targetRepo) {
@@ -576,6 +582,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     costForecast,
     budgetExceededSkipped,
     budgetUsd,
+    preferAgentId: opts.preferAgent,
   });
 
   if (opts.plan) {
@@ -781,6 +788,7 @@ async function runResume(opts: RunOpts): Promise<void> {
     resume: true,
     registry,
     openPrSkipped,
+    preferAgentId: opts.preferAgent,
   });
   const approved = await approveSetup({ preview, yes: !!opts.yes });
   if (!approved) {

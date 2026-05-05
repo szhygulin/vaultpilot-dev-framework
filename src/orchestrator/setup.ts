@@ -4,6 +4,7 @@ import { pickAgents, type PickedAgent } from "./orchestrator.js";
 import {
   detectOverload,
   readAgentClaudeMdBytes,
+  SPLIT_MIN_SECTIONS,
   type OverloadVerdict,
 } from "../agent/split.js";
 import type { BudgetExceededSkipped } from "./costEstimator.js";
@@ -184,8 +185,8 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
   // before the y/N gate, so the user can decide whether to split first.
   const overloadWarnings: OverloadVerdict[] = [];
   for (const r of pick.reusedAgents) {
-    const { bytes } = await readAgentClaudeMdBytes(r.agent.agentId);
-    const verdict = detectOverload(r.agent, bytes);
+    const { md } = await readAgentClaudeMdBytes(r.agent.agentId);
+    const verdict = detectOverload(r.agent, md);
     if (verdict) overloadWarnings.push(verdict);
   }
   return {
@@ -287,7 +288,19 @@ export function formatSetupPreview(p: SetupPreview): string {
     lines.push("Overload warnings:");
     for (const w of p.overloadWarnings) {
       lines.push(`  WARNING: ${w.agentId} crossed split threshold — ${w.reasons.join(", ")}`);
-      lines.push(`    Run \`vp-dev agents split ${w.agentId}\` to view a split proposal.`);
+      // Issue #161: branch remediation text on splitter eligibility. The
+      // splitter's clusterer requires at least SPLIT_MIN_SECTIONS
+      // summarizer-attributable sections; pointing the user at
+      // `vp-dev agents split` for an agent below that floor results in
+      // "Too few attributable sections (<4) to cluster meaningfully" —
+      // exactly the dead-end UX this branch avoids.
+      if (w.attributableSections >= SPLIT_MIN_SECTIONS) {
+        lines.push(`    Run \`vp-dev agents split ${w.agentId}\` to view a split proposal.`);
+      } else {
+        lines.push(
+          `    Splitter needs >=${SPLIT_MIN_SECTIONS} attributable sections; ${w.agentId} has ${w.attributableSections}. See #158 for the compaction path.`,
+        );
+      }
     }
     lines.push("");
   }

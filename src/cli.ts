@@ -1824,7 +1824,7 @@ async function cmdAgentsSplit(agentId: string, opts: AgentsSplitOpts): Promise<v
     process.exit(2);
   }
   const { md, bytes } = await readAgentClaudeMdBytes(agentId);
-  const verdict = detectOverload(agent, bytes);
+  const verdict = detectOverload(agent, md);
   if (!verdict && !opts.force) {
     if (opts.json) {
       process.stdout.write(JSON.stringify({ agentId, overloaded: false, claudeMdBytes: bytes }, null, 2) + "\n");

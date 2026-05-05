@@ -67,6 +67,26 @@ export interface RunAgentEntry {
   status: AgentStatus;
 }
 
+/**
+ * One cluster of semantically-duplicate issues identified by the
+ * pre-dispatch dedup pass (issue #150, Phase 2a-i of #133).
+ *
+ * `canonical` is the issue number to KEEP; `duplicates` are the issue
+ * numbers that should yield to it. The canonical is selected by the
+ * dedup model with priority: (1) most-detailed body, (2) most comments,
+ * (3) oldest creation. `rationale` is a one-sentence justification that
+ * names the canonical and explains why the cluster is a duplicate set.
+ *
+ * Phase 2a-i ships this shape and the `detectDuplicates` function that
+ * returns it; nothing in the orchestrator or CLI consumes the result
+ * yet — that integration lands in Phase 2a-ii.
+ */
+export interface DuplicateCluster {
+  canonical: number;
+  duplicates: number[];
+  rationale: string;
+}
+
 export interface RunIssueEntry {
   status: IssueStatus;
   agentId?: string;
@@ -150,6 +170,23 @@ export interface RunState {
   // tracker. Updated immediately before each `saveRunState` call in
   // `runOrchestrator` — see `src/orchestrator/orchestrator.ts`.
   costAccumulatedUsd?: number;
+  // Issue #150 (Phase 2a-i of #133): clusters of semantically-duplicate
+  // issues identified by the pre-dispatch dedup pass. Phase 2a-i ships
+  // the field as an optional schema extension only — no orchestrator or
+  // CLI code currently writes or reads it. Phase 2a-ii wires the dedup
+  // pass into `cli.ts` between triage and `pickAgents`, populates this
+  // field at run-start, and renders a "Duplicate clusters" block in the
+  // approval-gate preview. Phase 2b layers the destructive
+  // `--apply-dedup` close path on top. Optional for back-compat with
+  // run-state files written before this surface existed.
+  duplicateClustersDetected?: DuplicateCluster[];
+  // Issue #150 (Phase 2a-i of #133): USD cost of the dedup pass's single
+  // model call (Opus, see `ORCHESTRATOR_MODEL_DEDUP`). Persisted alongside
+  // `duplicateClustersDetected` so post-run audits can attribute the
+  // dedup spend without scraping the JSONL log. Phase 2a-i populates
+  // nothing; Phase 2a-ii's integration writes both fields together.
+  // Optional for back-compat.
+  dedupCostUsd?: number;
 }
 
 export const ResultEnvelopeSchema = z.object({

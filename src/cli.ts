@@ -85,6 +85,11 @@ import {
   resolveMinClusterSize,
 } from "./agent/compactClaudeMd.js";
 import {
+  DEFAULT_MAX_SAVINGS_PCT,
+  formatTightenProposal,
+  proposeTighten,
+} from "./agent/tightenClaudeMd.js";
+import {
   computeProposalHash,
   deleteCompactConfirmToken,
   mintToken as mintCompactToken,
@@ -299,6 +304,23 @@ export function buildCli(): Command {
         .option("--yes", "Skip the apply confirmation prompt (required for non-TTY environments).")
         .action(async (opts) => {
           await cmdAgentsPrune(opts);
+        }),
+    )
+    .addCommand(
+      new Command("tighten-claude-md")
+        .description(
+          "Phase A (#172): propose intra-section prose-tightening rewrites for an agent's CLAUDE.md. Advisory only — no file mutation. The destructive --apply path is tracked at #173.",
+        )
+        .argument("<agentId>", "Agent to inspect (e.g. agent-916a)")
+        .option("--json", "Print machine-readable JSON")
+        .option(
+          "--max-savings-pct <n>",
+          "Soft cap on per-section savings before flagging the rewrite as 'excessive-savings' (default 40)",
+          parsePositive,
+          DEFAULT_MAX_SAVINGS_PCT,
+        )
+        .action(async (agentId, opts) => {
+          await cmdAgentsTightenClaudeMd(agentId, opts);
         }),
     )
     .addCommand(
@@ -2130,6 +2152,51 @@ async function cmdAgentsCompactClaudeMdConfirm(
       `(${result.clustersApplied} cluster(s), ${result.sectionsMerged} sections merged)\n` +
       `  merge runId: ${result.runId}\n`,
   );
+}
+
+interface AgentsTightenClaudeMdOpts {
+  json?: boolean;
+  maxSavingsPct: number;
+}
+
+async function cmdAgentsTightenClaudeMd(
+  agentId: string,
+  opts: AgentsTightenClaudeMdOpts,
+): Promise<void> {
+  const reg = await loadRegistry();
+  const agent = reg.agents.find((a) => a.agentId === agentId);
+  if (!agent) {
+    process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+    process.exit(2);
+  }
+  if (agent.archived) {
+    process.stderr.write(
+      `ERROR: agent '${agentId}' is already archived; tightening is for active agents.\n`,
+    );
+    process.exit(2);
+  }
+  const { md, bytes } = await readAgentClaudeMdBytes(agentId);
+  if (bytes === 0) {
+    process.stderr.write(
+      `ERROR: agent '${agentId}' has no CLAUDE.md on disk yet — nothing to tighten.\n`,
+    );
+    process.exit(2);
+  }
+
+  process.stdout.write(
+    `Generating tighten proposal for ${agentId} (max-savings-pct=${opts.maxSavingsPct})...\n`,
+  );
+  const proposal = await proposeTighten({
+    agent,
+    claudeMd: md,
+    maxSavingsPct: opts.maxSavingsPct,
+  });
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ agentId, proposal }, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(formatTightenProposal(proposal) + "\n");
 }
 
 interface AgentsPruneOpts {

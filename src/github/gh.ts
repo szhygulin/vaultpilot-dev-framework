@@ -1,5 +1,8 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import type { IssueRangeSpec, IssueSummary } from "../types.js";
 
 const execFile = promisify(execFileCb);
@@ -107,6 +110,48 @@ export async function getIssueDetail(targetRepo: string, number: number): Promis
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Post a comment on a GitHub issue using `gh issue comment ... --body-file`.
+ *
+ * The body is written to a temp file (not passed via `--body`) because
+ * Markdown bodies can include shell metacharacters that the gh CLI's
+ * argv path sometimes mishandles, and large bodies overflow argv limits
+ * on some platforms. Caller is expected to handle thrown errors — the
+ * orchestrator's failure-comment path logs a warning and continues.
+ */
+export async function postIssueComment(
+  targetRepo: string,
+  issueId: number,
+  body: string,
+): Promise<void> {
+  const tmp = path.join(
+    os.tmpdir(),
+    `vp-dev-issue-comment-${process.pid}-${Date.now()}.md`,
+  );
+  await fs.writeFile(tmp, body);
+  try {
+    await execFile(
+      "gh",
+      [
+        "issue",
+        "comment",
+        String(issueId),
+        "--repo",
+        targetRepo,
+        "--body-file",
+        tmp,
+      ],
+      { maxBuffer: 5 * 1024 * 1024 },
+    );
+  } finally {
+    try {
+      await fs.unlink(tmp);
+    } catch {
+      // ignore
+    }
   }
 }
 

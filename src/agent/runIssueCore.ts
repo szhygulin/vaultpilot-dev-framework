@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { ensureAgent, mutateRegistry } from "../state/registry.js";
 import { runCodingAgent } from "./codingAgent.js";
 import {
+  agentClaudeMdPath,
   appendBlock,
   expireSentinels,
   forkClaudeMd,
@@ -9,6 +10,13 @@ import {
 } from "./specialization.js";
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
 import { resolveExpiryPolicies } from "../util/sentinels.js";
+import {
+  deriveStableSectionId,
+  extractCitedStableIds,
+  recordIntroduction,
+  recordPushback,
+  recordReinforcement,
+} from "../state/lessonUtility.js";
 import { shouldPushPartial } from "./shouldPushPartial.js";
 import {
   buildIncompleteBranchName,
@@ -206,6 +214,21 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
         appendOutcome = appendResult.appendOutcome;
         summarySkipReason = appendResult.summarySkipReason;
 
+        // Issue #178 (Phase 1 of #177): record utility-scoring signals for
+        // the just-appended block. Fire-and-forget; never block the main
+        // run path on a utility-scoring failure.
+        if (appendOutcome?.kind === "appended") {
+          await recordUtilityForAppend({
+            agentId: input.agent.agentId,
+            runId: input.runId,
+            issueId: input.issue.id,
+            heading: summary.heading ?? "",
+            body: summary.body ?? "",
+            tags: envelope.memoryUpdate.addTags,
+            logger: input.logger,
+          });
+        }
+
         // Sentinel expiry: after a successful implement run has been
         // recorded, walk the agent's CLAUDE.md and drop sentinels that
         // newer blocks have superseded. Per-kind policies cover
@@ -286,8 +309,38 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
           });
           appendOutcome = appendResult.appendOutcome;
           summarySkipReason = appendResult.summarySkipReason;
+
+          // Issue #178: record utility-scoring signals for failure-lesson
+          // blocks too — they're attributable sections like any other.
+          if (appendOutcome?.kind === "appended") {
+            await recordUtilityForAppend({
+              agentId: input.agent.agentId,
+              runId: input.runId,
+              issueId: input.issue.id,
+              heading: summary.heading ?? "",
+              body: summary.body ?? "",
+              tags: input.agent.tags,
+              logger: input.logger,
+            });
+          }
         }
       }
+    }
+
+    // Issue #178: record pushback citation against existing sections
+    // whose heading + tags overlap the agent's pushback reasoning. Runs
+    // regardless of whether maybeAppendSummary appended — the signal is
+    // about which prior rule the agent applied, not the new lesson.
+    if (envelope?.decision === "pushback" && !input.skipSummary) {
+      await recordUtilityForPushback({
+        agentId: input.agent.agentId,
+        runId: input.runId,
+        issueId: input.issue.id,
+        commentText: envelope.reason ?? "",
+        tags: envelope.memoryUpdate.addTags,
+        targetRepoPath: input.targetRepoPath,
+        logger: input.logger,
+      });
     }
 
     await mutateRegistry((reg) => {
@@ -453,4 +506,109 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
     });
   }
   return { appendOutcome };
+}
+
+// Issue #178 (Phase 1 of #177): per-section utility-scoring data collection.
+// These helpers wrap the lessonUtility module in fail-soft try/catch so a
+// utility-scoring write failure can never block the orchestrator's main path.
+
+interface RecordUtilityForAppendArgs {
+  agentId: string;
+  runId: string;
+  issueId: number;
+  heading: string;
+  body: string;
+  tags?: string[];
+  logger: Logger;
+}
+
+async function recordUtilityForAppend(
+  args: RecordUtilityForAppendArgs,
+): Promise<void> {
+  try {
+    const ts = new Date().toISOString();
+    await recordIntroduction({
+      agentId: args.agentId,
+      runId: args.runId,
+      issueId: args.issueId,
+      body: args.body,
+      ts,
+    });
+    // Read the post-append CLAUDE.md and find which prior sections this
+    // new block reinforces. Exclude the just-introduced block itself.
+    const claudeMd = await fs
+      .readFile(agentClaudeMdPath(args.agentId), "utf-8")
+      .catch(() => "");
+    if (!claudeMd) return;
+    const selfStableId = deriveStableSectionId(args.runId, [args.issueId]);
+    const cited = extractCitedStableIds({
+      text: args.body,
+      heading: args.heading,
+      tags: args.tags,
+      claudeMd,
+      exclude: new Set([selfStableId]),
+    });
+    if (cited.length > 0) {
+      await recordReinforcement({
+        agentId: args.agentId,
+        runId: args.runId,
+        citedSectionStableIds: cited,
+      });
+      args.logger.info("specialization.utility_reinforced", {
+        agentId: args.agentId,
+        issueId: args.issueId,
+        citedCount: cited.length,
+      });
+    }
+  } catch (err) {
+    args.logger.warn("specialization.utility_record_failed", {
+      agentId: args.agentId,
+      issueId: args.issueId,
+      err: (err as Error).message,
+    });
+  }
+}
+
+interface RecordUtilityForPushbackArgs {
+  agentId: string;
+  runId: string;
+  issueId: number;
+  commentText: string;
+  tags?: string[];
+  targetRepoPath: string;
+  logger: Logger;
+}
+
+async function recordUtilityForPushback(
+  args: RecordUtilityForPushbackArgs,
+): Promise<void> {
+  try {
+    const claudeMd = await fs
+      .readFile(agentClaudeMdPath(args.agentId), "utf-8")
+      .catch(() => "");
+    if (!claudeMd) return;
+    const cited = extractCitedStableIds({
+      text: args.commentText,
+      tags: args.tags,
+      claudeMd,
+    });
+    if (cited.length > 0) {
+      await recordPushback({
+        agentId: args.agentId,
+        runId: args.runId,
+        citedSectionStableIds: cited,
+      });
+      args.logger.info("specialization.utility_pushback_recorded", {
+        agentId: args.agentId,
+        issueId: args.issueId,
+        citedCount: cited.length,
+      });
+    }
+  } catch (err) {
+    args.logger.warn("specialization.utility_record_failed", {
+      agentId: args.agentId,
+      issueId: args.issueId,
+      err: (err as Error).message,
+    });
+  }
 }

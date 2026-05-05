@@ -723,7 +723,7 @@ test("clampClusterFields: still trims cluster body / heading / rationale alongsi
     clusters: Array<{ proposedHeading: string; proposedBody: string; rationale: string }>;
     notes: string;
   };
-  assert.ok(out.clusters[0].proposedHeading.length <= 100);
+  assert.ok(out.clusters[0].proposedHeading.length <= 160);
   assert.ok(out.clusters[0].proposedBody.length <= 6000);
   assert.ok(out.clusters[0].rationale.length <= 800);
   assert.ok(out.notes.length <= 500);

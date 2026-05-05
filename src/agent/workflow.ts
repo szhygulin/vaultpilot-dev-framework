@@ -22,6 +22,20 @@ export interface WorkflowVars {
     agentName?: string;
     runId: string;
   };
+  /**
+   * Issue #141 (Phase 1 of #134): when `true`, render an additional
+   * "## Step N+1 — Auto-file next phase (if applicable)" section that
+   * instructs the agent to detect a phase-marked issue (title prefix
+   * "Phase X:" or a "## Phases" body section) and, after a successful
+   * `gh pr create`, file a follow-up issue for Phase N+1 and surface its
+   * URL via the envelope's `nextPhaseIssueUrl` field.
+   *
+   * Default: `false` — this Phase 1 ships data-layer + render-only with
+   * zero observable behavior change. Phase 2 will thread a CLI flag
+   * (`--auto-phase-followup`) through `OrchestratorInput → RunIssueCoreInput
+   * → CodingAgentInput → WorkflowVars` so the section actually fires.
+   */
+  autoPhaseFollowup?: boolean;
 }
 
 export function renderWorkflow(v: WorkflowVars): string {
@@ -103,7 +117,21 @@ These post-push checks are the verification-ceremony anti-pattern — they cost 
 The orchestrator's recovery pass (PR [#92](https://github.com/szhygulin/vaultpilot-development-agents/pull/92)) salvages the partial branch — a known-incomplete attempt with a clean \`error\` envelope is strictly better than running out of turns mid-debug with no envelope at all.
 
 **Investigative-coding signal.** If you find yourself re-reading the same source file twice during the closing third of your turns, that's a tell that the change map wasn't complete before you started editing. Stop reading; make the smallest additional edit that compiles + passes tests; ship. Save the "I should have planned more" insight for a memory tag, not for more reads on this run.
+${v.autoPhaseFollowup ? `
+## Step N+1 — Auto-file next phase (if applicable)
 
+If this issue is part of a multi-phase split (title contains \`Phase X:\` or
+body has a \`## Phases\` section listing future phases), after \`gh pr create\`
+succeeds and BEFORE emitting the JSON envelope:
+  1. Read the original issue body for Phase N+1's intent.
+  2. Compose a fresh issue body referencing your just-shipped PR by URL,
+     with concrete API citations from your actual diff (no speculation).
+  3. \`gh issue create --title 'Phase N+1: <derived title>' --body-file <tmp>\`
+  4. Post a comment on the original issue: \`Phase N+1 filed at #<new-N>.\`
+  5. Set \`nextPhaseIssueUrl\` in your envelope to the new issue's URL.
+
+If the issue is NOT phase-marked, skip this step entirely.
+` : ''}
 ## Step 4 — Emit the JSON envelope as your FINAL message
 
 Wrap it in a fenced \`\`\`json block. Schema:
@@ -114,7 +142,8 @@ Wrap it in a fenced \`\`\`json block. Schema:
   "reason": "1-3 sentences on what you did and why",
   "prUrl": "<only for implement>",
   "commentUrl": "<only for pushback>",
-  "scopeNotes": "<optional, e.g. skill issue filed at vaultpilot-security-skill#NN>",
+  "scopeNotes": "<optional, e.g. skill issue filed at vaultpilot-security-skill#NN>",${v.autoPhaseFollowup ? `
+  "nextPhaseIssueUrl": "<optional, only when Step N+1 fired and filed a follow-up>",` : ''}
   "memoryUpdate": {
     "addTags": ["<lowercase domain tags this issue exercised>"],
     "removeTags": ["<optional>"]

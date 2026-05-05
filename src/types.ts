@@ -96,6 +96,14 @@ export interface RunIssueEntry {
   // Optional; only populated on no-envelope failure paths where
   // extractEnvelope failed.
   parseError?: string;
+  // Issue #141 (Phase 1 of #134): URL of the auto-filed Phase N+1 follow-up
+  // issue, when the just-shipped issue was part of a multi-phase split and
+  // the run was dispatched with the (Phase 2-only) auto-phase-followup flag.
+  // Phase 1 only persists this from the envelope through to the run-state
+  // entry — no observable behavior change until Phase 2 wires the CLI flag
+  // and the workflow prompt's Step N+1 actually fires. Optional for
+  // back-compat with run-state entries written before this surface existed.
+  nextPhaseIssueUrl?: string;
 }
 
 // A `vp-dev/agent-*/issue-*` branch the stale-branch sweep determined was
@@ -150,6 +158,15 @@ export const ResultEnvelopeSchema = z.object({
   prUrl: z.string().optional(),
   commentUrl: z.string().optional(),
   scopeNotes: z.string().optional(),
+  // Issue #141 (Phase 1 of #134): URL of the auto-filed Phase N+1 follow-up
+  // issue. Set by the agent only when the workflow's Step N+1 (rendered when
+  // `autoPhaseFollowup === true`) determined the issue was phase-marked and
+  // filed a follow-up via `gh issue create`. URL-validated when present so
+  // a malformed value fails envelope validation rather than landing in
+  // run-state silently. Phase 2 wires the orchestrator-side flag that
+  // enables Step N+1 rendering; Phase 1 is data-layer + render-only and
+  // ships zero observable behavior change.
+  nextPhaseIssueUrl: z.string().url().optional(),
   memoryUpdate: z.object({
     addTags: z.array(z.string()).default([]),
     removeTags: z.array(z.string()).optional(),

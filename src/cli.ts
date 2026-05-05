@@ -864,6 +864,14 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.stdout.write(
       "If the registry / open-issue set changes before --confirm, the previewHash check fails and forces a fresh --plan.\n",
     );
+    // Issue #157: surface the progress-check affordance at plan time so the
+    // operator sees the canonical commands before the run starts. Without
+    // this, agents/operators reach for `pgrep` + `ls -lt logs/` first and
+    // burn turns rediscovering `vp-dev status` (no-args reads the active
+    // run from `state/current-run.txt`).
+    process.stdout.write("\nAfter launch, check progress with:\n");
+    process.stdout.write("  vp-dev status                # active run\n");
+    process.stdout.write("  vp-dev status --watch        # live tail\n");
     return;
   }
 
@@ -940,6 +948,16 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   }
   await saveRunState(state);
   await writeCurrentRunId(runId);
+
+  // Issue #157: launch-time progress-check breadcrumb. Prints once per
+  // run, immediately after the run becomes the active run on disk
+  // (`state/current-run.txt`), so a mid-flight "how is it going?" question
+  // resolves to `vp-dev status` (no-args path) on the first try instead of
+  // shell forensics (`pgrep` + `ls -lt logs/` + `vp-dev status --help`).
+  process.stdout.write("\nRun launched.\n");
+  process.stdout.write(`  runId:           ${runId}\n`);
+  process.stdout.write("  Check progress:  vp-dev status            # active run, no args needed\n");
+  process.stdout.write("  Live tail:       vp-dev status --watch    # re-renders on interval\n\n");
 
   const logger = new Logger({ runId, verbose: !!opts.verbose });
   await logger.open();

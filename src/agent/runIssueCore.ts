@@ -55,6 +55,14 @@ export interface RunIssueCoreInput {
    * entry from its map before invoking this helper.
    */
   resumeContext?: ResumeContext;
+  /**
+   * Issue #142 (Phase 2 of #134): per-run flag that turns on the
+   * workflow prompt's auto-file-next-phase Step N+1 section. Forwarded
+   * verbatim to `runCodingAgent`, which threads it into
+   * `buildAgentSystemPrompt`. Optional: undefined / false preserves the
+   * pre-#142 behavior (no Step N+1 rendered, no follow-up issue filed).
+   */
+  autoPhaseFollowup?: boolean;
 }
 
 export interface RunIssueCoreResult {
@@ -124,6 +132,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       inspectPaths: input.inspectPaths,
       costTracker: input.costTracker,
       resumeContext: input.resumeContext,
+      autoPhaseFollowup: input.autoPhaseFollowup,
     });
 
     envelope = result.envelope;

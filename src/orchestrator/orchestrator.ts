@@ -72,6 +72,16 @@ export interface OrchestratorInput {
    * as before (no Phase 2 routing).
    */
   resumeContextByIssue?: Map<number, ResumeContext>;
+  /**
+   * Issue #142 (Phase 2 of #134): per-run flag forwarded to every
+   * `runIssueCore` call so each coding agent's workflow prompt gets the
+   * Step N+1 "Auto-file next phase" section rendered. Phase 1 (#141)
+   * shipped the renderer + envelope schema; this orchestrator-level
+   * field is the lifecycle wiring that makes the flag observable.
+   * Optional: undefined / false preserves pre-#142 behavior (no Step
+   * N+1 rendered, no follow-up issue filed).
+   */
+  autoPhaseFollowup?: boolean;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
@@ -161,6 +171,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
           costTracker: input.costTracker,
           budgetUsd: input.budgetUsd,
           resumeContext: input.resumeContextByIssue?.get(issue.id),
+          autoPhaseFollowup: input.autoPhaseFollowup,
         }).catch(async (err) => {
           input.logger.error("agent.uncaught", {
             agentId: agent.agentId,
@@ -519,6 +530,7 @@ async function runOneIssue(opts: {
   costTracker?: RunCostTracker;
   budgetUsd?: number;
   resumeContext?: ResumeContext;
+  autoPhaseFollowup?: boolean;
 }): Promise<void> {
   const result = await runIssueCore({
     agent: opts.agent,
@@ -531,6 +543,7 @@ async function runOneIssue(opts: {
     costTracker: opts.costTracker,
     budgetUsd: opts.budgetUsd,
     resumeContext: opts.resumeContext,
+    autoPhaseFollowup: opts.autoPhaseFollowup,
   });
 
   // Track whether this run was a non-clean exit so the post-mortem comment

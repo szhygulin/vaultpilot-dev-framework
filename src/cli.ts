@@ -163,6 +163,10 @@ export function buildCli(): Command {
       "Phase 1 (#118): record the intent to resume from a salvageable `*-incomplete-<runId>` branch on origin. Phase 1 only logs the intent + carries it through --plan/--confirm; the actual worktree-from-partial-branch behavior is Phase 2's territory (still routes from main today).",
     )
     .option(
+      "--auto-phase-followup",
+      "Phase 2 of #134 (#142): when set, every coding agent dispatched in this run gets the workflow prompt's Step N+1 'Auto-file next phase' section rendered (#141). Agents working on phase-marked issues (title 'Phase X:' or '## Phases' body section) file a follow-up Phase N+1 issue after `gh pr create` succeeds and surface its URL via the envelope's `nextPhaseIssueUrl`. Off by default — explicit opt-in.",
+    )
+    .option(
       "--no-report",
       "Suppress the end-of-run result report on stdout (#136). The terminal sentinel (#128) still fires. Use when piping `vp-dev run` output into structured-log consumers that don't want the bounded text block.",
     )
@@ -379,6 +383,11 @@ interface RunOpts {
   maxCostUsd?: string;
   preferAgent?: string;
   resumeIncomplete?: boolean;
+  // Issue #142 (Phase 2 of #134): per-run flag that enables the
+  // workflow prompt's Step N+1 ("Auto-file next phase") section. Off by
+  // default. Persisted into the confirm token so a `--plan` → `--confirm`
+  // round-trip preserves the operator's opt-in.
+  autoPhaseFollowup?: boolean;
   // Commander `--no-report` auto-generates `report: boolean` on opts: true
   // by default, false when `--no-report` is passed. Issue #136.
   report?: boolean;
@@ -443,6 +452,9 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // Phase 1 has no behavior coupling beyond the run-start log line, but
     // the flag must persist so Phase 2 can light up cleanly.
     opts.resumeIncomplete = p.resumeIncomplete;
+    // #142 Phase 2: same plan→confirm carry for the auto-phase-followup
+    // opt-in. Token-roundtrip-tested in `runConfirm.test.ts`.
+    opts.autoPhaseFollowup = p.autoPhaseFollowup;
   }
 
   if (opts.agents === undefined || !opts.targetRepo) {
@@ -679,6 +691,12 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         maxCostUsd: opts.maxCostUsd,
         // #118 Phase 1: carry the resume intent across --plan → --confirm.
         resumeIncomplete: opts.resumeIncomplete,
+        // #142 Phase 2: persist the auto-phase-followup opt-in so the
+        // confirm-side launch sees the same flag the user authorized at
+        // plan time. The previewHash already binds this — flipping the
+        // value between plan and confirm rebuilds the preview text and
+        // rejects with a drift diff.
+        autoPhaseFollowup: opts.autoPhaseFollowup,
       },
     });
     process.stdout.write("Plan saved. No agents launched.\n");
@@ -778,6 +796,11 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // their starting commit.
     resumeIncomplete: !!opts.resumeIncomplete,
     incompleteBranchesAvailableCount: incompleteBranchesAvailable.length,
+    // #142 Phase 2: flat boolean in the run-start log so post-run audits
+    // can confirm the opt-in was active for this run. Pairs naturally
+    // with the `nextPhaseIssueUrl` field surfaced on the per-issue
+    // `RunIssueEntry` (#141 Phase 1).
+    autoPhaseFollowup: !!opts.autoPhaseFollowup,
     // Issue #139 (Phase 1 of #133): emit the resolved model tier each
     // orchestrator-side LLM call site is configured to use, so post-hoc
     // audits can confirm what tier was actually used (especially when the
@@ -846,6 +869,10 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       costTracker,
       budgetUsd,
       resumeContextByIssue,
+      // #142 Phase 2: thread the per-run opt-in down to every
+      // `runIssueCore` so each coding agent's seed gets the Step N+1
+      // section rendered when the operator passed `--auto-phase-followup`.
+      autoPhaseFollowup: !!opts.autoPhaseFollowup,
     });
     const abortedBudgetCount = countByStatus(state, "aborted-budget");
     logger.info("run.completed", {
@@ -1119,6 +1146,11 @@ async function runResume(opts: RunOpts): Promise<void> {
       targetRepoPath: repoPath,
       costTracker,
       budgetUsd,
+      // #142 Phase 2: same flag plumbing on resume for symmetry with
+      // `--prefer-agent`. Operators who started a run with
+      // `--auto-phase-followup` and need to resume after a crash re-pass
+      // the flag on the resume invocation; otherwise it stays off.
+      autoPhaseFollowup: !!opts.autoPhaseFollowup,
     });
     const abortedBudgetCount = countByStatus(state, "aborted-budget");
     logger.info("run.completed", {

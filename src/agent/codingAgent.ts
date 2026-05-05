@@ -38,6 +38,14 @@ export interface CodingAgentInput {
    * get here (see `createWorktree(resumeFromBranch)`).
    */
   resumeContext?: ResumeContext;
+  /**
+   * Issue #142 (Phase 2 of #134): when `true`, the workflow prompt's
+   * `autoPhaseFollowup` render switch fires and the agent's seed gets
+   * the Step N+1 "Auto-file next phase" section. CLI-driven via
+   * `vp-dev run --auto-phase-followup`. Default `false` — Step N+1 is
+   * absent and no follow-up issue is filed.
+   */
+  autoPhaseFollowup?: boolean;
 }
 
 export interface CodingAgentResult {
@@ -98,6 +106,12 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
             runId: input.resumeContext.runId,
           }
         : undefined,
+      // Issue #142 (Phase 2 of #134): forward the per-run flag into the
+      // workflow renderer. When `true`, `renderWorkflow` adds the Step
+      // N+1 section + the `nextPhaseIssueUrl` envelope-schema field.
+      // Phase 1 (#141) shipped the renderer; this is the call site that
+      // actually flips the switch.
+      autoPhaseFollowup: input.autoPhaseFollowup,
     },
     targetRepoPath: input.targetRepoPath,
     resumeContext: input.resumeContext,

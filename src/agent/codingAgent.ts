@@ -103,14 +103,26 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
 
   const toolUseTrace: { tool: string; input: string }[] = [];
 
+  // Pass 1 (main coding pass): no `maxTurns` — issue #98 retired the 50-turn
+  // ceiling. The cap was an indirect proxy for cost; once `RunCostTracker`
+  // landed (PR #93) and the SDK's `maxBudgetUsd` option became available we
+  // can hard-stop on the dimension we actually want to bound. Past failure
+  // mode: issue #34's 9-file plan twice hit `error_max_turns` mid-edit
+  // despite making forward progress, burning ~$8.30 with no recovered work.
+  // The remaining-budget computation reads the tracker AT DISPATCH TIME so
+  // pass 1 sees the full budget; recovery passes (2a, 2b) see what's left
+  // after pass 1's cost has been forwarded via `costTracker.add()`. When
+  // no budget was configured (`--max-cost-usd` absent), `remainingBudget()`
+  // returns `undefined` and the SDK runs uncapped — same behavior as the
+  // pre-#98 main pass minus the turn ceiling.
   const pass1 = await runSdkPass({
     input,
     systemPrompt,
     userPrompt,
-    maxTurns: 50,
     canUseTool,
     disallowedTools,
     toolUseTrace,
+    maxBudgetUsd: input.costTracker?.remainingBudget(),
   });
 
   // Forward to the per-run accumulator the moment the SDK reports the
@@ -128,9 +140,9 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
   let parsed = extractEnvelope(finalText);
   let recoveryAttempted = false;
 
-  // Turn-ceiling recovery: when the SDK truncated the run with
-  // `error_max_turns` and we have no parseable envelope, run a two-pass
-  // recovery:
+  // Truncation recovery: when the SDK truncated the run with
+  // `error_max_turns` OR `error_max_budget_usd` and we have no parseable
+  // envelope, run a two-pass recovery:
   //
   //   - Pass 2a (1 turn, no tools): envelope-only. Hard SDK-level guarantee
   //     that a structured terminal envelope is recorded before any tool work
@@ -144,9 +156,22 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
   //     upgrade from `decision: "error"` to `decision: "implement"` with
   //     prUrl when there's recoverable in-flight work.
   //
+  // Issue #98: `error_max_budget_usd` is the cost-shaped twin of
+  // `error_max_turns` — it fires when the SDK exhausts the per-query
+  // `maxBudgetUsd` derived from the tracker's remaining budget. Same
+  // recovery shape applies: drained budget on pass 1 means recovery passes
+  // see `remainingBudget() === 0` and the SDK exits with the same subtype
+  // before tools can fire, so pass 2a still gets its envelope-write budget
+  // off the orchestrator's residual headroom (the run-level budget
+  // continues to accumulate across passes).
+  //
   // Skipped in dry-run because branch / push are intercepted into echoes,
   // leaving no real remote state for reconcile to find. See issue #76.
-  if (errorSubtype === "error_max_turns" && !parsed.ok && !input.dryRun) {
+  if (
+    (errorSubtype === "error_max_turns" || errorSubtype === "error_max_budget_usd") &&
+    !parsed.ok &&
+    !input.dryRun
+  ) {
     recoveryAttempted = true;
     input.logger.info("agent.recovery_started", {
       agentId: input.agent.agentId,
@@ -167,6 +192,15 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       canUseTool,
       disallowedTools,
       toolUseTrace,
+      // Recovery passes share the run-level cost ceiling. Re-read the
+      // tracker after pass 1 so pass 2a sees the residual budget, not the
+      // pre-pass-1 budget. When pass 1 itself triggered the recovery via
+      // `error_max_budget_usd`, the residual is 0 — pass 2a then runs
+      // under tight enforcement (the SDK exits with the same subtype as
+      // soon as a cost reading is reported), gracefully degrading rather
+      // than being blocked entirely. The 1-turn `maxTurns` cap is the
+      // primary bound on this pass; budget is the secondary.
+      maxBudgetUsd: input.costTracker?.remainingBudget(),
     });
     if (pass2a.finalText) finalText = pass2a.finalText;
     if (typeof pass2a.costUsd === "number") {
@@ -184,6 +218,9 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
         canUseTool,
         disallowedTools,
         toolUseTrace,
+        // Re-read remaining budget after pass 2a was forwarded so pass 2b
+        // sees what's left for the work-salvage tool calls.
+        maxBudgetUsd: input.costTracker?.remainingBudget(),
       });
       if (typeof pass2b.costUsd === "number") {
         costUsd = (costUsd ?? 0) + pass2b.costUsd;
@@ -297,7 +334,14 @@ interface SdkPassOpts {
   input: CodingAgentInput;
   systemPrompt: string;
   userPrompt: string;
-  maxTurns: number;
+  /**
+   * Optional turn ceiling. Issue #98 dropped the cap for the main coding
+   * pass — cost is the real constraint and the turn cap was an indirect
+   * proxy that fired at a less-meaningful boundary. Recovery passes (2a,
+   * 2b) and single-decision LLM calls keep `maxTurns` because they're
+   * decision-bounded by design.
+   */
+  maxTurns?: number;
   canUseTool: CanUseTool;
   disallowedTools: string[];
   toolUseTrace: { tool: string; input: string }[];
@@ -306,6 +350,15 @@ interface SdkPassOpts {
    * all built-in tools (envelope-only recovery pass; see issue #89).
    */
   tools?: string[];
+  /**
+   * Per-query cost ceiling forwarded to the SDK's `maxBudgetUsd` option.
+   * The SDK exits with `error_max_budget_usd` once the query crosses this
+   * threshold. Computed at dispatch time as `costTracker.remainingBudget()`
+   * so each pass sees the budget that's actually left after prior passes
+   * forwarded their cost via `costTracker.add()`. Undefined when no
+   * run-level budget was configured — the SDK then runs uncapped on cost.
+   */
+  maxBudgetUsd?: number;
 }
 
 interface SdkPassResult {
@@ -359,6 +412,7 @@ async function runSdkPass(opts: SdkPassOpts): Promise<SdkPassResult> {
         env: process.env,
         abortController: input.abortController,
         maxTurns: opts.maxTurns,
+        maxBudgetUsd: opts.maxBudgetUsd,
         settingSources: [],
         persistSession: false,
         pathToClaudeCodeExecutable: claudeBinPath(),

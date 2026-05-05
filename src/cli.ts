@@ -38,6 +38,7 @@ import {
   writeRunConfirmToken,
 } from "./state/runConfirm.js";
 import { triageBatch } from "./orchestrator/triage.js";
+import { resolvedModelTiers } from "./orchestrator/models.js";
 import { Logger } from "./log/logger.js";
 import {
   fetchOriginMain,
@@ -750,6 +751,11 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // their starting commit.
     resumeIncomplete: !!opts.resumeIncomplete,
     incompleteBranchesAvailableCount: incompleteBranchesAvailable.length,
+    // Issue #139 (Phase 1 of #133): emit the resolved model tier each
+    // orchestrator-side LLM call site is configured to use, so post-hoc
+    // audits can confirm what tier was actually used (especially when the
+    // operator overrode a default via VP_DEV_*_MODEL env vars).
+    models: resolvedModelTiers(),
   });
 
   // Issue #119 Phase 2: when --resume-incomplete is set, build the

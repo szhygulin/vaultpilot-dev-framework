@@ -7,6 +7,7 @@ import { mutateRegistry, newAgentId } from "../state/registry.js";
 import { pickName } from "../state/names.js";
 import { ensureDir } from "../state/locks.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
+import { ORCHESTRATOR_MODEL_SPLIT } from "../orchestrator/models.js";
 import type { AgentRecord } from "../types.js";
 
 // Thresholds for "this agent is overloaded enough to warrant splitting".
@@ -17,7 +18,9 @@ export const SPLIT_THRESHOLD_ISSUES = 20;
 export const SPLIT_THRESHOLD_TAGS = 50;
 export const SPLIT_THRESHOLD_BYTES = 30 * 1024;
 
-const PROPOSAL_MODEL = "claude-sonnet-4-6";
+// Resolved at module load from `models.ts` (env-overridable). See
+// `src/orchestrator/models.ts` for tier rationale and override env vars.
+const PROPOSAL_MODEL = ORCHESTRATOR_MODEL_SPLIT;
 const MAX_CLUSTERS = 3;
 
 export interface OverloadVerdict {

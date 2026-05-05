@@ -89,6 +89,38 @@ test("findPromoteCandidates: nested open invalidates outer; inner is matched", (
   assert.equal(found[0].domain, "inner");
 });
 
+test("findPromoteCandidates: kind-agnostic — finds markers inside outcome:failure-lesson blocks", () => {
+  // Failure-derived blocks share the same body shape as success-derived
+  // ones; the only difference is the sentinel header above the heading.
+  // This guards the contract that `vp-dev lessons review` surfaces both
+  // kinds via the same marker walk.
+  const md = [
+    "<!-- run:run-A issue:#1 outcome:implement ts:2026-05-05T00:00:00.000Z tags:solana -->",
+    "## Success-derived rule",
+    "",
+    "Body of a success rule.",
+    "<!-- promote-candidate:solana -->",
+    "Solana RPC X drops txs above N compute units.",
+    "<!-- /promote-candidate -->",
+    "",
+    "<!-- run:run-B issue:#2 outcome:failure-lesson ts:2026-05-05T00:01:00.000Z tags:eip-712 -->",
+    "## Failure-derived rule",
+    "",
+    "Body of a failure rule.",
+    "<!-- promote-candidate:eip-712 -->",
+    "EIP-712 typed-data digests do not authenticate the tree itself.",
+    "<!-- /promote-candidate -->",
+  ].join("\n");
+  const found = findPromoteCandidates(md);
+  assert.equal(found.length, 2);
+  assert.equal(found[0].domain, "solana");
+  assert.equal(found[1].domain, "eip-712");
+  assert.equal(
+    found[1].body,
+    "EIP-712 typed-data digests do not authenticate the tree itself.",
+  );
+});
+
 test("findPromoteCandidates: ignores blocks with invalid domain shape", () => {
   const md = [
     "<!-- promote-candidate:Bad-Domain -->",

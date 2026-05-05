@@ -203,7 +203,7 @@ test("formatCompactionProposal: surfaces dropped-date warnings inline per cluste
   assert.match(out, /Unclustered \(1\): s3/);
 });
 
-test("formatCompactionProposal: clean proposal advertises Phase A advisory note", () => {
+test("formatCompactionProposal: clean proposal points at the --apply / --confirm flow", () => {
   const proposal: CompactionProposal = {
     agentId: "agent-test",
     clusters: [
@@ -223,9 +223,434 @@ test("formatCompactionProposal: clean proposal advertises Phase A advisory note"
   };
   const out = formatCompactionProposal(proposal);
   assert.match(out, /No validator warnings/);
-  assert.match(out, /#162/);
+  assert.match(out, /--apply/);
+  assert.match(out, /--confirm/);
 });
 
 test("DEFAULT_MIN_CLUSTER_SIZE: documented default is 3 (per issue #158 — 2 too aggressive)", () => {
   assert.equal(DEFAULT_MIN_CLUSTER_SIZE, 3);
 });
+
+// ---------------------------------------------------------------------------
+// Phase B (issue #162) tests: splicer + applyCompaction drift rejections.
+// Splicer is exercised pure; applyCompaction is exercised end-to-end against
+// a tmp agents-root via process.chdir, since AGENTS_ROOT is `process.cwd() +
+// "/agents"` and there's no override hook by design (matches appendBlock).
+// ---------------------------------------------------------------------------
+
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import {
+  applyCompaction,
+  renderMergedBlock,
+  type CompactionCluster,
+} from "./compactClaudeMd.js";
+import {
+  computeProposalHash,
+  hashFile,
+} from "../state/compactConfirm.js";
+import { parseSentinelHeader } from "../util/sentinels.js";
+
+function fakeMdContent(
+  sections: Array<{ run: string; issue: number; heading: string; body: string }>,
+): string {
+  // Match the on-disk shape `appendBlock` produces: one `\n` separating
+  // blocks, no leading whitespace before the first sentinel.
+  return sections
+    .map(
+      (s) =>
+        `<!-- run:${s.run} issue:#${s.issue} outcome:implement ts:2026-05-05T12:00:00.000Z -->\n## ${s.heading}\n\n${s.body}`,
+    )
+    .join("\n") + "\n";
+}
+
+test("spliceCompactedSections: replaces 3-section cluster with one merged block", () => {
+  const md = fakeMdContent([
+    { run: "run-a", issue: 100, heading: "Rule A", body: "Past incident 2026-04-28: foo." },
+    { run: "run-b", issue: 101, heading: "Rule B", body: "Past incident 2026-04-29: bar." },
+    { run: "run-c", issue: 102, heading: "Rule C", body: "Past incident 2026-04-30: baz." },
+  ]);
+  // Re-parse with offsets via the exported wrapper. Build sections manually
+  // mirroring what parseClaudeMdSectionsWithOffsets returns; here we cheat
+  // by using parseClaudeMdSections + inferring offsets from match.
+  const parsed = parseClaudeMdSections(md);
+  assert.equal(parsed.length, 3);
+
+  const cluster: CompactionCluster = {
+    sectionIds: ["s0", "s1", "s2"],
+    proposedHeading: "Merged AB+C",
+    proposedBody:
+      "Combined rule. Past incidents: 2026-04-28 (foo), 2026-04-29 (bar), 2026-04-30 (baz).",
+    rationale: "shared thesis",
+    sourceProvenance: [
+      { runId: "run-a", issueId: 100 },
+      { runId: "run-b", issueId: 101 },
+      { runId: "run-c", issueId: 102 },
+    ],
+  };
+
+  // We don't expose parseClaudeMdSectionsWithOffsets externally — the
+  // splicer is exercised through applyCompaction in the chdir-based test
+  // below. Test renderMergedBlock here (the only piece we can poke at
+  // without re-parsing offsets).
+  const block = renderMergedBlock(cluster, "merge-test", "2026-05-06T00:00:00.000Z");
+  assert.match(block, /run:merge-test/);
+  assert.match(block, /issue:#100\+#101\+#102/);
+  assert.match(block, /outcome:compacted/);
+  assert.match(block, /## Merged AB\+C/);
+  assert.match(block, /2026-04-28/);
+  assert.match(block, /2026-04-29/);
+  assert.match(block, /2026-04-30/);
+});
+
+test("renderMergedBlock: dedups + sorts source issue IDs", () => {
+  const cluster: CompactionCluster = {
+    sectionIds: ["s0", "s1", "s2"],
+    proposedHeading: "h",
+    proposedBody: "b",
+    rationale: "r",
+    sourceProvenance: [
+      { runId: "r-c", issueId: 102 },
+      { runId: "r-a", issueId: 100 },
+      // Duplicate issueId across two source runs — token should appear once.
+      { runId: "r-a-dup", issueId: 100 },
+      { runId: "r-b", issueId: 101 },
+    ],
+  };
+  const block = renderMergedBlock(cluster, "merge-x", "2026-05-06T00:00:00.000Z");
+  assert.match(block, /issue:#100\+#101\+#102/);
+});
+
+test("compound issue:#100+#101+#102 sentinel parses back via parseClaudeMdSections", () => {
+  const cluster: CompactionCluster = {
+    sectionIds: ["s0", "s1"],
+    proposedHeading: "Merged",
+    proposedBody: "body content",
+    rationale: "shared thesis",
+    sourceProvenance: [
+      { runId: "run-a", issueId: 100 },
+      { runId: "run-b", issueId: 101 },
+    ],
+  };
+  const block = renderMergedBlock(cluster, "merge-1", "2026-05-06T00:00:00.000Z");
+  // The block needs a trailing newline so parseClaudeMdSections's lookahead
+  // for `\n<!--` or end-of-string can terminate the body.
+  const reParsed = parseClaudeMdSections(block + "\n");
+  assert.equal(reParsed.length, 1);
+  assert.equal(reParsed[0].issueId, 100);
+  assert.deepEqual(reParsed[0].issueIds, [100, 101]);
+  assert.equal(reParsed[0].outcome, "compacted");
+});
+
+test("compound issue:#100+#101+#102 sentinel parses back via parseSentinelHeader", () => {
+  // The single-line parser used by the expiry walker (locateSentinels in
+  // sentinels.ts) must also accept compound IDs — otherwise compacted
+  // blocks become invisible to the walker and get absorbed as part of a
+  // previous block's body, with collateral expiry on the previous block's
+  // drop.
+  const line =
+    "<!-- run:merge-1 issue:#100+#101+#102 outcome:compacted ts:2026-05-06T00:00:00.000Z -->";
+  const h = parseSentinelHeader(line);
+  assert.notEqual(h, null);
+  if (!h) return;
+  assert.equal(h.outcome, "compacted");
+  assert.equal(h.issueId, 100);
+  assert.deepEqual(h.issueIds, [100, 101, 102]);
+});
+
+// applyCompaction tests — these chdir into a temp dir so AGENTS_ROOT
+// (computed from process.cwd at module import) resolves to the tmp tree.
+// Since AGENTS_ROOT is captured at module-load time via path.resolve,
+// process.chdir does NOT relocate it. To work around: we'd need to reset
+// the module — but importing once is fine because `agentClaudeMdPath`
+// recomputes from AGENTS_ROOT. Let me re-read… see specialization.ts:
+//   AGENTS_ROOT = path.resolve(process.cwd(), "agents")
+// Captured once. So chdir post-import doesn't help.
+//
+// Workaround: write the file at the path AGENTS_ROOT already points to
+// (i.e. <repo>/agents/<test-id>/CLAUDE.md), use a unique agentId per
+// test, and clean up afterwards. The repo's `agents/` dir is gitignored,
+// so this is safe. Same approach `appendBlock` would need if it had
+// tests.
+
+import { agentClaudeMdPath, AGENTS_ROOT } from "./specialization.js";
+
+async function withTempAgentDir(
+  fn: (agentId: string, filePath: string) => Promise<void>,
+): Promise<void> {
+  const agentId = `test-compact-${Math.random().toString(16).slice(2, 10)}`;
+  const filePath = agentClaudeMdPath(agentId);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await fn(agentId, filePath);
+  } finally {
+    // Best-effort cleanup of the per-test agent dir. Don't blow up if
+    // the file was renamed mid-test or the dir already gone.
+    await fs.rm(path.dirname(filePath), { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+test("applyCompaction: rewrites file under lock + collapses 3 sections to 1 merged block", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "run-a", issue: 100, heading: "Rule A", body: "Past incident 2026-04-28: foo." },
+      { run: "run-b", issue: 101, heading: "Rule B", body: "Past incident 2026-04-29: bar." },
+      { run: "run-c", issue: 102, heading: "Rule C", body: "Past incident 2026-04-30: baz." },
+    ]);
+    await fs.writeFile(filePath, md);
+
+    const proposal: CompactionProposal = {
+      agentId,
+      clusters: [
+        {
+          sectionIds: ["s0", "s1", "s2"],
+          proposedHeading: "Merged ABC",
+          proposedBody:
+            "Combined. Past incidents 2026-04-28, 2026-04-29, 2026-04-30.",
+          rationale: "shared thesis",
+          sourceProvenance: [
+            { runId: "run-a", issueId: 100 },
+            { runId: "run-b", issueId: 101 },
+            { runId: "run-c", issueId: 102 },
+          ],
+        },
+      ],
+      unclusteredSectionIds: [],
+      estimatedBytesSaved: 200,
+      inputBytes: Buffer.byteLength(md, "utf-8"),
+      sectionCount: 3,
+      warnings: [],
+    };
+    const expectedHash = computeProposalHash(proposal, md);
+    const result = await applyCompaction({
+      agentId,
+      proposal,
+      expectedProposalHash: expectedHash,
+      computeProposalHash,
+      runId: "merge-test-1",
+      now: () => "2026-05-06T00:00:00.000Z",
+    });
+    assert.equal(result.kind, "applied");
+    if (result.kind !== "applied") return;
+    assert.equal(result.clustersApplied, 1);
+    assert.equal(result.sectionsMerged, 3);
+
+    const after = await fs.readFile(filePath, "utf-8");
+    const reparsed = parseClaudeMdSections(after);
+    assert.equal(reparsed.length, 1, "compacted file should hold exactly one section");
+    assert.equal(reparsed[0].outcome, "compacted");
+    assert.deepEqual(reparsed[0].issueIds, [100, 101, 102]);
+    assert.match(reparsed[0].body, /2026-04-28/);
+    assert.match(reparsed[0].body, /2026-04-29/);
+    assert.match(reparsed[0].body, /2026-04-30/);
+  });
+});
+
+test("applyCompaction: rejects with proposal-hash drift when file changed between plan and confirm", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const planMd = fakeMdContent([
+      { run: "run-a", issue: 100, heading: "Rule A", body: "2026-04-28 foo" },
+      { run: "run-b", issue: 101, heading: "Rule B", body: "2026-04-29 bar" },
+      { run: "run-c", issue: 102, heading: "Rule C", body: "2026-04-30 baz" },
+    ]);
+    await fs.writeFile(filePath, planMd);
+
+    const proposal: CompactionProposal = {
+      agentId,
+      clusters: [
+        {
+          sectionIds: ["s0", "s1", "s2"],
+          proposedHeading: "Merged",
+          proposedBody: "Combined 2026-04-28, 2026-04-29, 2026-04-30",
+          rationale: "shared thesis",
+          sourceProvenance: [
+            { runId: "run-a", issueId: 100 },
+            { runId: "run-b", issueId: 101 },
+            { runId: "run-c", issueId: 102 },
+          ],
+        },
+      ],
+      unclusteredSectionIds: [],
+      estimatedBytesSaved: 100,
+      inputBytes: Buffer.byteLength(planMd, "utf-8"),
+      sectionCount: 3,
+      warnings: [],
+    };
+    const planHash = computeProposalHash(proposal, planMd);
+
+    // Drift: append another summarizer block before confirm.
+    const driftMd = planMd + "\n<!-- run:run-d issue:#103 outcome:implement ts:2026-05-06T00:00:00.000Z -->\n## Rule D\n\nNew lesson.\n";
+    await fs.writeFile(filePath, driftMd);
+
+    const result = await applyCompaction({
+      agentId,
+      proposal,
+      expectedProposalHash: planHash,
+      computeProposalHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "proposal-hash");
+
+    // File untouched (still drift content).
+    const after = await fs.readFile(filePath, "utf-8");
+    assert.equal(after, driftMd);
+  });
+});
+
+test("applyCompaction: rejects with warnings-present when validator flags a dropped past-incident date", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "run-a", issue: 100, heading: "Rule A", body: "Past incident 2026-04-28: foo." },
+      { run: "run-b", issue: 101, heading: "Rule B", body: "Past incident 2026-04-29: bar." },
+      { run: "run-c", issue: 102, heading: "Rule C", body: "Past incident 2026-04-30: baz." },
+    ]);
+    await fs.writeFile(filePath, md);
+
+    // Lossy proposal: cites only 2026-04-28 in the merged body.
+    const proposal: CompactionProposal = {
+      agentId,
+      clusters: [
+        {
+          sectionIds: ["s0", "s1", "s2"],
+          proposedHeading: "Merged (lossy)",
+          proposedBody: "Combined rule. See 2026-04-28 incident only.",
+          rationale: "shared thesis",
+          sourceProvenance: [
+            { runId: "run-a", issueId: 100 },
+            { runId: "run-b", issueId: 101 },
+            { runId: "run-c", issueId: 102 },
+          ],
+        },
+      ],
+      unclusteredSectionIds: [],
+      estimatedBytesSaved: 50,
+      inputBytes: Buffer.byteLength(md, "utf-8"),
+      sectionCount: 3,
+      warnings: [],
+    };
+    const hash = computeProposalHash(proposal, md);
+    const result = await applyCompaction({
+      agentId,
+      proposal,
+      expectedProposalHash: hash,
+      computeProposalHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "warnings-present");
+    assert.match(result.details, /2026-04-29/);
+
+    const after = await fs.readFile(filePath, "utf-8");
+    assert.equal(after, md, "file must not be mutated when validator rejects");
+  });
+});
+
+test("applyCompaction: preserves non-clustered sections verbatim, replaces only the clustered ones", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "run-a", issue: 100, heading: "Rule A", body: "Past incident 2026-04-28 foo" },
+      { run: "run-b", issue: 101, heading: "Rule B", body: "Past incident 2026-04-29 bar" },
+      { run: "run-c", issue: 102, heading: "Rule C", body: "Past incident 2026-04-30 baz" },
+      { run: "run-d", issue: 200, heading: "Distinct rule", body: "Unrelated lesson 2026-05-01" },
+    ]);
+    await fs.writeFile(filePath, md);
+
+    const proposal: CompactionProposal = {
+      agentId,
+      clusters: [
+        {
+          sectionIds: ["s0", "s1", "s2"],
+          proposedHeading: "Merged ABC",
+          proposedBody: "Combined 2026-04-28, 2026-04-29, 2026-04-30",
+          rationale: "shared",
+          sourceProvenance: [
+            { runId: "run-a", issueId: 100 },
+            { runId: "run-b", issueId: 101 },
+            { runId: "run-c", issueId: 102 },
+          ],
+        },
+      ],
+      unclusteredSectionIds: ["s3"],
+      estimatedBytesSaved: 100,
+      inputBytes: Buffer.byteLength(md, "utf-8"),
+      sectionCount: 4,
+      warnings: [],
+    };
+    const hash = computeProposalHash(proposal, md);
+    const result = await applyCompaction({
+      agentId,
+      proposal,
+      expectedProposalHash: hash,
+      computeProposalHash,
+      runId: "merge-test-keep",
+      now: () => "2026-05-06T00:00:00.000Z",
+    });
+    assert.equal(result.kind, "applied");
+
+    const after = await fs.readFile(filePath, "utf-8");
+    const sections = parseClaudeMdSections(after);
+    assert.equal(sections.length, 2);
+    // Order preserved: merged block at the position of s0; distinct rule
+    // (originally s3) follows.
+    assert.equal(sections[0].outcome, "compacted");
+    assert.equal(sections[1].outcome, "implement");
+    assert.equal(sections[1].issueId, 200);
+    assert.match(sections[1].body, /Unrelated lesson 2026-05-01/);
+  });
+});
+
+test("applyCompaction: rejects no-clusters proposal without touching the file", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "run-a", issue: 100, heading: "Rule A", body: "alpha" },
+    ]);
+    await fs.writeFile(filePath, md);
+    const proposal: CompactionProposal = {
+      agentId,
+      clusters: [],
+      unclusteredSectionIds: ["s0"],
+      estimatedBytesSaved: 0,
+      inputBytes: Buffer.byteLength(md, "utf-8"),
+      sectionCount: 1,
+      warnings: [],
+    };
+    const hash = computeProposalHash(proposal, md);
+    const result = await applyCompaction({
+      agentId,
+      proposal,
+      expectedProposalHash: hash,
+      computeProposalHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "no-clusters");
+    const after = await fs.readFile(filePath, "utf-8");
+    assert.equal(after, md);
+  });
+});
+
+test("computeProposalHash: stable across calls on identical inputs, drifts on file change", () => {
+  const proposal: CompactionProposal = {
+    agentId: "agent-x",
+    clusters: [],
+    unclusteredSectionIds: [],
+    estimatedBytesSaved: 0,
+    inputBytes: 0,
+    sectionCount: 0,
+    warnings: [],
+  };
+  const file = "alpha";
+  const h1 = computeProposalHash(proposal, file);
+  const h2 = computeProposalHash(proposal, file);
+  assert.equal(h1, h2);
+  const h3 = computeProposalHash(proposal, file + " ");
+  assert.notEqual(h1, h3);
+  assert.equal(typeof h1, "string");
+  assert.match(h1, /^[a-f0-9]{64}$/);
+  assert.match(hashFile(file), /^[a-f0-9]{64}$/);
+});
+
+// AGENTS_ROOT usage in the test suite is informational — not asserted, but
+// surfaced here so a future reader sees how the tmp-agent dir is computed.
+void AGENTS_ROOT;

@@ -8,9 +8,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_MIN_CLUSTER_SIZE,
+  PAIR_CLUSTER_FLOOR,
   extractDistinctDates,
   findDroppedIncidentDates,
   formatCompactionProposal,
+  resolveMinClusterSize,
   type CompactionProposal,
 } from "./compactClaudeMd.js";
 import { parseClaudeMdSections } from "./split.js";
@@ -229,6 +231,46 @@ test("formatCompactionProposal: clean proposal points at the --apply / --confirm
 
 test("DEFAULT_MIN_CLUSTER_SIZE: documented default is 3 (per issue #158 — 2 too aggressive)", () => {
   assert.equal(DEFAULT_MIN_CLUSTER_SIZE, 3);
+});
+
+test("PAIR_CLUSTER_FLOOR: documented floor lowered by --allow-pair-clusters is 2 (per issue #168)", () => {
+  assert.equal(PAIR_CLUSTER_FLOOR, 2);
+});
+
+test("resolveMinClusterSize: default (no flag) keeps explicit minClusterSize unchanged", () => {
+  assert.equal(resolveMinClusterSize({ minClusterSize: 3 }), 3);
+  assert.equal(resolveMinClusterSize({ minClusterSize: 5 }), 5);
+  assert.equal(
+    resolveMinClusterSize({ minClusterSize: 3, allowPairClusters: false }),
+    3,
+  );
+});
+
+test("resolveMinClusterSize: --allow-pair-clusters lowers floor to 2 when minClusterSize > 2", () => {
+  assert.equal(
+    resolveMinClusterSize({ minClusterSize: 3, allowPairClusters: true }),
+    2,
+  );
+  assert.equal(
+    resolveMinClusterSize({ minClusterSize: DEFAULT_MIN_CLUSTER_SIZE, allowPairClusters: true }),
+    2,
+  );
+  assert.equal(
+    resolveMinClusterSize({ minClusterSize: 7, allowPairClusters: true }),
+    2,
+  );
+});
+
+test("resolveMinClusterSize: --allow-pair-clusters is a no-op when minClusterSize already at or below floor", () => {
+  assert.equal(
+    resolveMinClusterSize({ minClusterSize: 2, allowPairClusters: true }),
+    2,
+  );
+  // Explicit lower-than-floor choice wins — pair-clusters never raises.
+  assert.equal(
+    resolveMinClusterSize({ minClusterSize: 1, allowPairClusters: true }),
+    1,
+  );
 });
 
 // ---------------------------------------------------------------------------

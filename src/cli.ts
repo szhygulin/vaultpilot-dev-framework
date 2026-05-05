@@ -82,6 +82,7 @@ import {
   applyCompaction,
   formatCompactionProposal,
   proposeCompaction,
+  resolveMinClusterSize,
 } from "./agent/compactClaudeMd.js";
 import {
   computeProposalHash,
@@ -312,6 +313,10 @@ export function buildCli(): Command {
           "Minimum sections per merge cluster (default 3; 2 is too aggressive per issue #158)",
           parsePositive,
           DEFAULT_MIN_CLUSTER_SIZE,
+        )
+        .option(
+          "--allow-pair-clusters",
+          "Lower the cluster-size floor to 2 for this invocation (sugar for --min-cluster-size 2). Surfaces clean 2-section near-duplicates the default-3 floor would orphan; the --apply/--confirm gate is the human-in-the-loop check (per issue #168).",
         )
         .option(
           "--apply",
@@ -1942,6 +1947,7 @@ interface AgentsCompactClaudeMdOpts {
   minClusterSize: number;
   apply?: boolean;
   confirm?: string;
+  allowPairClusters?: boolean;
 }
 
 async function cmdAgentsCompactClaudeMd(
@@ -1980,13 +1986,20 @@ async function cmdAgentsCompactClaudeMd(
     process.exit(2);
   }
 
+  const minClusterSize = resolveMinClusterSize({
+    minClusterSize: opts.minClusterSize,
+    allowPairClusters: opts.allowPairClusters,
+  });
+  const floorNote = opts.allowPairClusters && minClusterSize !== opts.minClusterSize
+    ? " (lowered by --allow-pair-clusters)"
+    : "";
   process.stdout.write(
-    `Generating compaction proposal for ${agentId} (min-cluster-size=${opts.minClusterSize})...\n`,
+    `Generating compaction proposal for ${agentId} (min-cluster-size=${minClusterSize}${floorNote})...\n`,
   );
   const proposal = await proposeCompaction({
     agent,
     claudeMd: md,
-    minClusterSize: opts.minClusterSize,
+    minClusterSize,
   });
 
   if (!opts.apply) {

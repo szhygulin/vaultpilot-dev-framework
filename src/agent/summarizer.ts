@@ -249,6 +249,17 @@ Three questions to anchor the body:
 
 Style: match the dense rule-form of an existing CLAUDE.md section. Lead with the rule itself in bold. Then a **Why:** line (the failure mode this targets). Then a **How to apply:** line (when this guidance kicks in). Use **Tells:** sparingly. Markdown hyperlinks (\`[label](url)\`) over raw URLs.
 
+Cross-agent promotion (optional, gated by human review):
+- If the failure mode is STRUCTURAL — a fact about the SDK, the tooling, the protocol, or the framework that any sibling agent in the same domain would hit the same way — wrap the cross-agent useful piece inside the \`body\` between two HTML comments:
+    <!-- promote-candidate:<domain> -->
+    <descriptive observation, multiple lines OK>
+    <!-- /promote-candidate -->
+- The \`<domain>\` MUST be one of the agent's current tags listed under "Pre-run agent tags" or "Tags added this run".
+- Use SPARINGLY — most failure lessons are agent-internal artifacts (this agent's tool sequencing was inefficient, this agent burned turns on a config quirk, context-window bloat). Those stay agent-local and MUST NOT be wrapped. Only structural facts ("Anthropic SDK X has known shape Y", "ERC-4626 reverts on zero-share deposit", "Solana RPC Z drops txs above N CU") earn the wrapper.
+- The wrapped content must read as a DESCRIPTIVE OBSERVATION, not an instruction to other agents. Avoid "you must / should", "the agent must" — use indicative voice.
+- Cap the wrapped content at ~40 non-empty lines / ~1500 chars.
+- Promote-candidates are queued for human review; they do NOT auto-promote. The human reviewer rejects noise.
+
 Hard rules:
 - If the failure was genuinely uninformative (single ambiguous error string, no agent reasoning, no clear missed assumption), emit \`{"skip": true, "skipReason": "<one short sentence>"}\`. Wrong-lesson risk beats noisy-lesson risk.
 - Heading: ≤ 120 chars, no trailing colon, no markdown prefix (no leading "##"). The append step prepends "##".

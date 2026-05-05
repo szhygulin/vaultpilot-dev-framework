@@ -111,6 +111,197 @@ export async function createWorktree(opts: {
   return { path: wtPath, branch };
 }
 
+// Build the labeled ref for the safety-net partial push. The original branch
+// shape `vp-dev/<agent>/issue-<N>` matches `VP_DEV_BRANCH_RE` (anchored `$`),
+// so appending `-incomplete-<runId>` keeps the new ref OUT of the stale-branch
+// sweep — incomplete branches are evidence for human inspection, not auto-
+// cleaned. Sanitized to git-ref rules (alphanumerics + `-` + `/`).
+export function buildIncompleteBranchName(originalBranch: string, runId: string): string {
+  const safeRunId = runId.replace(/[^a-zA-Z0-9-]/g, "-");
+  return `${originalBranch}-incomplete-${safeRunId}`;
+}
+
+export interface PushPartialBranchOpts {
+  repoPath: string;
+  worktreePath: string;
+  worktreeBranch: string;
+  incompleteBranch: string;
+  runId: string;
+  errorSubtype: string;
+  targetRepo: string;
+  logger?: Logger;
+  agentId: string;
+  issueId: number;
+}
+
+export interface PushPartialBranchResult {
+  pushed: boolean;
+  branchUrl?: string;
+  /** Set when pushed === false. */
+  reason?: string;
+  /** True if a salvage commit was created on top of existing tree state. */
+  committed?: boolean;
+}
+
+// Orchestrator-level safety net for non-clean agent exits (today only fired
+// for `error_max_turns`).
+//
+// Why this is a separate orchestrator path even though `runCodingAgent`
+// already runs an in-agent recovery pass (see issue #76, commit d4aadd0):
+// the recovery pass itself can fail — it consumes its own 5-turn budget,
+// hits permission denials, or simply doesn't complete the push. When that
+// happens, the existing `removeWorktree({ deleteBranch: true })` call below
+// silently nukes the local branch and any uncommitted edits. This helper is
+// the deterministic backstop that runs whether or not the agent recovered:
+// shell-level git, no LLM in the loop. See issue #88.
+//
+// Steps:
+//   1. `git status --porcelain` to detect uncommitted work in the worktree.
+//   2. If anything uncommitted → `git add -A && git commit -m <salvage msg>`
+//      so the in-flight edits are captured as a commit.
+//   3. Compare HEAD against `origin/main` — if HEAD has at least one new
+//      commit (the salvage commit, or pre-existing agent commits that were
+//      never pushed), `git push -u origin HEAD:<incompleteBranch>`.
+//   4. If the worktree is clean and there are no commits ahead of origin/main,
+//      skip the push (nothing to preserve).
+//
+// Failure modes are surfaced via the `reason` field — the orchestrator never
+// throws on partial-push failure; the agent's primary failure path is the
+// authoritative outcome. Push-protection invariant: this never targets `main`
+// (incompleteBranch always carries the `-incomplete-<runId>` suffix).
+export async function pushPartialBranch(
+  opts: PushPartialBranchOpts,
+): Promise<PushPartialBranchResult> {
+  // Reject anything resembling a `main` push at the helper boundary.
+  // Belt-and-suspenders against future callers; the canonical caller in
+  // runIssueCore always passes a `-incomplete-<runId>` suffixed name.
+  if (opts.incompleteBranch === "main" || opts.incompleteBranch.endsWith("/main")) {
+    return { pushed: false, reason: "refusing to push partial branch to main" };
+  }
+
+  // 1. Detect uncommitted work.
+  let uncommitted = false;
+  try {
+    const { stdout } = await execFile("git", ["status", "--porcelain"], {
+      cwd: opts.worktreePath,
+    });
+    uncommitted = stdout.trim().length > 0;
+  } catch (err) {
+    opts.logger?.warn("worktree.partial_push_status_failed", {
+      agentId: opts.agentId,
+      issueId: opts.issueId,
+      err: (err as Error).message,
+    });
+    return {
+      pushed: false,
+      reason: `git status failed: ${(err as Error).message}`,
+    };
+  }
+
+  // 2. Stage + commit if there are uncommitted edits.
+  let committed = false;
+  if (uncommitted) {
+    try {
+      await execFile("git", ["add", "-A"], { cwd: opts.worktreePath });
+      // Empty author/committer env to inherit local git config; commit
+      // message documents the salvage origin so a human pulling the branch
+      // can grep `git log` for the runId.
+      await execFile(
+        "git",
+        [
+          "commit",
+          "-m",
+          `chore(salvage): partial work from runId=${opts.runId} (errorSubtype=${opts.errorSubtype})\n\nIn-flight edits captured by orchestrator safety net before worktree prune. Not finished work — review and discard or build on as appropriate.`,
+        ],
+        { cwd: opts.worktreePath },
+      );
+      committed = true;
+    } catch (err) {
+      // Hooks failing, identity-not-set, etc. Surface and bail — without
+      // the commit, push has nothing new to carry.
+      opts.logger?.warn("worktree.partial_push_commit_failed", {
+        agentId: opts.agentId,
+        issueId: opts.issueId,
+        err: (err as { stderr?: string }).stderr ?? (err as Error).message,
+      });
+      return {
+        pushed: false,
+        reason: `salvage commit failed: ${
+          (err as { stderr?: string }).stderr ?? (err as Error).message
+        }`,
+      };
+    }
+  }
+
+  // 3. Anything to push? Compare HEAD vs origin/main. If we have commits
+  // ahead (salvage, or pre-existing unpushed agent commits) we push; else
+  // the worktree was a no-op and there's nothing to preserve.
+  let aheadCount = 0;
+  try {
+    const { stdout } = await execFile(
+      "git",
+      ["rev-list", "--count", "origin/main..HEAD"],
+      { cwd: opts.worktreePath },
+    );
+    aheadCount = parseInt(stdout.trim(), 10) || 0;
+  } catch {
+    // Best-effort; if rev-list fails we still attempt the push — push will
+    // succeed iff the ref differs from any existing remote.
+    aheadCount = committed ? 1 : 0;
+  }
+
+  if (aheadCount === 0) {
+    return {
+      pushed: false,
+      committed,
+      reason: "no commits ahead of origin/main; nothing to preserve",
+    };
+  }
+
+  // 4. Push HEAD to the labeled incomplete branch on origin.
+  try {
+    await execFile(
+      "git",
+      [
+        "push",
+        "-u",
+        "origin",
+        `HEAD:refs/heads/${opts.incompleteBranch}`,
+      ],
+      { cwd: opts.worktreePath },
+    );
+  } catch (err) {
+    opts.logger?.warn("worktree.partial_push_failed", {
+      agentId: opts.agentId,
+      issueId: opts.issueId,
+      branch: opts.incompleteBranch,
+      err: (err as { stderr?: string }).stderr ?? (err as Error).message,
+    });
+    return {
+      pushed: false,
+      committed,
+      reason: `git push failed: ${
+        (err as { stderr?: string }).stderr ?? (err as Error).message
+      }`,
+    };
+  }
+
+  const branchUrl = `https://github.com/${opts.targetRepo}/tree/${encodeURIComponent(
+    opts.incompleteBranch,
+  )}`;
+  opts.logger?.info("worktree.partial_branch_pushed", {
+    agentId: opts.agentId,
+    issueId: opts.issueId,
+    branch: opts.incompleteBranch,
+    branchUrl,
+    committed,
+    aheadCount,
+    errorSubtype: opts.errorSubtype,
+    runId: opts.runId,
+  });
+  return { pushed: true, committed, branchUrl };
+}
+
 export async function removeWorktree(opts: {
   repoPath: string;
   worktree: WorktreeHandle;

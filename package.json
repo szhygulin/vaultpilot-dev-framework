@@ -13,7 +13,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "test": "tsc && node --test dist/src/util/*.test.js",
+    "test": "tsc && node --test dist/src/util/*.test.js dist/src/git/*.test.js",
     "vp-dev": "node dist/bin/vp-dev.js"
   },
   "dependencies": {

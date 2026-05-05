@@ -11,12 +11,20 @@ import {
 } from "./routing.js";
 import type { AgentRecord, IssueSummary } from "../types.js";
 import type { Logger } from "../log/logger.js";
+import type { RunCostTracker } from "../util/costTracker.js";
 
 export interface DispatchInput {
   idleAgents: AgentRecord[];
   pendingIssues: IssueSummary[];
   cap: number;
   logger: Logger;
+  /**
+   * Per-run cost accumulator (issue #85 Phase 1). Measurement only:
+   * dispatcher's per-tick `query()` cost is forwarded to the tracker so
+   * the run total includes orchestrator-side spend alongside the larger
+   * coding-agent cost.
+   */
+  costTracker?: RunCostTracker;
 }
 
 export interface DispatchResult {
@@ -35,6 +43,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     idleAgents: input.idleAgents,
     cap,
     logger: input.logger,
+    costTracker: input.costTracker,
   });
   if (firstAttempt.assignments) {
     return { assignments: firstAttempt.assignments, source: "llm" };
@@ -51,6 +60,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     cap,
     logger: input.logger,
     errorsFromPrior: firstAttempt.errors,
+    costTracker: input.costTracker,
   });
   if (retry.assignments) {
     return { assignments: retry.assignments, source: "llm-retry" };
@@ -80,6 +90,7 @@ async function tryProposeWithLLM(opts: {
   cap: number;
   logger: Logger;
   errorsFromPrior?: string[];
+  costTracker?: RunCostTracker;
 }): Promise<ProposeOutcome> {
   const prompt = buildTickPrompt({
     pendingIssues: opts.pendingIssues,
@@ -105,6 +116,9 @@ async function tryProposeWithLLM(opts: {
     });
     for await (const msg of stream) {
       if (msg.type === "result") {
+        // Forward whether success or error subtype — the SDK reports cost
+        // for both, and a failed dispatch still consumed tokens.
+        opts.costTracker?.add(msg.total_cost_usd);
         if (msg.subtype === "success") raw = msg.result;
         else return { errors: [`Orchestrator query failed: ${msg.subtype}`] };
       }

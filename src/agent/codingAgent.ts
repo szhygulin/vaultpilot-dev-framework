@@ -11,6 +11,7 @@ import { reconcileFromState, type ReconcileState } from "./reconcile.js";
 import { claudeBinPath } from "./sdkBinary.js";
 import type { AgentRecord, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
+import type { RunCostTracker } from "../util/costTracker.js";
 
 export interface CodingAgentInput {
   agent: AgentRecord;
@@ -23,6 +24,12 @@ export interface CodingAgentInput {
   logger: Logger;
   abortController?: AbortController;
   inspectPaths?: string[];
+  /**
+   * Per-run cost accumulator (issue #85 Phase 1 — measurement only).
+   * Optional so direct callers like `vp-dev spawn` (single-issue, no run
+   * scope) can omit it; orchestrator-driven runs always pass one.
+   */
+  costTracker?: RunCostTracker;
 }
 
 export interface CodingAgentResult {
@@ -106,6 +113,12 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     toolUseTrace,
   });
 
+  // Forward to the per-run accumulator the moment the SDK reports the
+  // pass cost — pre-recovery so even a recovery-pass crash leaves the
+  // first pass accounted for. The tracker is defensive against
+  // undefined/non-finite values.
+  input.costTracker?.add(pass1.costUsd);
+
   let finalText = pass1.finalText;
   let isError = pass1.isError;
   let errorReason = pass1.errorReason;
@@ -143,6 +156,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     if (typeof pass2.costUsd === "number") {
       costUsd = (costUsd ?? 0) + pass2.costUsd;
     }
+    input.costTracker?.add(pass2.costUsd);
     // Recovery may itself fail; that's fine — the existing reconcile pass
     // below picks up whatever the agent managed to push to origin.
     if (!pass2.isError) {

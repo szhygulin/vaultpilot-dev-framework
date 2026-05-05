@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { AgentRegistryFile, IssueSummary } from "../types.js";
+import type { AgentRegistryFile, DuplicateCluster, IssueSummary } from "../types.js";
 import { pickAgents, type PickedAgent } from "./orchestrator.js";
 import {
   detectOverload,
@@ -110,6 +110,27 @@ export interface SetupPreview {
    * salvage refs drifted between plan and confirm forces a fresh plan.
    */
   incompleteBranchesAvailable: IncompleteBranchAvailable[];
+  /**
+   * Issue #151 (Phase 2a-ii of #133): clusters of semantically-duplicate
+   * issues identified by the pre-dispatch dedup pass (#150). Always an
+   * array — empty when the pass detected no overlap or was bypassed
+   * (e.g. fewer than 2 candidates). The advisory block renders only when
+   * the array is non-empty; rendering through `formatSetupPreview` binds
+   * the cluster set into the previewHash so plan→confirm rejects drift.
+   *
+   * Phase 2a-ii is **advisory only**: clusters are surfaced, all issues
+   * still dispatch. Phase 2b layers `--apply-dedup` on top to optionally
+   * close duplicates with a cross-reference comment.
+   */
+  duplicateClusters: DuplicateCluster[];
+  /**
+   * Issue #151: USD cost of the dedup pass's single Opus call. Surfaced
+   * in the gate parallel to `triageCostUsd`. Optional — `undefined` when
+   * the pass was bypassed (fewer than 2 candidates) so the renderer
+   * omits the line entirely instead of showing "$0.0000", mirroring the
+   * "no triage" vs "free triage" distinction from #55.
+   */
+  dedupCostUsd?: number;
 }
 
 export interface BuildPreviewInput {
@@ -141,6 +162,14 @@ export interface BuildPreviewInput {
    *  clone (or are running in a test harness) pass `[]` / omit; the
    *  preview renders no section in that case. */
   incompleteBranchesAvailable?: IncompleteBranchAvailable[];
+  /** Issue #151 (Phase 2a-ii): caller-provided dedup detection result.
+   *  Empty array (or omitted) renders no advisory section — same shape
+   *  as `triageSkipped` / `openPrSkipped`. */
+  duplicateClusters?: DuplicateCluster[];
+  /** Issue #151: USD cost of the dedup pass. `undefined` (or omitted)
+   *  when the pass was bypassed; the renderer skips the line entirely
+   *  in that case rather than showing $0.0000. */
+  dedupCostUsd?: number;
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -183,6 +212,8 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     budgetUsd: input.budgetUsd,
     preferAgentId: input.preferAgentId,
     incompleteBranchesAvailable: input.incompleteBranchesAvailable ?? [],
+    duplicateClusters: input.duplicateClusters ?? [],
+    dedupCostUsd: input.dedupCostUsd,
   };
 }
 
@@ -211,6 +242,13 @@ export function formatSetupPreview(p: SetupPreview): string {
   // bypassed via --include-non-ready (per issue #55: not zero-valued).
   if (p.triageCostUsd !== undefined) {
     lines.push(`  Triage cost:    ~$${p.triageCostUsd.toFixed(4)} (already incurred)`);
+  }
+  // Issue #151 (Phase 2a-ii of #133): dedup cost — same "already
+  // incurred" framing as triage. Omitted entirely when the pass was
+  // bypassed (fewer than 2 candidates) so the operator can distinguish
+  // "no dedup ran" from "dedup ran free".
+  if (p.dedupCostUsd !== undefined) {
+    lines.push(`  Dedup cost:     ~$${p.dedupCostUsd.toFixed(4)} (already incurred)`);
   }
   // Cost ceiling — the anchor for the per-issue forecast block below.
   // Shown only when the user passed --max-cost-usd / VP_DEV_MAX_COST_USD;
@@ -270,6 +308,29 @@ export function formatSetupPreview(p: SetupPreview): string {
     }
     lines.push(
       "  The PR from the prior run is the in-flight work. Let it land (or close it) before re-dispatching.",
+    );
+    lines.push("");
+  }
+
+  // Issue #151 (Phase 2a-ii of #133): advisory dedup block. Phase 2a-ii
+  // is awareness-only — every cluster member still dispatches. Phase 2b
+  // layers `--apply-dedup` to optionally close duplicates with a
+  // canonical cross-reference comment. Rendering the cluster set here
+  // also binds it into `previewHash` (via `formatSetupPreview`), so a
+  // dedup outcome that drifts between `--plan` and `--confirm` rejects
+  // the confirm and forces a fresh plan — same protection #149 already
+  // gives triage.
+  if (p.duplicateClusters.length > 0) {
+    lines.push(
+      `${p.duplicateClusters.length} duplicate cluster(s) detected (advisory — all issues still dispatch):`,
+    );
+    for (const c of p.duplicateClusters) {
+      const dups = c.duplicates.map((d) => `#${d}`).join(", ");
+      lines.push(`  canonical #${c.canonical}  duplicates ${dups}`);
+      lines.push(`    ${c.rationale}`);
+    }
+    lines.push(
+      "  Phase 2b will add --apply-dedup to optionally close duplicates with a canonical cross-reference.",
     );
     lines.push("");
   }

@@ -104,6 +104,7 @@ import {
 } from "./state/outcomes.js";
 import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
 import { formatRunCompletedSentinel } from "./util/runCompletedSentinel.js";
+import { formatRunReport } from "./util/runReport.js";
 import type { AgentRecord, IssueRangeSpec, IssueSummary, ResumeContext, RunState } from "./types.js";
 import { STATE_DIR } from "./state/runState.js";
 import { defaultRunLogPath, loadRunActivity } from "./state/runActivity.js";
@@ -158,6 +159,14 @@ export function buildCli(): Command {
     .option(
       "--resume-incomplete",
       "Phase 1 (#118): record the intent to resume from a salvageable `*-incomplete-<runId>` branch on origin. Phase 1 only logs the intent + carries it through --plan/--confirm; the actual worktree-from-partial-branch behavior is Phase 2's territory (still routes from main today).",
+    )
+    .option(
+      "--no-report",
+      "Suppress the end-of-run result report on stdout (#136). The terminal sentinel (#128) still fires. Use when piping `vp-dev run` output into structured-log consumers that don't want the bounded text block.",
+    )
+    .option(
+      "--json-report",
+      "Emit the end-of-run result report as JSON instead of the bounded text block (#136). Same shape as `vp-dev status <runId> --json`. The terminal sentinel still trails on its own line for watcher compatibility.",
     )
     .action(async (opts) => {
       await cmdRun(opts);
@@ -368,6 +377,13 @@ interface RunOpts {
   maxCostUsd?: string;
   preferAgent?: string;
   resumeIncomplete?: boolean;
+  // Commander `--no-report` auto-generates `report: boolean` on opts: true
+  // by default, false when `--no-report` is passed. Issue #136.
+  report?: boolean;
+  // Issue #136: route the report through the JSON formatter instead of
+  // the bounded text block. Mutually orthogonal to `--no-report`: passing
+  // both is a contradiction, treated as suppress.
+  jsonReport?: boolean;
 }
 
 async function cmdRun(opts: RunOpts): Promise<void> {
@@ -828,17 +844,21 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // it fires on the throw path too — operators want the log path even
     // when something blew up). Always precedes the terminal sentinel.
     process.stdout.write(`Run ${runId} log: logs/${runId}.jsonl\n`);
-    // Terminal sentinel (issue #128) — MUST be the very last stdout line so
-    // external watchers grepping `^run.completed ` can `print; exit` on it.
-    // Fires uniformly across success / dry-run / aborted-budget / failure
-    // / orchestrator-throw paths, ensuring exactly one terminal line per
-    // launched run.
+    // Issue #136: emit the end-of-run result report inline, then the
+    // terminal sentinel. The bounded `=========` block reuses the same
+    // `formatStatusText` operators already see from `vp-dev status` so
+    // there's no second rendering codepath to maintain. `--no-report`
+    // suppresses the block (operators piping into structured-log
+    // consumers); the sentinel still trails on its own line so watchers
+    // anchored on `^run\.completed ` (#128) keep working unchanged.
     process.stdout.write(
-      formatRunCompletedSentinel({
+      await renderEndOfRunBlock({
         runId,
         state,
         totalCostUsd: costTracker.total(),
         durationMs: Date.now() - runStartMs,
+        report: opts.report,
+        json: opts.jsonReport,
       }),
     );
   }
@@ -1087,19 +1107,77 @@ async function runResume(opts: RunOpts): Promise<void> {
     runError = err;
   } finally {
     await logger.close();
-    // Terminal sentinel (issue #128) — last stdout line, fires uniformly
-    // across all exit paths so `tail -F | awk '/^run.completed /{exit}'`
-    // watchers terminate cleanly on resumed runs too.
+    // Issue #136: same end-of-run report on resume — operators rerun
+    // `vp-dev run --resume` after a crash and want the same per-issue
+    // rollup the originating run would have produced. The terminal
+    // sentinel (#128) still trails the report so external watchers
+    // anchored on `^run\.completed ` keep working uniformly.
     process.stdout.write(
-      formatRunCompletedSentinel({
+      await renderEndOfRunBlock({
         runId,
         state,
         totalCostUsd: costTracker.total(),
         durationMs: Date.now() - runStartMs,
+        report: opts.report,
+        json: opts.jsonReport,
       }),
     );
   }
   if (runError) throw runError;
+}
+
+/**
+ * Issue #136: shared helper that turns the run-final state into the stdout
+ * block emitted by both `cmdRun` and `runResume`. Two switches:
+ *
+ *   - `report: false` (passed by `--no-report`) → emit only the terminal
+ *     sentinel from #128. Existing pre-#136 behavior — operators piping
+ *     into structured-log consumers.
+ *   - `json: true` (passed by `--json-report`) → emit the JSON variant of
+ *     the report (same shape as `vp-dev status <runId> --json`) ahead of
+ *     the sentinel.
+ *   - default (neither) → emit the bounded `=========` text block ahead
+ *     of the sentinel.
+ *
+ * Loads the registry once for the agentNames lookup (best-effort — if the
+ * read fails we render with bare agent IDs, since corrupting an
+ * end-of-run report is strictly worse than losing display names).
+ */
+async function renderEndOfRunBlock(input: {
+  runId: string;
+  state: RunState;
+  totalCostUsd: number;
+  durationMs: number;
+  report?: boolean;
+  json?: boolean;
+}): Promise<string> {
+  // Default report=true unless explicitly `false` (Commander `--no-report`).
+  const wantReport = input.report !== false;
+  if (!wantReport) {
+    return formatRunCompletedSentinel({
+      runId: input.runId,
+      state: input.state,
+      totalCostUsd: input.totalCostUsd,
+      durationMs: input.durationMs,
+    });
+  }
+  let agentNames: Map<string, string | undefined> | undefined;
+  try {
+    const reg = await loadRegistry();
+    agentNames = new Map<string, string | undefined>(
+      reg.agents.map((a) => [a.agentId, a.name]),
+    );
+  } catch {
+    agentNames = undefined;
+  }
+  return formatRunReport({
+    runId: input.runId,
+    state: input.state,
+    totalCostUsd: input.totalCostUsd,
+    durationMs: input.durationMs,
+    agentNames,
+    json: input.json,
+  });
 }
 
 interface StatusOpts {

@@ -57,6 +57,10 @@ After every successful issue-resolution run, a separate sonnet summarizer rewrit
 - **Don't load-bear on per-agent CLAUDE.md content for correctness.** The agent's invariants must come from its prompt + tooling, not from a memory file the summarizer can rewrite.
 - The auto-generated `agents/agent-90e4/CLAUDE.md` etc. are derivative copies of the target repo's seed — their staleness reflects the target's pre-summary state. Don't treat them as authoritative for the target repo's current rules.
 
+## Mid-flight progress-checking: `vp-dev status` is the canonical tool
+- **For "how is the run going?" questions, use `vp-dev status` (no args) — never `pgrep` + `ls -lt logs/`.** The no-args path reads `state/current-run.txt`, finds the active run, and renders the canonical block (totals, in-flight, last activity, recent events). Live tail: `vp-dev status --watch`. Inspect a specific run by id (positional arg) or use `--latest` for the most recent on disk regardless of completion. The launch-time breadcrumb in `vp-dev run` (#157) prints these commands once per run; this rule is the same affordance for fresh agents that didn't see the launch output.
+- Don't tail the JSONL (`logs/<runId>.jsonl`) for progress unless the formatter doesn't surface the field you want — it's write-rate-limited and the canonical formatter already reads it (`tryLoadRunActivity`). Past incident 2026-05-05: a status check ran `pgrep` + `ls -lt` + `vp-dev status <runId>` (failed: positional arg expects bare runId, not the file path) + `--help` before landing on `--latest`. Right answer all along was `vp-dev status` no-args.
+
 ## CI is a hard gate
 `.github/workflows/ci.yml` runs `npm ci && npm run typecheck && npm run build` on every push and PR. All three must pass. CI failures block merges; reproduce locally with the same three commands before pushing if a PR is failing for unclear reasons.
 

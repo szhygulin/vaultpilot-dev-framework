@@ -48,8 +48,8 @@ test("formatSetupPreview: empty duplicateClusters renders no advisory block", ()
   );
   assert.doesNotMatch(
     text,
-    /Phase 2b will add --apply-dedup/,
-    "no Phase 2b reference when no clusters were detected",
+    /Pass --apply-dedup/,
+    "no --apply-dedup hint when no clusters were detected",
   );
 });
 
@@ -68,7 +68,7 @@ test("formatSetupPreview: non-empty duplicateClusters renders the advisory block
   assert.match(text, /canonical #100\s+duplicates #110, #120/);
   // Rationale is rendered indented beneath the cluster line.
   assert.match(text, /Canonical #100 has the most-detailed body/);
-  assert.match(text, /Phase 2b will add --apply-dedup/);
+  assert.match(text, /Pass --apply-dedup to close duplicates/);
 });
 
 test("formatSetupPreview: multiple clusters each render canonical + duplicates + rationale", () => {

@@ -121,19 +121,23 @@ export async function getIssueDetail(targetRepo: string, number: number): Promis
  * argv path sometimes mishandles, and large bodies overflow argv limits
  * on some platforms. Caller is expected to handle thrown errors — the
  * orchestrator's failure-comment path logs a warning and continues.
+ *
+ * Returns the comment's URL when gh prints one to stdout (the typical
+ * success path); returns `null` when stdout is empty or doesn't look like
+ * a URL. The orchestrator's pre-existing call sites discard the return.
  */
 export async function postIssueComment(
   targetRepo: string,
   issueId: number,
   body: string,
-): Promise<void> {
+): Promise<string | null> {
   const tmp = path.join(
     os.tmpdir(),
     `vp-dev-issue-comment-${process.pid}-${Date.now()}.md`,
   );
   await fs.writeFile(tmp, body);
   try {
-    await execFile(
+    const { stdout } = await execFile(
       "gh",
       [
         "issue",
@@ -146,6 +150,8 @@ export async function postIssueComment(
       ],
       { maxBuffer: 5 * 1024 * 1024 },
     );
+    const url = stdout.trim();
+    return url.startsWith("https://") ? url : null;
   } finally {
     try {
       await fs.unlink(tmp);
@@ -153,6 +159,99 @@ export async function postIssueComment(
       // ignore
     }
   }
+}
+
+/**
+ * Result of `closeIssueAsDuplicate` — Phase 2b of #148.
+ *
+ * `commentUrl` is the cross-reference comment posted on the duplicate
+ * issue; `closedAt` is the ISO timestamp of the close. In dry-run both
+ * fields are synthetic (`https://dry-run/...`, caller's wall-clock time)
+ * mirroring the agent-side `dryRunIntercept` (`gh issue create` →
+ * `https://dry-run/issue-create/...`). The caller uses the result to
+ * record the close in run-state and to render the canonical-side summary.
+ */
+export interface CloseIssueAsDuplicateResult {
+  commentUrl: string;
+  closedAt: string;
+}
+
+/**
+ * Post a cross-reference comment on a duplicate issue, then close it with
+ * `--reason not_planned`. Phase 2b of #148: feeds the `--apply-dedup`
+ * close path between triage and `pickAgents` so the dispatched set is the
+ * canonical one.
+ *
+ * The comment names the canonical and the run that produced the dedup
+ * verdict so the close has an audit trail back to the operator who
+ * approved the run. The close uses `--reason not_planned` (vs `completed`)
+ * because the issue is being yielded to its canonical, not resolved by a
+ * shipped change — the GitHub timeline shows it greyed-out rather than
+ * checkmarked.
+ *
+ * Errors are surfaced as thrown exceptions; the caller catches per-issue
+ * and records the failure into run-state so a flaky network call on one
+ * cluster member never blocks the rest of the dispatch.
+ *
+ * Dry-run: returns synthetic URL + timestamp without invoking `gh`. Same
+ * shape as the agent-level `dryRunIntercept`'s `gh issue create` /
+ * `gh issue comment` interception.
+ */
+export async function closeIssueAsDuplicate(
+  targetRepo: string,
+  issueNumber: number,
+  canonicalNumber: number,
+  runId: string,
+  opts?: { dryRun?: boolean },
+): Promise<CloseIssueAsDuplicateResult> {
+  if (opts?.dryRun) {
+    return {
+      commentUrl: dryRunCommentUrl(targetRepo, issueNumber),
+      closedAt: new Date().toISOString(),
+    };
+  }
+  const body = formatDuplicateCommentBody(canonicalNumber, runId);
+  const commentUrl = (await postIssueComment(targetRepo, issueNumber, body)) ??
+    `https://github.com/${targetRepo}/issues/${issueNumber}`;
+  await execFile(
+    "gh",
+    [
+      "issue",
+      "close",
+      String(issueNumber),
+      "--repo",
+      targetRepo,
+      "--reason",
+      "not_planned",
+    ],
+    { maxBuffer: 5 * 1024 * 1024 },
+  );
+  return { commentUrl, closedAt: new Date().toISOString() };
+}
+
+/**
+ * Pure helper exposed for unit testing. The wording is the audit trail
+ * the close leaves on the duplicate issue — it MUST name both the
+ * canonical (so the GitHub timeline cross-references resolve) and the
+ * run id (so post-hoc audits can attribute the close to a specific
+ * approved `vp-dev run` invocation).
+ */
+export function formatDuplicateCommentBody(
+  canonicalNumber: number,
+  runId: string,
+): string {
+  return `Closing as duplicate of #${canonicalNumber} per pre-dispatch dedup (${runId}).`;
+}
+
+/**
+ * Synthetic URL shape returned by the dry-run path of
+ * `closeIssueAsDuplicate`. Mirrors the agent-side `dryRunIntercept`
+ * (`gh issue create` → `https://dry-run/issue-create/<owner>/<repo>/new`)
+ * — the `/dry-run/` host segment is what every transcript / log
+ * consumer keys on to detect a synthetic response.
+ */
+export function dryRunCommentUrl(targetRepo: string, issueNumber: number): string {
+  return `https://dry-run/issue-comment/${targetRepo}/${issueNumber}`;
 }
 
 export async function resolveRangeToIssues(

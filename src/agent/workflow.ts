@@ -67,6 +67,28 @@ Emit the JSON envelope with decision="pushback" and the comment URL.
      gh pr create --repo ${v.targetRepo} --base main --head ${v.branchName} --title <short title> --body-file <tmp>
 7. Format the returned PR URL as a Markdown hyperlink in your reasoning.
 
+## Step 3.5 — Closing-sequence discipline (read before you start editing)
+
+The closing ceremony — build → test → stage → commit → push → write PR body → \`gh pr create\` → envelope — costs **~8 turns minimum** as separate Bash invocations. Reserve at least that much budget; agents that ignore this consistently run out of turns *after* the work is substantively done, leaving an unmerged branch and burning the run's cost.
+
+**No verification ceremony after \`git push\`.** Once the push succeeds, the very next tool call MUST be \`gh pr create\`. Do NOT:
+- run \`git status\` / \`git log\` to "check the push landed" — exit code 0 from \`git push\` is the confirmation,
+- query \`gh pr list\` for an existing PR on the branch — the orchestrator pre-flight (per PR #74) already guaranteed the branch is fresh,
+- diff against \`origin/main\` to check whether commits already landed,
+- re-read source files or the issue body to "double-check the change."
+
+These post-push checks are the verification-ceremony anti-pattern — they cost 4–6 turns each at exactly the moment you have the fewest left.
+
+**Test-debug loop has a hard exit ramp.** If \`npm test\` fails and you have **fewer than 8 turns remaining**, STOP iterating on the test. Instead:
+1. Stage your in-progress files (\`git add <explicit paths>\`).
+2. Commit with a message of the form \`WIP: <one-line summary> — failing: <test name>\` (still ending with the \`Co-Authored-By\` trailer).
+3. Push the branch.
+4. Skip \`gh pr create\` and go straight to the envelope with \`decision: "error"\`, putting the failing-test name and last error line into \`reason\`.
+
+The orchestrator's recovery pass (PR [#92](https://github.com/szhygulin/vaultpilot-development-agents/pull/92)) salvages the partial branch — a known-incomplete attempt with a clean \`error\` envelope is strictly better than running out of turns mid-debug with no envelope at all.
+
+**Investigative-coding signal.** If you find yourself re-reading the same source file twice during the closing third of your turns, that's a tell that the change map wasn't complete before you started editing. Stop reading; make the smallest additional edit that compiles + passes tests; ship. Save the "I should have planned more" insight for a memory tag, not for more reads on this run.
+
 ## Step 4 — Emit the JSON envelope as your FINAL message
 
 Wrap it in a fenced \`\`\`json block. Schema:

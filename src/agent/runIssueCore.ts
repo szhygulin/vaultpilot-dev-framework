@@ -36,6 +36,15 @@ export interface RunIssueCoreInput {
    * Optional so `vp-dev spawn` (single-issue, no run scope) can omit it.
    */
   costTracker?: RunCostTracker;
+  /**
+   * Per-run cost ceiling in USD threaded down from `cmdRun()` (Phase 2,
+   * #86). Used here only to guard the summarizer call: if the per-run
+   * total has already crossed the ceiling by the time this run finishes,
+   * the summarizer is skipped to avoid poisoning the agent's
+   * `agents/<agent-id>/CLAUDE.md` with a lesson distilled from a run the
+   * orchestrator was about to abort. Optional and a no-op when absent.
+   */
+  budgetUsd?: number;
 }
 
 export interface RunIssueCoreResult {
@@ -107,6 +116,27 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
     let appendOutcome: AppendOutcome | undefined;
     let summarySkipReason: string | undefined;
 
+    // #86 Phase 2: when the per-run cost ceiling has already been crossed
+    // by the time this in-flight issue finished, skip the summarizer.
+    // Rationale: the orchestrator is about to mark the run aborted, and
+    // distilling a lesson from a run that's being torn down for cost
+    // reasons risks seeding the agent's prompt with a lesson the operator
+    // never intended to land. Doesn't change the envelope outcome — the
+    // PR / pushback / error stays as the agent reported it; only the
+    // summarizer write is suppressed.
+    const budgetExceededAtCompletion =
+      input.budgetUsd !== undefined &&
+      input.costTracker?.exceedsBudget(input.budgetUsd) === true;
+    if (budgetExceededAtCompletion && !input.skipSummary) {
+      summarySkipReason =
+        "budget exceeded mid-run; summarizer skipped to avoid memory poisoning";
+      input.logger.info("specialization.skipped", {
+        agentId: input.agent.agentId,
+        issueId: input.issue.id,
+        reason: summarySkipReason,
+      });
+    }
+
     if (envelope) {
       input.agent.issuesHandled += 1;
       if (envelope.decision === "implement") input.agent.implementCount += 1;
@@ -115,7 +145,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
 
       applyTagUpdate(input.agent, envelope);
 
-      if (!input.skipSummary) {
+      if (!input.skipSummary && !budgetExceededAtCompletion) {
         // Failure-mode branch: agent emitted decision="error" — fire the
         // failure summarizer (different prompt, biased toward extracting a
         // lesson). Success/pushback paths stay on summarizeRun.
@@ -199,8 +229,9 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
 
       // No envelope — the SDK or the agent crashed before emitting one. Fire
       // the failure summarizer unless the cause is an infra flake (transport
-      // error, GitHub 5xx, worktree creation fail) where there's no lesson.
-      if (!input.skipSummary) {
+      // error, GitHub 5xx, worktree creation fail) where there's no lesson,
+      // or the run is being torn down for budget reasons (#86).
+      if (!input.skipSummary && !budgetExceededAtCompletion) {
         if (isInfraFlake(result.errorReason)) {
           summarySkipReason = `infra flake skipped: ${result.errorReason}`;
           input.logger.info("specialization.skipped", {

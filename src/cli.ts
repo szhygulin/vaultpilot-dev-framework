@@ -89,7 +89,7 @@ import {
   type AgentRollup,
 } from "./state/outcomes.js";
 import { RunCostTracker, resolveBudgetUsd } from "./util/costTracker.js";
-import type { AgentRecord, IssueRangeSpec, IssueSummary } from "./types.js";
+import type { AgentRecord, IssueRangeSpec, IssueSummary, RunState } from "./types.js";
 
 const DEFAULT_STALLED_THRESHOLD_DAYS = 14;
 
@@ -131,7 +131,7 @@ export function buildCli(): Command {
     )
     .option(
       "--max-cost-usd <usd>",
-      "Per-run cost ceiling in USD (e.g. 5.0). Phase 1: logged + accumulated only — no enforcement yet (#85). Env fallback: VP_DEV_MAX_COST_USD.",
+      "Per-run cost ceiling in USD (e.g. 5.0). Once the per-run total exceeds this value the orchestrator stops dispatching, marks remaining pending issues 'aborted-budget', and lets in-flight issues finish naturally (#86). Env fallback: VP_DEV_MAX_COST_USD.",
     )
     .action(async (opts) => {
       await cmdRun(opts);
@@ -361,8 +361,8 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     opts.includeNonReady = p.includeNonReady;
     opts.verbose = p.verbose;
     // Carry the cost ceiling forward — same partition at confirm-time as at
-    // plan-time. Older tokens (pre-#99) leave this undefined which matches
-    // "no ceiling" semantics.
+    // plan-time. Older tokens (pre-#86/#99) leave this undefined which
+    // matches "no ceiling" semantics.
     opts.maxCostUsd = p.maxCostUsd;
   }
 
@@ -623,6 +623,9 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     parallelism: opts.agents,
     issueIds: dispatchIssues.map((i) => i.id),
     dryRun: !!opts.dryRun,
+    // Persist the resolved ceiling into the run state so `vp-dev run --resume`
+    // can re-apply it without the operator re-typing the flag (#86).
+    maxCostUsd: budgetUsd,
   });
   await saveRunState(state);
   await writeCurrentRunId(runId);
@@ -662,7 +665,9 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       dryRun: !!opts.dryRun,
       targetRepoPath: repoPath,
       costTracker,
+      budgetUsd,
     });
+    const abortedBudgetCount = countByStatus(state, "aborted-budget");
     logger.info("run.completed", {
       runId,
       complete: isRunComplete(state),
@@ -672,7 +677,17 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       // billing dashboard.
       totalCostUsd: costTracker.total(),
       maxCostUsd: budgetUsd ?? null,
+      // #86 acceptance: surface aborted-budget as a distinct, machine-readable
+      // count so post-run audits can reconcile "operator pulled the plug on
+      // cost" against "agent crashed". Zero-valued when no abort happened.
+      abortedBudgetCount,
+      budgetAborted: abortedBudgetCount > 0,
     });
+    if (abortedBudgetCount > 0) {
+      process.stdout.write(
+        `Run aborted on cost ceiling: $${costTracker.total().toFixed(4)} / $${(budgetUsd ?? 0).toFixed(4)} — ${abortedBudgetCount} issue(s) marked aborted-budget.\n`,
+      );
+    }
     if (isRunComplete(state)) await clearCurrentRunId();
   } finally {
     await logger.close();
@@ -754,10 +769,25 @@ async function runResume(opts: RunOpts): Promise<void> {
 
   const logger = new Logger({ runId, verbose: !!opts.verbose });
   await logger.open();
+
+  // #86: re-apply the per-run cost ceiling automatically on resume —
+  // `state.maxCostUsd` was persisted into the run-state at original-run
+  // launch. A fresh `--max-cost-usd` flag (or VP_DEV_MAX_COST_USD) on the
+  // resume invocation overrides the persisted value, letting an operator
+  // raise / lower the ceiling without restarting from scratch. The
+  // `costTracker` is fresh per resume (we have no stable way to recover
+  // mid-run accumulated spend from prior partial runs); the practical
+  // effect is "the ceiling applies to spend incurred during the resume,
+  // not the cumulative spend across both halves."
+  const flagBudget = resolveBudgetUsd({ flag: opts.maxCostUsd, env: process.env });
+  const budgetUsd = flagBudget ?? state.maxCostUsd;
+  const costTracker = new RunCostTracker();
+
   logger.info("run.resumed", {
     runId,
     parallelism: state.parallelism,
     issueCount: issues.length,
+    maxCostUsd: budgetUsd ?? null,
   });
   try {
     const sweep = await pruneStaleAgentBranches(repoPath, state.targetRepo, logger);
@@ -775,12 +805,24 @@ async function runResume(opts: RunOpts): Promise<void> {
       logger,
       dryRun: state.dryRun,
       targetRepoPath: repoPath,
+      costTracker,
+      budgetUsd,
     });
+    const abortedBudgetCount = countByStatus(state, "aborted-budget");
     logger.info("run.completed", {
       runId,
       complete: isRunComplete(state),
       issueCount: issues.length,
+      totalCostUsd: costTracker.total(),
+      maxCostUsd: budgetUsd ?? null,
+      abortedBudgetCount,
+      budgetAborted: abortedBudgetCount > 0,
     });
+    if (abortedBudgetCount > 0) {
+      process.stdout.write(
+        `Run aborted on cost ceiling: $${costTracker.total().toFixed(4)} / $${(budgetUsd ?? 0).toFixed(4)} — ${abortedBudgetCount} issue(s) marked aborted-budget.\n`,
+      );
+    }
     if (isRunComplete(state)) await clearCurrentRunId();
   } finally {
     await logger.close();
@@ -795,13 +837,27 @@ async function cmdStatus(): Promise<void> {
   }
   const state = await loadRunState(runId);
   const total = Object.keys(state.issues).length;
-  const counts = { pending: 0, "in-flight": 0, done: 0, failed: 0 };
-  for (const e of Object.values(state.issues)) counts[e.status] += 1;
+  // #86: `aborted-budget` is a distinct terminal state — surface it as its
+  // own column so post-run audits don't have to grep run-state JSON to
+  // tell "operator pulled the plug on cost" apart from "agent failed".
+  const counts: Record<string, number> = {
+    pending: 0,
+    "in-flight": 0,
+    done: 0,
+    failed: 0,
+    "aborted-budget": 0,
+  };
+  for (const e of Object.values(state.issues)) {
+    counts[e.status] = (counts[e.status] ?? 0) + 1;
+  }
   process.stdout.write(`Run ${runId} on ${state.targetRepo}\n`);
   process.stdout.write(
-    `  total=${total} pending=${counts.pending} in-flight=${counts["in-flight"]} done=${counts.done} failed=${counts.failed}\n`,
+    `  total=${total} pending=${counts.pending} in-flight=${counts["in-flight"]} done=${counts.done} failed=${counts.failed} aborted-budget=${counts["aborted-budget"]}\n`,
   );
   process.stdout.write(`  ticks=${state.tickCount} parallelism=${state.parallelism} dryRun=${state.dryRun}\n`);
+  if (state.maxCostUsd !== undefined) {
+    process.stdout.write(`  maxCostUsd=${state.maxCostUsd}\n`);
+  }
   // Resolve names from registry (best-effort — keep status read-only).
   const reg = await loadRegistry();
   const nameOf = new Map(reg.agents.map((a) => [a.agentId, a.name]));
@@ -1727,6 +1783,15 @@ function parsePositive(value: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
     throw new Error(`Expected positive integer, got "${value}"`);
+  }
+  return n;
+}
+
+/** Count issues in a given terminal status — pure helper, no I/O. */
+function countByStatus(state: RunState, status: string): number {
+  let n = 0;
+  for (const e of Object.values(state.issues)) {
+    if (e.status === status) n += 1;
   }
   return n;
 }

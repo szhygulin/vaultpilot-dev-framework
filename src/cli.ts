@@ -656,16 +656,32 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         const result = await detectDuplicates({
           issues: issueDetails,
           logger: dedupLogger,
+          // Issue #156: thread the target repo so the dedup pass can
+          // namespace its cache file. The cache stabilizes both the
+          // cluster output and the per-call cost across `--plan` and
+          // `--confirm` invocations, which keeps the gate-text `Dedup
+          // cost:` line identical and prevents previewHash drift.
+          targetRepo,
         });
         duplicateClusters = result.clusters;
         dedupCostUsd = result.costUsd;
         // Same accounting pattern as triage: dedup runs before the runId
-        // is minted, but its cost belongs to the same per-run total.
+        // is minted, but its cost belongs to the same per-run total. On
+        // a cache hit (`fromCache: true`) the model wasn't invoked and
+        // no real spend was billed in this process — but the cost we
+        // surface in the gate must match the *original* invocation's
+        // cost, otherwise the gate-text and previewHash drift across
+        // plan/confirm. We add the cached cost to the tracker too so
+        // the per-run total reconciles with the same arithmetic the
+        // gate displays. (`costTracker.add(0)` would also be defensible
+        // — neither call dollars-billed at the moment — but mirrors
+        // triage.ts's behavior where the cached cost flows through.)
         costTracker.add(dedupCostUsd);
         dedupLogger.info("dedup.completed", {
           issueCount: issueDetails.length,
           clusterCount: duplicateClusters.length,
           costUsd: dedupCostUsd,
+          fromCache: result.fromCache,
         });
       }
     }

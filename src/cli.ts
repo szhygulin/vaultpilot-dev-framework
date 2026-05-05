@@ -39,6 +39,14 @@ import {
   resolveTargetRepoPath,
 } from "./git/worktree.js";
 import { findOpenVpDevPrs } from "./git/openPrs.js";
+import {
+  DEFAULT_INCOMPLETE_RETENTION_DAYS,
+  filterByRetention,
+  listIncompleteBranches,
+  pruneIncompleteBranches,
+  resolveRetentionDays,
+  type IncompleteBranchInfo,
+} from "./git/incompleteBranches.js";
 import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
 import { promises as fs } from "node:fs";
 import { runIssueCore } from "./agent/runIssueCore.js";
@@ -238,6 +246,43 @@ export function buildCli(): Command {
         }),
     );
   program.addCommand(lessonsCmd);
+
+  const cleanupCmd = new Command("cleanup")
+    .description(
+      "Local cleanup operations beyond the per-run sweep (e.g. accumulated -incomplete-<runId> salvage refs)",
+    )
+    .addCommand(
+      new Command("incomplete-branches")
+        .description(
+          "Surface vp-dev/<agent>/issue-<N>-incomplete-<runId> refs older than the retention threshold. Default: list only.",
+        )
+        .option(
+          "--target-repo <owner/repo>",
+          "Target GitHub repo, used to derive the conventional clone path",
+        )
+        .option(
+          "--target-repo-path <path>",
+          "Local clone path of the target repo (default: $HOME/dev/<repo-name>)",
+        )
+        .option(
+          "--retention-days <n>",
+          `Surface refs older than this many days (default: ${DEFAULT_INCOMPLETE_RETENTION_DAYS}, env: INCOMPLETE_BRANCH_RETENTION_DAYS)`,
+          parsePositive,
+        )
+        .option(
+          "--apply",
+          "Actually delete surfaced refs locally (default: list only, never delete)",
+        )
+        .option(
+          "--dry-run",
+          "Force list-only mode (overrides --apply for explicit safety)",
+        )
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdCleanupIncompleteBranches(opts);
+        }),
+    );
+  program.addCommand(cleanupCmd);
 
   return program;
 }
@@ -1459,6 +1504,128 @@ async function runInteractiveReview(pending: PendingCandidate[]): Promise<void> 
   }
   process.stdout.write(
     `\nReview complete: accepted=${acceptedCount} rejected=${rejectedCount} skipped=${skippedCount}\n`,
+  );
+}
+
+interface CleanupIncompleteOpts {
+  targetRepo?: string;
+  targetRepoPath?: string;
+  retentionDays?: number;
+  apply?: boolean;
+  dryRun?: boolean;
+  json?: boolean;
+}
+
+async function cmdCleanupIncompleteBranches(
+  opts: CleanupIncompleteOpts,
+): Promise<void> {
+  if (!opts.targetRepo && !opts.targetRepoPath) {
+    process.stderr.write(
+      "ERROR: --target-repo or --target-repo-path is required to locate the local clone.\n",
+    );
+    process.exit(2);
+  }
+  let repoPath: string;
+  try {
+    repoPath = await resolveTargetRepoPath(
+      opts.targetRepo ?? "",
+      opts.targetRepoPath,
+    );
+  } catch (err) {
+    process.stderr.write(
+      `ERROR: could not resolve target-repo path: ${(err as Error).message}\n`,
+    );
+    process.exit(2);
+  }
+
+  const retentionDays = resolveRetentionDays({
+    flag: opts.retentionDays,
+    env: process.env,
+  });
+
+  const all = await listIncompleteBranches({ repoPath });
+  const stale = filterByRetention(all, retentionDays);
+
+  // --dry-run forces list-only even if --apply is also passed. Per #96
+  // scope: --dry-run is the explicit safety override that wins.
+  const willDelete = !!opts.apply && !opts.dryRun && stale.length > 0;
+
+  if (opts.json) {
+    const payload: Record<string, unknown> = {
+      retentionDays,
+      totalScanned: all.length,
+      surfaced: stale,
+      willDelete,
+    };
+    if (willDelete) {
+      const result = await pruneIncompleteBranches({
+        repoPath,
+        branches: stale.map((b) => b.branch),
+      });
+      payload.deleted = result.deleted;
+      payload.failed = result.failed;
+    }
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    return;
+  }
+
+  if (stale.length === 0) {
+    process.stdout.write(
+      `No -incomplete-<runId> refs older than ${retentionDays} day(s). (Scanned ${all.length} total in ${repoPath}.)\n`,
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `${stale.length} -incomplete-<runId> ref(s) older than ${retentionDays} day(s) in ${repoPath}:\n\n`,
+  );
+  printTable(
+    ["branch", "age(days)", "agent", "issue", "runState"],
+    stale.map((b: IncompleteBranchInfo) => [
+      b.branch,
+      String(b.ageDays),
+      b.agentId,
+      String(b.issueId),
+      b.runStateRef,
+    ]),
+  );
+
+  if (!willDelete) {
+    if (opts.apply && opts.dryRun) {
+      process.stdout.write(
+        "\n--dry-run wins over --apply: list-only mode. Re-run without --dry-run to delete.\n",
+      );
+    } else {
+      process.stdout.write(
+        "\nList-only (default). Re-run with --apply to delete these branches locally.\n",
+      );
+    }
+    return;
+  }
+
+  // --apply path. Local-only `git branch -D`; never touches origin.
+  const result = await pruneIncompleteBranches({
+    repoPath,
+    branches: stale.map((b) => b.branch),
+  });
+  process.stdout.write(`\nDeleted ${result.deleted.length} branch(es) locally.\n`);
+  for (const d of result.deleted) process.stdout.write(`  - ${d}\n`);
+  if (result.failed.length > 0) {
+    process.stdout.write(
+      `\nCould not delete ${result.failed.length} branch(es) (likely attached to a worktree):\n`,
+    );
+    for (const f of result.failed) {
+      process.stdout.write(`  - ${f.branch}: ${f.reason.trim()}\n`);
+    }
+    process.stdout.write(
+      "  To clean up: `git worktree remove --force <path>` first, then re-run with --apply.\n",
+    );
+  }
+  process.stdout.write(
+    "\nNote: this command is local-only. To remove the corresponding remote refs, run:\n",
+  );
+  process.stdout.write(
+    "  git push origin --delete <branch>   (per branch; review before running)\n",
   );
 }
 

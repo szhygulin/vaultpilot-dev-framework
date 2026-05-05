@@ -86,21 +86,65 @@ export async function createWorktree(opts: {
   repoPath: string;
   agentId: string;
   issueId: number;
+  /**
+   * Issue #119 Phase 2: when set, branch the new worktree off the named
+   * salvage ref on origin (a `vp-dev/agent-X/issue-N-incomplete-<runId>`
+   * branch produced by the safety net) and rebase onto `origin/main`. The
+   * resulting worktree has the originating agent's commits as its starting
+   * point, brought current with whatever has merged into main since.
+   *
+   * On rebase conflict the helper aborts the rebase and throws a structured
+   * error; callers surface that into the run-state JSON via the same audit
+   * trail used by `unprunableStaleBranches`. Phase 2 does NOT attempt to
+   * resolve conflicts automatically — the operator decides whether to
+   * salvage manually or re-dispatch from main.
+   */
+  resumeFromBranch?: string;
 }): Promise<WorktreeHandle> {
   const branch = `vp-dev/${opts.agentId}/issue-${opts.issueId}`;
   const wtPath = path.join(opts.repoPath, ".claude", "worktrees", `${opts.agentId}-issue-${opts.issueId}`);
+  const wtRel = path.join(".claude", "worktrees", `${opts.agentId}-issue-${opts.issueId}`);
 
   // CLAUDE.md: cd <repoPath> BEFORE worktree add — execFile with cwd does that explicitly.
   await execFile("git", ["fetch", "origin", "main"], { cwd: opts.repoPath });
+
+  // When resuming from a salvage ref, fetch that specific branch into the
+  // local remote-tracking namespace so `git worktree add ... <ref>` can
+  // resolve it. The salvage ref was pushed by `pushPartialBranch` on a
+  // prior run; this clone may have never seen it. Failure here aborts
+  // before any worktree is created — the caller treats the throw as
+  // "salvage branch unavailable" and the run-state surfaces it.
+  if (opts.resumeFromBranch) {
+    try {
+      await execFile(
+        "git",
+        [
+          "fetch",
+          "origin",
+          `${opts.resumeFromBranch}:refs/remotes/origin/${opts.resumeFromBranch}`,
+        ],
+        { cwd: opts.repoPath },
+      );
+    } catch (err) {
+      const msg = (err as { stderr?: string }).stderr ?? String(err);
+      throw new Error(
+        `resume fetch failed for ${opts.resumeFromBranch}: ${msg}`,
+      );
+    }
+  }
+
   // Serialize the worktree-add against this target repo to avoid the
   // `.git/config` lock race when multiple agents spawn in the same tick
   // (see worktreeAddLocks comment above). Fetch is read-mostly and runs
   // outside the lock to maximize parallelism.
+  const baseRef = opts.resumeFromBranch
+    ? `refs/remotes/origin/${opts.resumeFromBranch}`
+    : "origin/main";
   try {
     await withRepoLock(opts.repoPath, () =>
       execFile(
         "git",
-        ["worktree", "add", path.join(".claude", "worktrees", `${opts.agentId}-issue-${opts.issueId}`), "-b", branch, "origin/main"],
+        ["worktree", "add", wtRel, "-b", branch, baseRef],
         { cwd: opts.repoPath },
       ),
     );
@@ -108,6 +152,34 @@ export async function createWorktree(opts: {
     const msg = (err as { stderr?: string }).stderr ?? String(err);
     throw new Error(`worktree add failed: ${msg}`);
   }
+
+  // After branching off the salvage ref, rebase the worktree onto the
+  // current `origin/main`. The salvage tip can be days old; without the
+  // rebase the agent would resume on stale state and produce a diff that
+  // doesn't apply cleanly when the human merges. Conflicts here are a
+  // structural signal (main moved in a way that touches the salvaged
+  // edits) — we abort the rebase to leave the worktree in a recoverable
+  // state and throw so the caller can surface the failure.
+  if (opts.resumeFromBranch) {
+    try {
+      await execFile("git", ["rebase", "origin/main"], { cwd: wtPath });
+    } catch (err) {
+      const msg = (err as { stderr?: string }).stderr ?? String(err);
+      // Best-effort: leave the worktree in a non-conflicted state by
+      // aborting the in-progress rebase. Ignore errors from the abort
+      // itself — even if it fails, the worktree is preserved on disk for
+      // human inspection rather than silently dropped.
+      try {
+        await execFile("git", ["rebase", "--abort"], { cwd: wtPath });
+      } catch {
+        // ignore
+      }
+      throw new Error(
+        `resume rebase onto origin/main failed for ${opts.resumeFromBranch}: ${msg}`,
+      );
+    }
+  }
+
   return { path: wtPath, branch };
 }
 

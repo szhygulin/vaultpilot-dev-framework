@@ -167,3 +167,38 @@ export interface IssueSummary {
   labels: string[];
   state: "open" | "closed";
 }
+
+/**
+ * Per-issue resume context (issue #119, Phase 2). Built by the CLI when
+ * `--resume-incomplete` is passed and at least one
+ * `vp-dev/agent-X/issue-N-incomplete-<runId>` ref exists on origin for a
+ * candidate dispatch issue. Threaded through the orchestrator into
+ * `runIssueCore` (so `createWorktree` can branch off the partial ref) and
+ * into `runCodingAgent` (so `buildAgentSystemPrompt` can render a
+ * "## Previous attempt (resumed)" section in the agent's seed).
+ *
+ * The `branch` field is the full salvage ref (`vp-dev/<agentId>/issue-<N>
+ * -incomplete-<runId>`); `agentId` and `runId` are the parsed components
+ * from that name. `errorSubtype` / `finalText` / `partialBranchUrl` are
+ * best-effort enrichments looked up from `state/<runId>.json` for the
+ * originating run; absent when the state file has been pruned or the
+ * branch was hand-pushed without a state file.
+ */
+export interface ResumeContext {
+  /** Salvage ref name on origin (full path under `refs/heads/`). */
+  branch: string;
+  /** Run id parsed from the `-incomplete-<runId>` suffix. */
+  runId: string;
+  /** Agent id parsed from the `vp-dev/<agentId>/...` segment. */
+  agentId: string;
+  /** SDK error subtype recorded by the originating run, when known. */
+  errorSubtype?: string;
+  /**
+   * Short human-readable summary of the prior attempt's last meaningful
+   * action — typically the originating run-state's `error` string. Truncated
+   * to ~120 chars before rendering into the seed.
+   */
+  finalText?: string;
+  /** GitHub tree URL for the salvage branch (state.partialBranchUrl). */
+  partialBranchUrl?: string;
+}

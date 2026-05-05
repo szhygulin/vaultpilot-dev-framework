@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stripOverlappingSections } from "../agent/prompt.js";
+import { renderResumeBlock, stripOverlappingSections } from "../agent/prompt.js";
 
 test("stripOverlappingSections: drops perAgent ## sections whose heading also appears in live", () => {
   const live = `# Project rules
@@ -107,6 +107,66 @@ y
   assert.doesNotMatch(out, /line 3/);
   assert.match(out, /## Keep/);
   assert.match(out, /y/);
+});
+
+// ---- renderResumeBlock (issue #119 Phase 2) ----------------------------
+
+test("renderResumeBlock: full context — agent, runId, errorSubtype, finalText, partialBranchUrl all present", () => {
+  const out = renderResumeBlock({
+    branch: "vp-dev/agent-08c4/issue-86-incomplete-run-2026-05-04T16-53-06-188Z",
+    runId: "run-2026-05-04T16-53-06-188Z",
+    agentId: "agent-08c4",
+    errorSubtype: "error_max_turns",
+    finalText: "Pushed branch but ran out of turns before gh pr create",
+    partialBranchUrl:
+      "https://github.com/owner/repo/tree/vp-dev%2Fagent-08c4%2Fissue-86-incomplete-run-2026-05-04T16-53-06-188Z",
+  });
+  assert.match(out, /agent-08c4/);
+  assert.match(out, /run-2026-05-04T16-53-06-188Z/);
+  assert.match(out, /error_max_turns/);
+  assert.match(out, /git log --oneline origin\/main\.\.HEAD/);
+  assert.match(out, /Pushed branch but ran out of turns/);
+  assert.match(out, /Salvage branch: https:\/\/github\.com\/owner\/repo\/tree\//);
+});
+
+test("renderResumeBlock: missing errorSubtype renders as 'unknown'", () => {
+  const out = renderResumeBlock({
+    branch: "vp-dev/agent-aa00/issue-1-incomplete-run-X",
+    runId: "run-X",
+    agentId: "agent-aa00",
+  });
+  assert.match(out, /failure mode: unknown/);
+  assert.doesNotMatch(out, /Last meaningful action/);
+  assert.doesNotMatch(out, /Salvage branch/);
+});
+
+test("renderResumeBlock: truncates finalText to 120 chars and collapses whitespace", () => {
+  const long =
+    "x".repeat(80) + "\n  multiline\twhitespace\n" + "y".repeat(80);
+  const out = renderResumeBlock({
+    branch: "vp-dev/agent-aa00/issue-1-incomplete-run-X",
+    runId: "run-X",
+    agentId: "agent-aa00",
+    finalText: long,
+  });
+  const m = /Last meaningful action recorded: (.+)$/m.exec(out);
+  assert.ok(m, "expected the recorded line to render");
+  assert.ok(m![1].length <= 120, `truncated text length should be <= 120, got ${m![1].length}`);
+  assert.doesNotMatch(m![1], /\t/);
+  assert.doesNotMatch(m![1], /\n/);
+});
+
+test("renderResumeBlock: omits partial branch line when partialBranchUrl is undefined", () => {
+  const out = renderResumeBlock({
+    branch: "vp-dev/agent-aa00/issue-1-incomplete-run-X",
+    runId: "run-X",
+    agentId: "agent-aa00",
+    errorSubtype: "error_max_budget_usd",
+    finalText: "ran out of budget",
+  });
+  assert.match(out, /failure mode: error_max_budget_usd/);
+  assert.match(out, /Last meaningful action recorded: ran out of budget/);
+  assert.doesNotMatch(out, /Salvage branch/);
 });
 
 test("stripOverlappingSections: section-body containing what looks like a heading marker on its own does not bleed", () => {

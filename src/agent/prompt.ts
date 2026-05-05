@@ -3,12 +3,21 @@ import * as path from "node:path";
 import { readAgentClaudeMd, readSeedClaudeMd } from "./specialization.js";
 import { readSharedLessonsForDomains } from "./sharedLessons.js";
 import { renderWorkflow, type WorkflowVars } from "./workflow.js";
-import type { AgentRecord } from "../types.js";
+import type { AgentRecord, ResumeContext } from "../types.js";
 
 export async function buildAgentSystemPrompt(opts: {
   agent: AgentRecord;
   workflow: WorkflowVars;
   targetRepoPath: string;
+  /**
+   * Issue #119 Phase 2: when set, render a "## Previous attempt (resumed)"
+   * section immediately before the workflow so the agent knows the
+   * worktree's HEAD is not `origin/main` — it's a salvaged branch from a
+   * prior attempt, rebased onto the current main. The agent should `git
+   * log --oneline origin/main..HEAD` and build on the existing commits
+   * rather than re-deriving the file layout from scratch.
+   */
+  resumeContext?: ResumeContext;
 }): Promise<string> {
   const [perAgentClaudeMd, liveProjectClaudeMd] = await Promise.all([
     readAgentClaudeMd(opts.agent.agentId, opts.targetRepoPath),
@@ -94,8 +103,52 @@ export async function buildAgentSystemPrompt(opts: {
     );
   }
 
+  if (opts.resumeContext) {
+    sections.push(
+      "---",
+      "",
+      "## Previous attempt (resumed)",
+      "",
+      renderResumeBlock(opts.resumeContext),
+      "",
+    );
+  }
+
   sections.push("---", "", workflow.trim());
   return sections.join("\n");
+}
+
+/**
+ * Render the "## Previous attempt (resumed)" body. Pure (no I/O) so unit
+ * tests can exercise the formatting independently. Truncates `finalText`
+ * to 120 chars to keep the seed compact; missing optional fields drop the
+ * relevant lines rather than printing `undefined`.
+ *
+ * Exported for unit testing.
+ */
+export function renderResumeBlock(ctx: ResumeContext): string {
+  const lines: string[] = [];
+  const failureMode = ctx.errorSubtype ?? "unknown";
+  lines.push(
+    `A prior agent (${ctx.agentId}, run ${ctx.runId}) made progress on this issue but did not finish — failure mode: ${failureMode}. Their in-flight commits were salvaged to a labeled \`*-incomplete-${ctx.runId}\` ref and rebased onto the current \`origin/main\`; that work is your starting commit.`,
+  );
+  lines.push("");
+  lines.push("Verify with:");
+  lines.push("  git log --oneline origin/main..HEAD");
+  lines.push("");
+  lines.push(
+    "You may use `Read` and `Grep` to study the existing changes — that's faster than re-reading the issue and rediscovering the file layout. Build on the work; only revert when you find concrete bugs in it.",
+  );
+  if (ctx.finalText) {
+    const trimmed = ctx.finalText.replace(/\s+/g, " ").trim().slice(0, 120);
+    lines.push("");
+    lines.push(`Last meaningful action recorded: ${trimmed}`);
+  }
+  if (ctx.partialBranchUrl) {
+    lines.push("");
+    lines.push(`Salvage branch: ${ctx.partialBranchUrl}`);
+  }
+  return lines.join("\n");
 }
 
 /**

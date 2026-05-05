@@ -20,6 +20,7 @@ import type {
   AgentRecord,
   AgentRegistryFile,
   IssueSummary,
+  ResumeContext,
   RunIssueEntry,
   RunState,
 } from "../types.js";
@@ -59,6 +60,18 @@ export interface OrchestratorInput {
    * orchestrator trusts the validated string here.
    */
   preferAgentId?: string;
+  /**
+   * Issue #119 Phase 2: per-issue resume context, keyed by issue id.
+   * Built upstream by the CLI from `findIncompleteBranchesOnOrigin`
+   * results when `--resume-incomplete` is passed. The orchestrator looks
+   * up each in-flight issue's entry and forwards it to `runIssueCore` so
+   * `createWorktree` can branch off the salvage ref + the agent's seed
+   * gets the "## Previous attempt (resumed)" section.
+   *
+   * Optional: undefined or empty means every issue dispatches from main
+   * as before (no Phase 2 routing).
+   */
+  resumeContextByIssue?: Map<number, ResumeContext>;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
@@ -134,6 +147,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
           state: input.state,
           costTracker: input.costTracker,
           budgetUsd: input.budgetUsd,
+          resumeContext: input.resumeContextByIssue?.get(issue.id),
         }).catch(async (err) => {
           input.logger.error("agent.uncaught", {
             agentId: agent.agentId,
@@ -488,6 +502,7 @@ async function runOneIssue(opts: {
   state: RunState;
   costTracker?: RunCostTracker;
   budgetUsd?: number;
+  resumeContext?: ResumeContext;
 }): Promise<void> {
   const result = await runIssueCore({
     agent: opts.agent,
@@ -499,6 +514,7 @@ async function runOneIssue(opts: {
     logger: opts.logger,
     costTracker: opts.costTracker,
     budgetUsd: opts.budgetUsd,
+    resumeContext: opts.resumeContext,
   });
 
   // Track whether this run was a non-clean exit so the post-mortem comment

@@ -3,12 +3,12 @@ import { ensureAgent, mutateRegistry } from "../state/registry.js";
 import { runCodingAgent } from "./codingAgent.js";
 import {
   appendBlock,
-  expireFailureLessons,
+  expireSentinels,
   forkClaudeMd,
   type AppendOutcome,
 } from "./specialization.js";
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
-import { resolveExpireK } from "../util/sentinels.js";
+import { resolveExpiryPolicies } from "../util/sentinels.js";
 import {
   buildIncompleteBranchName,
   createWorktree,
@@ -153,25 +153,34 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
         appendOutcome = appendResult.appendOutcome;
         summarySkipReason = appendResult.summarySkipReason;
 
-        // Failure-lesson expiry: after a successful implement run has
-        // been recorded, walk the agent's CLAUDE.md and drop any
-        // failure-lesson sentinel that ≥ K subsequent implements with
-        // overlapping tags have superseded. Only fires for implement —
-        // pushback / failure-lesson runs don't trigger expiry. K is
-        // env-configurable (`VP_DEV_FAILURE_LESSON_EXPIRE_K`, default 3).
+        // Sentinel expiry: after a successful implement run has been
+        // recorded, walk the agent's CLAUDE.md and drop sentinels that
+        // newer blocks have superseded. Per-kind policies cover
+        // failure-lessons (K newer overlapping implements), success
+        // implements (K newer Jaccard-≥-0.5 implements), and pushback
+        // (preserved by default). Only fires after `implement` —
+        // pushback / failure-lesson runs don't trigger expiry. Policies
+        // are env-configurable via VP_DEV_{FAILURE,SUCCESS,PUSHBACK}_LESSON_EXPIRE_K.
         if (
           envelope.decision === "implement" &&
           appendOutcome?.kind === "appended"
         ) {
           try {
-            const k = resolveExpireK();
-            const expired = await expireFailureLessons(input.agent.agentId, k);
+            const policies = resolveExpiryPolicies();
+            const expired = await expireSentinels(
+              input.agent.agentId,
+              policies,
+            );
             if (expired.kind === "expired") {
               input.logger.info("specialization.expired", {
                 agentId: input.agent.agentId,
                 issueId: input.issue.id,
-                k,
+                policies: policies.map((p) => ({
+                  kind: p.kind,
+                  k: Number.isFinite(p.k) ? p.k : "infinity",
+                })),
                 droppedCount: expired.dropped.length,
+                droppedKinds: expired.dropped.map((h) => h.outcome),
                 droppedIssues: expired.dropped.map((h) => h.issueId),
                 totalBytes: expired.totalBytes,
               });

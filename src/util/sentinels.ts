@@ -84,43 +84,103 @@ export interface ExpireDecision {
 }
 
 /**
- * Decide which `outcome:failure-lesson` blocks to drop. A block is dropped
- * when ≥ k subsequent `outcome:implement` blocks each share at least one
- * tag with the failure-lesson's tag-fingerprint.
+ * Per-kind expiry policy. A sentinel of kind `kind` is dropped when at
+ * least `k` newer sentinels (whose outcome ∈ `supersededBy`) satisfy the
+ * `overlap` predicate against the candidate's tag-fingerprint.
  *
- * Conservative on missing tags: a failure-lesson with `tags: []` (legacy
- * sentinel from before tag embedding) never overlaps with any implement
- * sentinel and is therefore never expired. An `implement` block with
- * `tags: []` likewise contributes nothing to any expiry count. Better to
- * keep stale lessons than evict still-relevant ones.
+ * `k <= 0` or `k = Infinity` disables expiry for this kind. The
+ * `supersededBy` list lets a kind be superseded by either itself
+ * (success-lessons → success-lessons) or by a different kind
+ * (failure-lessons → implements).
+ */
+export interface ExpiryPolicy {
+  kind: string;
+  k: number;
+  supersededBy: string[];
+  overlap:
+    | { mode: "any-shared-tag" }
+    | { mode: "jaccard"; minScore: number };
+}
+
+function tagsOverlap(
+  candidateTags: Set<string>,
+  successorTags: string[],
+  rule: ExpiryPolicy["overlap"],
+): boolean {
+  if (candidateTags.size === 0 || successorTags.length === 0) return false;
+  if (rule.mode === "any-shared-tag") {
+    return successorTags.some((t) => candidateTags.has(t));
+  }
+  // Jaccard: |A ∩ B| / |A ∪ B|
+  const succSet = new Set(successorTags);
+  let intersect = 0;
+  for (const t of candidateTags) if (succSet.has(t)) intersect++;
+  const union = candidateTags.size + succSet.size - intersect;
+  if (union === 0) return false;
+  return intersect / union >= rule.minScore;
+}
+
+/**
+ * Generalized supersession-based expiry. For each header, look up its
+ * policy by `outcome`; if ≥ `policy.k` newer headers of a kind in
+ * `policy.supersededBy` satisfy the policy's tag-overlap rule, drop the
+ * candidate.
  *
- * Out-of-order writes are not a concern: blocks accumulate by file
- * append, so file order matches chronological order — no need to re-sort
- * by `ts`.
+ * Conservative on missing tags: a candidate with `tags: []` is never
+ * dropped, and successors with `tags: []` never count toward supersession.
+ * Idempotent: re-applying on already-pruned content drops nothing.
+ *
+ * Out-of-order writes are not a concern — blocks accumulate by file
+ * append, so file order matches chronological order.
+ */
+export function decideExpiryWithPolicies(
+  headers: SentinelHeader[],
+  policies: ExpiryPolicy[],
+): ExpireDecision {
+  const drop: number[] = [];
+  const policyByKind = new Map<string, ExpiryPolicy>();
+  for (const p of policies) policyByKind.set(p.kind, p);
+
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i];
+    const policy = policyByKind.get(h.outcome);
+    if (!policy) continue;
+    if (!Number.isFinite(policy.k) || policy.k <= 0) continue;
+    if (h.tags.length === 0) continue; // legacy / no fingerprint — keep
+
+    const candidateTags = new Set(h.tags);
+    const allowedSuccessors = new Set(policy.supersededBy);
+    let overlaps = 0;
+    for (let j = i + 1; j < headers.length; j++) {
+      const succ = headers[j];
+      if (!allowedSuccessors.has(succ.outcome)) continue;
+      if (succ.tags.length === 0) continue;
+      if (tagsOverlap(candidateTags, succ.tags, policy.overlap)) overlaps += 1;
+      if (overlaps >= policy.k) break;
+    }
+    if (overlaps >= policy.k) drop.push(i);
+  }
+  return { drop, all: headers };
+}
+
+/**
+ * Backward-compatible wrapper: decide which `outcome:failure-lesson`
+ * blocks to drop using the legacy single-K rule (any-shared-tag overlap
+ * against `outcome:implement` successors). Equivalent to
+ * `decideExpiryWithPolicies(headers, [failure-lesson policy])`.
  */
 export function decideExpiry(
   headers: SentinelHeader[],
   k: number,
 ): ExpireDecision {
-  const drop: number[] = [];
-  if (k <= 0) return { drop, all: headers };
-  for (let i = 0; i < headers.length; i++) {
-    const h = headers[i];
-    if (h.outcome !== "failure-lesson") continue;
-    if (h.tags.length === 0) continue; // legacy / no fingerprint — keep
-    const lessonTags = new Set(h.tags);
-    let overlaps = 0;
-    for (let j = i + 1; j < headers.length; j++) {
-      const succ = headers[j];
-      if (succ.outcome !== "implement") continue;
-      if (succ.tags.length === 0) continue;
-      const intersects = succ.tags.some((t) => lessonTags.has(t));
-      if (intersects) overlaps += 1;
-      if (overlaps >= k) break;
-    }
-    if (overlaps >= k) drop.push(i);
-  }
-  return { drop, all: headers };
+  return decideExpiryWithPolicies(headers, [
+    {
+      kind: "failure-lesson",
+      k,
+      supersededBy: ["implement"],
+      overlap: { mode: "any-shared-tag" },
+    },
+  ]);
 }
 
 export interface ExpireResult {
@@ -129,21 +189,21 @@ export interface ExpireResult {
 }
 
 /**
- * Walk the agent's CLAUDE.md content, drop expired failure-lesson blocks,
- * and return the rewritten content. Idempotent — re-applying on the
- * returned content with the same `k` drops nothing.
+ * Walk content, drop expired sentinel blocks per the supplied policies,
+ * return the rewritten content. Idempotent — re-applying on already-pruned
+ * content with the same policies drops nothing.
  */
-export function expireFailureLessonsInContent(
+export function expireSentinelsInContent(
   content: string,
-  k: number,
+  policies: ExpiryPolicy[],
 ): ExpireResult {
   const lines = content.split("\n");
   const located = locateSentinels(lines);
   if (located.length === 0) return { content, droppedHeaders: [] };
 
-  const decision = decideExpiry(
+  const decision = decideExpiryWithPolicies(
     located.map((l) => l.header),
-    k,
+    policies,
   );
   if (decision.drop.length === 0) return { content, droppedHeaders: [] };
 
@@ -176,17 +236,116 @@ export function expireFailureLessonsInContent(
 }
 
 /**
- * Resolve `K` from env (`VP_DEV_FAILURE_LESSON_EXPIRE_K`) with a default
- * of 3. Non-positive / non-numeric env values fall back to the default
- * rather than disabling expiry silently — set the env to a large number
- * to effectively disable.
+ * Backward-compatible wrapper: drop expired `failure-lesson` blocks using
+ * the legacy single-K rule. Delegates to `expireSentinelsInContent` with
+ * the failure-lesson policy only.
+ */
+export function expireFailureLessonsInContent(
+  content: string,
+  k: number,
+): ExpireResult {
+  return expireSentinelsInContent(content, [
+    {
+      kind: "failure-lesson",
+      k,
+      supersededBy: ["implement"],
+      overlap: { mode: "any-shared-tag" },
+    },
+  ]);
+}
+
+/**
+ * Defaults for per-kind expiry. Failure-lessons stay at K=3 (cheap signal
+ * superseded by even one overlapping success). Success-lessons need a
+ * higher K=5 because they're individually weaker signals — and use Jaccard
+ * ≥ 0.5 so a barely-overlapping later success doesn't supersede a
+ * topically-distinct earlier one. Pushback lessons are preserved
+ * indefinitely (Infinity) — they capture push-back-worthy patterns and
+ * aren't superseded by a single newer pushback.
  */
 export const DEFAULT_FAILURE_LESSON_EXPIRE_K = 3;
+export const DEFAULT_SUCCESS_LESSON_EXPIRE_K = 5;
+export const DEFAULT_PUSHBACK_LESSON_EXPIRE_K = Number.POSITIVE_INFINITY;
 
-export function resolveExpireK(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.VP_DEV_FAILURE_LESSON_EXPIRE_K;
-  if (raw == null || raw === "") return DEFAULT_FAILURE_LESSON_EXPIRE_K;
+function parseEnvFiniteK(
+  raw: string | undefined,
+  fallback: number,
+): number {
+  if (raw == null || raw === "") return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_FAILURE_LESSON_EXPIRE_K;
+  if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.floor(n);
+}
+
+function parseEnvKAllowInfinity(
+  raw: string | undefined,
+  fallback: number,
+): number {
+  if (raw == null || raw === "") return fallback;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "infinity" || trimmed === "off" || trimmed === "disabled") {
+    return Number.POSITIVE_INFINITY;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.floor(n);
+}
+
+/**
+ * Resolve `K` for the failure-lesson policy from env
+ * (`VP_DEV_FAILURE_LESSON_EXPIRE_K`) with a default of 3. Non-positive /
+ * non-numeric env values fall back to the default rather than disabling
+ * expiry silently — set the env to a large number to effectively disable.
+ *
+ * Kept for backward compatibility; new callers should prefer
+ * `resolveExpiryPolicies()` which covers all sentinel kinds.
+ */
+export function resolveExpireK(env: NodeJS.ProcessEnv = process.env): number {
+  return parseEnvFiniteK(
+    env.VP_DEV_FAILURE_LESSON_EXPIRE_K,
+    DEFAULT_FAILURE_LESSON_EXPIRE_K,
+  );
+}
+
+/**
+ * Resolve the full set of per-kind expiry policies from environment
+ * variables, with sane defaults. Knobs:
+ *   - VP_DEV_FAILURE_LESSON_EXPIRE_K (default 3)
+ *   - VP_DEV_SUCCESS_LESSON_EXPIRE_K (default 5)
+ *   - VP_DEV_PUSHBACK_LESSON_EXPIRE_K (default Infinity / disabled;
+ *     accepts a positive integer to enable, or "off"/"disabled"/
+ *     "infinity" to disable explicitly)
+ */
+export function resolveExpiryPolicies(
+  env: NodeJS.ProcessEnv = process.env,
+): ExpiryPolicy[] {
+  return [
+    {
+      kind: "failure-lesson",
+      k: parseEnvFiniteK(
+        env.VP_DEV_FAILURE_LESSON_EXPIRE_K,
+        DEFAULT_FAILURE_LESSON_EXPIRE_K,
+      ),
+      supersededBy: ["implement"],
+      overlap: { mode: "any-shared-tag" },
+    },
+    {
+      kind: "implement",
+      k: parseEnvFiniteK(
+        env.VP_DEV_SUCCESS_LESSON_EXPIRE_K,
+        DEFAULT_SUCCESS_LESSON_EXPIRE_K,
+      ),
+      supersededBy: ["implement"],
+      overlap: { mode: "jaccard", minScore: 0.5 },
+    },
+    {
+      kind: "pushback",
+      k: parseEnvKAllowInfinity(
+        env.VP_DEV_PUSHBACK_LESSON_EXPIRE_K,
+        DEFAULT_PUSHBACK_LESSON_EXPIRE_K,
+      ),
+      supersededBy: ["pushback"],
+      overlap: { mode: "any-shared-tag" },
+    },
+  ];
 }

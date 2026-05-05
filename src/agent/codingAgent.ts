@@ -129,13 +129,23 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
   let recoveryAttempted = false;
 
   // Turn-ceiling recovery: when the SDK truncated the run with
-  // `error_max_turns` and we have no parseable envelope, run a single
-  // recovery pass that asks the agent to commit + push whatever's already
-  // in the worktree and emit the envelope. This upgrades the typical
-  // failure mode (`reconciled: "no-state"`, work lost) to at least
-  // `branch-only` so the user can salvage by hand. Skipped in dry-run
-  // because branch / push are intercepted into echoes, leaving no real
-  // remote state for reconcile to find. See issue #76.
+  // `error_max_turns` and we have no parseable envelope, run a two-pass
+  // recovery:
+  //
+  //   - Pass 2a (1 turn, no tools): envelope-only. Hard SDK-level guarantee
+  //     that a structured terminal envelope is recorded before any tool work
+  //     can consume the recovery budget. Issue #89: previously the single
+  //     5-turn recovery pass burned all 5 turns on git status / build / test
+  //     before reaching the envelope-write step, leaving the orchestrator
+  //     with `parseOk: false, isError: true` and no recovered terminal state.
+  //   - Pass 2b (4 turns, full tools): optional commit + push + richer
+  //     envelope. Only runs when 2a produced a parseable envelope, so a
+  //     flaky 2a doesn't poison the budget for a failing 2b. Best-effort
+  //     upgrade from `decision: "error"` to `decision: "implement"` with
+  //     prUrl when there's recoverable in-flight work.
+  //
+  // Skipped in dry-run because branch / push are intercepted into echoes,
+  // leaving no real remote state for reconcile to find. See issue #76.
   if (errorSubtype === "error_max_turns" && !parsed.ok && !input.dryRun) {
     recoveryAttempted = true;
     input.logger.info("agent.recovery_started", {
@@ -143,37 +153,77 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       issueId: input.issueId,
       reason: errorSubtype,
     });
-    const pass2 = await runSdkPass({
+
+    const pass2a = await runSdkPass({
       input,
       systemPrompt,
-      userPrompt: buildRecoveryPrompt({ branchName: input.branchName }),
-      maxTurns: 5,
+      userPrompt: buildEnvelopeOnlyPrompt(),
+      maxTurns: 1,
+      // tools: [] disables ALL built-in tools per the SDK type comment
+      // ("[] (empty array) - Disable all built-in tools"). The model has
+      // no choice but to respond with text, so it cannot drift into git /
+      // build / test calls before the envelope is written.
+      tools: [],
       canUseTool,
       disallowedTools,
       toolUseTrace,
     });
-    if (pass2.finalText) finalText = pass2.finalText;
-    if (typeof pass2.costUsd === "number") {
-      costUsd = (costUsd ?? 0) + pass2.costUsd;
+    if (pass2a.finalText) finalText = pass2a.finalText;
+    if (typeof pass2a.costUsd === "number") {
+      costUsd = (costUsd ?? 0) + pass2a.costUsd;
     }
-    input.costTracker?.add(pass2.costUsd);
-    // Recovery may itself fail; that's fine — the existing reconcile pass
-    // below picks up whatever the agent managed to push to origin.
-    if (!pass2.isError) {
-      isError = false;
-      errorReason = undefined;
-      errorSubtype = undefined;
-    } else if (pass2.errorReason) {
-      errorReason = `${errorReason ?? ""}; recovery: ${pass2.errorReason}`.replace(/^; /, "");
-      errorSubtype = pass2.errorSubtype ?? errorSubtype;
+    input.costTracker?.add(pass2a.costUsd);
+    let parsed2a = extractEnvelope(finalText);
+
+    if (parsed2a.ok) {
+      const pass2b = await runSdkPass({
+        input,
+        systemPrompt,
+        userPrompt: buildRecoveryPrompt({ branchName: input.branchName }),
+        maxTurns: 4,
+        canUseTool,
+        disallowedTools,
+        toolUseTrace,
+      });
+      if (typeof pass2b.costUsd === "number") {
+        costUsd = (costUsd ?? 0) + pass2b.costUsd;
+      }
+      input.costTracker?.add(pass2b.costUsd);
+      // Only adopt 2b's text when it contains a parseable envelope —
+      // otherwise we'd overwrite 2a's salvage envelope with 2b's
+      // mid-verification chatter and lose the recovery entirely.
+      const parsed2b = extractEnvelope(pass2b.finalText);
+      if (parsed2b.ok) {
+        finalText = pass2b.finalText;
+      }
+      if (!pass2b.isError) {
+        isError = false;
+        errorReason = undefined;
+        errorSubtype = undefined;
+      } else if (pass2b.errorReason) {
+        errorReason = `${errorReason ?? ""}; recovery2b: ${pass2b.errorReason}`.replace(/^; /, "");
+        errorSubtype = pass2b.errorSubtype ?? errorSubtype;
+      }
+    } else if (!pass2a.isError) {
+      // 2a SDK-succeeded but produced unparseable text; the original
+      // error_max_turns is what surfaces. Keep isError set so the
+      // orchestrator still treats the run as failed, but record the 2a
+      // failure mode for diagnostics.
+      errorReason = `${errorReason ?? ""}; recovery2a: envelope unparseable`.replace(/^; /, "");
+    } else if (pass2a.errorReason) {
+      errorReason = `${errorReason ?? ""}; recovery2a: ${pass2a.errorReason}`.replace(/^; /, "");
+      errorSubtype = pass2a.errorSubtype ?? errorSubtype;
     }
+
     parsed = extractEnvelope(finalText);
     input.logger.info("agent.recovery_completed", {
       agentId: input.agent.agentId,
       issueId: input.issueId,
       parseOk: parsed.ok,
-      isError: pass2.isError,
-      costUsd: pass2.costUsd ?? null,
+      pass2aOk: parsed2a.ok,
+      pass2aIsError: pass2a.isError,
+      pass2bRan: parsed2a.ok,
+      costUsd: pass2a.costUsd ?? null,
     });
   }
 
@@ -251,6 +301,11 @@ interface SdkPassOpts {
   canUseTool: CanUseTool;
   disallowedTools: string[];
   toolUseTrace: { tool: string; input: string }[];
+  /**
+   * Override the default `ALLOWED_NATIVE_TOOLS` list. Pass `[]` to disable
+   * all built-in tools (envelope-only recovery pass; see issue #89).
+   */
+  tools?: string[];
 }
 
 interface SdkPassResult {
@@ -297,7 +352,7 @@ async function runSdkPass(opts: SdkPassOpts): Promise<SdkPassResult> {
         cwd: input.worktreePath,
         additionalDirectories: input.inspectPaths,
         systemPrompt: opts.systemPrompt,
-        tools: ALLOWED_NATIVE_TOOLS,
+        tools: opts.tools ?? ALLOWED_NATIVE_TOOLS,
         permissionMode: "default",
         canUseTool: opts.canUseTool,
         disallowedTools: opts.disallowedTools,
@@ -339,18 +394,53 @@ async function runSdkPass(opts: SdkPassOpts): Promise<SdkPassResult> {
   return { finalText, isError, errorReason, errorSubtype, costUsd };
 }
 
+/**
+ * Recovery pass 2a (issue #89). Run with `maxTurns: 1, tools: []` so the
+ * model has no choice but to respond with text — guaranteeing a structured
+ * envelope is captured before the optional verification pass can consume
+ * the recovery budget on tool calls.
+ *
+ * Emits a fallback `decision: "error"` envelope; pass 2b can supersede it
+ * with a richer `decision: "implement"` (with prUrl) if recoverable work
+ * gets pushed.
+ */
+export function buildEnvelopeOnlyPrompt(): string {
+  return [
+    `Recovery turn 1 of 2 — your previous session was truncated by the turn ceiling.`,
+    ``,
+    `This turn has NO tools available. Your ENTIRE response must be the JSON envelope, nothing else.`,
+    ``,
+    `Emit exactly this envelope (no preamble, no explanation, no fenced code block — bare JSON):`,
+    ``,
+    `{"decision":"error","reason":"Truncated by turn ceiling — original task incomplete; recovery pass 2 will attempt to salvage uncommitted work.","memoryUpdate":{"addTags":[]}}`,
+    ``,
+    `A second recovery pass with full tools follows this one and may supersede this envelope. Do not attempt to verify state, summarize work, or vary the JSON shape — emit it verbatim.`,
+  ].join("\n");
+}
+
+/**
+ * Recovery pass 2b (issue #89). Runs only when pass 2a (envelope-only)
+ * succeeded, so the orchestrator already has a fallback envelope on record.
+ * This pass attempts to commit + push uncommitted in-flight work and emit
+ * a richer envelope (`decision: "implement"` with prUrl when a PR opens).
+ *
+ * Budget is 4 turns. If the budget runs out before this pass emits its
+ * own envelope, the fallback envelope from pass 2a is preserved.
+ */
 export function buildRecoveryPrompt(opts: { branchName: string }): string {
   return [
-    `Recovery turn — your previous session was truncated by the turn ceiling before you could finish.`,
+    `Recovery turn 2 of 2 — verification + work salvage.`,
+    ``,
+    `Pass 1 already recorded a fallback "error" envelope. This pass has 4 turns and full tool access; use them to upgrade the recorded outcome if possible.`,
     ``,
     `DO NOT attempt new feature work. Recover what's already in the worktree:`,
     ``,
     `1. Run \`git status\` to inspect uncommitted changes.`,
     `2. If anything is uncommitted, stage and commit on branch \`${opts.branchName}\` with a brief message describing what was in flight.`,
     `3. Push: \`git push -u origin ${opts.branchName}\`.`,
-    `4. Emit the JSON envelope as your final message per the workflow.`,
+    `4. Emit a refined JSON envelope as your final message per the workflow. If a PR was opened, use \`decision: "implement"\` with the prUrl. Otherwise use \`decision: "pushback"\` with a brief reason.`,
     ``,
-    `If the worktree is clean and you never opened a PR, emit \`{"decision":"pushback","reason":"Truncated by turn ceiling; no recoverable artifact in worktree."}\`.`,
+    `If you run low on budget, skip directly to step 4 with whatever envelope best fits the state you've observed. If the worktree is clean and you never opened a PR, emit \`{"decision":"pushback","reason":"Truncated by turn ceiling; no recoverable artifact in worktree.","memoryUpdate":{"addTags":[]}}\`.`,
   ].join("\n");
 }
 

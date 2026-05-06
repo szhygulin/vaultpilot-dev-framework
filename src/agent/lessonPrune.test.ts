@@ -8,10 +8,11 @@ import {
   computePruneProposalHash,
   formatLessonPruneProposal,
   hashFile,
+  proposeLessonPrune,
   type PruneProposal,
 } from "./lessonPrune.js";
 import { dropSentinelsByStableId } from "../util/sentinels.js";
-import { deriveStableSectionId } from "../state/lessonUtility.js";
+import { DEFAULT_PRUNE_MIN_SIBLINGS_AFTER, deriveStableSectionId } from "../state/lessonUtility.js";
 import { formatSentinelHeader } from "../util/sentinels.js";
 
 function makeAgentClaudeMd(
@@ -228,4 +229,46 @@ test("formatLessonPruneProposal: renders empty case + populated case readably", 
   assert.match(populated, /1 section\(s\) eligible for removal/);
   assert.match(populated, /\[zero-reinforcement\]/);
   assert.match(populated, /Pass --apply/);
+});
+
+// Regression for the smoke-test bug: when a caller passed minSiblingsAfter
+// to proposeLessonPrune AND the resulting stale list was empty, the
+// fallback expression took the Math.min(...empty) branch and surfaced
+// `Infinity` as the threshold in the rendered output. The proposal's
+// minSiblingsAfter must always reflect the configured policy, not be
+// derived from the (possibly empty) stale list.
+test("proposeLessonPrune: minSiblingsAfter mirrors the configured threshold even when nothing is stale", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "prune-empty-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  await fs.writeFile(filePath, "# empty\n");
+  try {
+    const proposal = await proposeLessonPrune({
+      agentId: "agent-nonexistent-test",
+      minSiblingsAfter: 7,
+      claudeMdPathOverride: filePath,
+    });
+    assert.equal(proposal.pruned.length, 0);
+    assert.equal(proposal.minSiblingsAfter, 7);
+    assert.notEqual(proposal.minSiblingsAfter, Infinity);
+    const rendered = formatLessonPruneProposal(proposal);
+    assert.doesNotMatch(rendered, /Infinity/);
+    assert.match(rendered, /at least 7/);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("proposeLessonPrune: minSiblingsAfter falls back to DEFAULT when not provided", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "prune-default-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  await fs.writeFile(filePath, "# empty\n");
+  try {
+    const proposal = await proposeLessonPrune({
+      agentId: "agent-nonexistent-default",
+      claudeMdPathOverride: filePath,
+    });
+    assert.equal(proposal.minSiblingsAfter, DEFAULT_PRUNE_MIN_SIBLINGS_AFTER);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

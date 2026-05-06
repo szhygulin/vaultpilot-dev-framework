@@ -4,6 +4,7 @@ import { claudeBinPath } from "./sdkBinary.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { ORCHESTRATOR_MODEL_SUMMARIZER } from "../orchestrator/models.js";
 import { accuracyDegradationFactor } from "../util/contextCostCurve.js";
+import { indentCalibration } from "../util/utilityCalibration.js";
 import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -276,10 +277,7 @@ Hard rules:
 Predicted-utility self-rating (issue #179, half-ready-curve probe):
 - For every non-skip emission, ALSO emit \`predictedUtility\` — a number in [0, 1] estimating how much future-leverage the lesson carries. The harness uses this to decide whether the lesson's expected benefit justifies the byte-cost in the cost-transparency line above; it gets persisted so the operator can later correlate self-ratings with whether the lesson actually fired (got reinforced by future runs).
 - Calibration:
-  - 0.0–0.2: restates an existing rule; generic platitude ("verify before merging"); applies-to-everything; adds little beyond rules already in the file.
-  - 0.3–0.5: useful but partially redundant or could be inferred from existing sections; modest sharpening of an already-known principle.
-  - 0.6–0.8: introduces a specific rule with a named failure mode the agent has hit before or would hit again; cites concrete files / tools / protocols.
-  - 0.9–1.0: names a specific past incident (date / PR / file path / function name) with a concrete failure mode the agent would otherwise repeat; high-leverage rule with narrow tells.
+${indentCalibration("  - ")}
 - Be calibrated, not generous. A field full of 0.8s is useless for tuning. If you'd skip the lesson under the cost-transparency line above, mark it 0.1–0.3 instead of inflating.
 
 Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Use \`{"skip": false, "heading": "...", "body": "...", "predictedUtility": 0.X}\` when there is a lesson worth saving, and \`{"skip": true, "skipReason": "..."}\` otherwise. Schema:

@@ -2,7 +2,7 @@ export type Decision = "implement" | "pushback" | "error" | "error_max_turns";
 
 /**
  * One (development-agent × issue) measurement. Produced by aggregate.ts from a
- * spawn log; consumed by score.ts and fit.ts.
+ * spawn log; consumed by score.ts and the regression fit.
  */
 export interface Cell {
   agentId: string;
@@ -37,12 +37,11 @@ export interface QualityScore {
 }
 
 /**
- * One breakpoint on the fitted accuracyDegradationFactor curve. The curve is
- * piecewise quadratic; each segment between (xBytes_i, factor_i) and
- * (xBytes_{i+1}, factor_{i+1}) is a 2nd-order polynomial. See fit.ts for the
- * spline construction.
+ * One measured calibration sample on the curve. Persisted in
+ * `src/util/contextCostCurve.ts` as `CONTEXT_COST_SAMPLES`. The curve at
+ * evaluation time is an OLS polynomial regression over these samples.
  */
-export interface CurveBreakpoint {
+export interface CurveSample {
   xBytes: number;
   factor: number;
 }

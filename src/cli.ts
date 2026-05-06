@@ -454,7 +454,7 @@ export function buildCli(): Command {
     .addCommand(
       new Command("curve-study")
         .description(
-          "Run a study to refit src/util/contextCostCurve.ts (CLAUDE.md size → accuracyDegradationFactor). Operator pre-trims the parent dev-agent into N forks at chosen byte budgets and registers them; this command dispatches all (devAgent × issue) cells with 4-way parallelism + per-dev-agent serialization, aggregates outcomes, scores quality per #179, fits a piecewise-quadratic curve, and writes a JSON proposal the operator hand-merges into the source file.",
+          "Refit src/util/contextCostCurve.ts (CLAUDE.md size → accuracyDegradationFactor). Operator pre-trims the parent dev-agent into N forks at chosen byte budgets and registers them; this command dispatches all (devAgent × issue) cells with 4-way parallelism + per-dev-agent serialization, aggregates outcomes, scores quality per #179, fits an OLS polynomial regression, and writes a JSON proposal the operator hand-merges into CONTEXT_COST_SAMPLES.",
         )
         .requiredOption("--agents-spec <path>", "JSON file: array of {devAgentId, sizeBytes, clonePath}")
         .requiredOption("--target-repo <owner/repo>", "GitHub target repo (e.g. szhygulin/vaultpilot-mcp-smoke-test)")
@@ -464,6 +464,17 @@ export function buildCli(): Command {
         .option("--parallelism <n>", "Max concurrent research agents", parsePositive, 4)
         .option("--rubrics <path>", "Optional JSON file: array of {agentId, issueId, pushbackAccuracy?, prCorrectness?}")
         .option("--no-dry-run", "Disable --dry-run on spawn (default: dry-run on; intercepts push/PR side effects)")
+        .option(
+          "--mode <mode>",
+          "replace (proposal = freshly measured samples only) | update (proposal = existing CONTEXT_COST_SAMPLES merged with fresh samples, re-fitted)",
+          "replace",
+        )
+        .option(
+          "--collision-policy <policy>",
+          "When --mode update finds a fresh sample at the same xBytes as an existing one: replace-on-collision | average-on-collision | keep-both",
+          "replace-on-collision",
+        )
+        .option("--degree <n>", "OLS polynomial regression degree", parsePositive, 2)
         .action(async (opts) => {
           await cmdResearchCurveStudy(opts);
         }),
@@ -3082,10 +3093,23 @@ interface ResearchCurveStudyOpts {
   parallelism: number;
   rubrics?: string;
   dryRun: boolean;
+  mode: string;
+  collisionPolicy: string;
+  degree: number;
 }
 
 async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void> {
   const { runCurveStudy } = await import("./research/curveStudy/study.js");
+  if (opts.mode !== "replace" && opts.mode !== "update") {
+    throw new Error(`--mode must be 'replace' or 'update', got '${opts.mode}'`);
+  }
+  if (
+    opts.collisionPolicy !== "replace-on-collision" &&
+    opts.collisionPolicy !== "average-on-collision" &&
+    opts.collisionPolicy !== "keep-both"
+  ) {
+    throw new Error(`--collision-policy must be replace-on-collision|average-on-collision|keep-both, got '${opts.collisionPolicy}'`);
+  }
   const agents = JSON.parse(await fs.readFile(opts.agentsSpec, "utf8")) as ReadonlyArray<{
     devAgentId: string;
     sizeBytes: number;
@@ -3093,6 +3117,13 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
   }>;
   const issues = opts.issues.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
   const rubrics = opts.rubrics ? JSON.parse(await fs.readFile(opts.rubrics, "utf8")) : undefined;
+
+  let existingSamples: ReadonlyArray<{ xBytes: number; factor: number }> | undefined;
+  if (opts.mode === "update") {
+    const mod = await import("./util/contextCostCurve.js");
+    existingSamples = mod.CONTEXT_COST_SAMPLES;
+  }
+
   const result = await runCurveStudy({
     agents,
     issues,
@@ -3103,15 +3134,20 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
     outputPath: opts.output,
     cwd: process.cwd(),
     rubrics,
+    mode: opts.mode,
+    collisionPolicy: opts.collisionPolicy,
+    regressionDegree: opts.degree,
+    existingSamples,
   });
   process.stdout.write(`\nDone. ${result.cells.length} cells, $${result.totalCostUsd.toFixed(2)}, ${(result.wallMs / 60000).toFixed(1)}min.\n`);
-  process.stdout.write(`Proposal written to ${opts.output}.\n`);
-  if (result.breakpoints.length) {
-    process.stdout.write(`Breakpoints (hand-merge into src/util/contextCostCurve.ts):\n`);
-    for (const bp of result.breakpoints) {
-      process.stdout.write(`  { xBytes: ${bp.xBytes}, factor: ${bp.factor.toFixed(3)} },\n`);
+  process.stdout.write(`Mode: ${result.mode}. Proposal written to ${opts.output}.\n`);
+  if (result.regression) {
+    process.stdout.write(`\nRegression (degree=${result.regression.degree}, n=${result.regression.n}, R²=${result.regression.rSquared.toFixed(3)}).\n`);
+    process.stdout.write(`Samples to hand-merge into CONTEXT_COST_SAMPLES (src/util/contextCostCurve.ts):\n`);
+    for (const s of result.samples) {
+      process.stdout.write(`  { xBytes: ${s.xBytes}, factor: ${s.factor.toFixed(3)} },\n`);
     }
   } else {
-    process.stdout.write(`Not enough scoreable agents (<3) — no curve fitted.\n`);
+    process.stdout.write(`Not enough samples (<${opts.degree + 1}) — no regression fitted.\n`);
   }
 }

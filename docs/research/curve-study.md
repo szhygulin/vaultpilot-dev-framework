@@ -8,12 +8,26 @@ Re-fits `src/util/contextCostCurve.ts` (CLAUDE.md size → `accuracyDegradationF
 2. Dispatches one research-agent run per (devAgent, issue) cell against `--target-repo`, with 4-way parallelism + per-devAgent serialization (each devAgent has its own dedicated clone — protects against the worktree-race failure mode that broke the inaugural run).
 3. Aggregates per-cell envelopes from logs.
 4. Scores outcome quality per agent using #179's composite (`0.40·implement_rate + 0.25·pushback_accuracy + 0.20·(1−error_max_turns) + 0.15·pr_correctness`).
-5. Fits a piecewise quadratic over (sizeBytes → factor), where `factor = qualityMax / quality`.
-6. Writes a JSON proposal — the operator hand-merges the breakpoints into `CONTEXT_COST_BREAKPOINTS`.
+5. Projects scores into samples (sizeBytes → factor), where `factor = qualityMax / quality`.
+6. **Replace mode**: writes a JSON proposal containing the freshly-measured samples + a fitted OLS polynomial regression.
+   **Update mode**: merges fresh samples into the existing `CONTEXT_COST_SAMPLES` (with collision policy), re-fits, writes proposal.
+7. Operator hand-merges `samples` into `CONTEXT_COST_SAMPLES`. The runtime regression at `contextCostFactor()` re-fits on first call.
 
 ## Why operator-input trims (not algorithmic)
 
-A trim is a judgment about which CLAUDE.md sections still earn their bytes. Encoding that as an algorithm would either (a) over-trim load-bearing rules or (b) under-trim by being too cautious. The operator supplies N pre-trimmed CLAUDE.mds; this tool measures what those trims do.
+A trim is a judgment about which CLAUDE.md sections still earn their bytes. Encoding that as an algorithm would either over-trim load-bearing rules or under-trim by being too cautious. The operator supplies N pre-trimmed CLAUDE.mds; this tool measures what those trims do.
+
+## Modes
+
+### `--mode replace` (default)
+The proposal contains only this run's samples. Use when starting from scratch with a new specialty/model — the existing curve is stale and shouldn't anchor the fit.
+
+### `--mode update`
+Reads `CONTEXT_COST_SAMPLES` from `src/util/contextCostCurve.ts`, merges fresh samples, re-fits. Use when adding measurements at sizes the existing curve hasn't covered, or when re-measuring at the same sizes after a calibration drift event. Collision policy controls behavior when a fresh sample shares an `xBytes` with an existing sample:
+
+- `replace-on-collision` (default): newer wins.
+- `average-on-collision`: split the difference.
+- `keep-both`: retain duplicates (rare; useful for variance studies but produces a degenerate fit unless `--degree` is high enough).
 
 ## Inputs
 
@@ -45,30 +59,43 @@ After the dispatch finishes you usually want to score pushback comments and PR b
 
 Without rubrics, the tool defaults to "outcome bucket = right answer" (1 if outcome=pushback for pushback-accuracy, 1 if outcome=implement for PR-correctness). Provisional only.
 
+### `--degree <n>`
+
+OLS polynomial regression degree. Default `2` (quadratic — fits the expected concave-up shape: factor accelerates with size). Increase only if you have ≥ 6 samples and visible higher-order curvature in the data; otherwise you're overfitting.
+
 ## Output
 
 ```
 {
   "generatedAt": "2026-05-06T...",
+  "mode": "update",
   "targetRepo": "szhygulin/vaultpilot-mcp-smoke-test",
   "issues": [50, 52, 54],
   "agents": [...],
   "cellCount": 28,
   "totalCostUsd": 178.42,
   "wallMs": 5102000,
-  "scores": [
-    { "agentId": "agent-9180", "agentSizeBytes": 6140, "implementRate": 0.66, "pushbackAccuracyRate": 1.0, ..., "quality": 0.812 },
-    ...
-  ],
-  "breakpoints": [
+  "scores": [...],
+  "freshSamples": [...],
+  "samples": [
     { "xBytes": 6140,  "factor": 1.0 },
     { "xBytes": 10255, "factor": 1.05 },
     ...
-  ]
+  ],
+  "regression": {
+    "degree": 2,
+    "coefficients": [c0, c1, c2],
+    "xMean": ...,
+    "xStd": ...,
+    "n": 10,
+    "rss": ...,
+    "tss": ...,
+    "rSquared": 0.94
+  }
 }
 ```
 
-The operator pastes `breakpoints` into `CONTEXT_COST_BREAKPOINTS` in `src/util/contextCostCurve.ts`, updates the provenance comment, and commits.
+The operator copies `samples` into `CONTEXT_COST_SAMPLES` in `src/util/contextCostCurve.ts`, updates the provenance comment with the model version + specialty + R², and commits. The runtime regression is re-fitted from `CONTEXT_COST_SAMPLES` on first `contextCostFactor()` call — coefficients aren't pasted into source.
 
 ## Cost & wall time
 

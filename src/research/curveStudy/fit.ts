@@ -1,28 +1,10 @@
-import type { CurveBreakpoint, QualityScore } from "./types.js";
+import type { CurveSample, QualityScore } from "./types.js";
+import { fitPolynomialRegression, type PolynomialRegression } from "./regression.js";
 
 /**
- * Fit a piecewise quadratic over (sizeBytes, accuracyDegradationFactor) points.
- * Inputs come from QualityScore[]; we invert quality → factor as
- *   factor = quality_max / quality(s).
- * factor ≥ 1 by construction, anchored to 1.0 at the smallest studied size if
- * that size has the highest quality (the expected shape — small CLAUDE.md
- * least confused).
- *
- * Curve shape: 3-point Lagrange windows. For each segment [x_i, x_{i+1}], the
- * quadratic passes through {x_{i-1}, x_i, x_{i+1}} (interior) or three
- * boundary points at the ends. evaluate() picks the segment containing x and
- * applies its quadratic. With <3 input points, evaluate falls back to linear.
- */
-export interface PiecewiseQuadraticCurve {
-  /** Knot points the operator commits to source as `CONTEXT_COST_BREAKPOINTS`. */
-  breakpoints: CurveBreakpoint[];
-  /** Per-segment quadratic coefficients, segment i covers x ∈ [breakpoints[i].xBytes, breakpoints[i+1].xBytes]. */
-  segments: ReadonlyArray<{ a: number; b: number; c: number; xLo: number; xHi: number }>;
-}
-
-/**
- * Compute factor = qualityMax / quality. Anchors at 1.0 (best-quality point).
- * Caller decides what to do with NaN inputs (we treat zero-quality as a guard).
+ * Convert a per-agent quality score to a degradation factor anchored at 1.0
+ * (the highest-quality agent gets factor=1; others scale up). Caller should
+ * filter agents with non-positive quality before passing here.
  */
 export function qualityToFactor(quality: number, qualityMax: number): number {
   if (qualityMax <= 0) return 1;
@@ -31,127 +13,59 @@ export function qualityToFactor(quality: number, qualityMax: number): number {
 }
 
 /**
- * Fit a 3-point Lagrange quadratic through (x0,y0), (x1,y1), (x2,y2). Returns
- * coefficients (a, b, c) such that y = a*x² + b*x + c.
+ * Project per-agent quality scores into curve samples. Each agent contributes
+ * one sample (sizeBytes → factor). Ordered by sizeBytes ascending.
  */
-export function lagrangeQuadratic(
-  p0: [number, number],
-  p1: [number, number],
-  p2: [number, number],
-): { a: number; b: number; c: number } {
-  const [x0, y0] = p0;
-  const [x1, y1] = p1;
-  const [x2, y2] = p2;
-  const d01 = (x0 - x1) * (x0 - x2);
-  const d10 = (x1 - x0) * (x1 - x2);
-  const d20 = (x2 - x0) * (x2 - x1);
-  if (d01 === 0 || d10 === 0 || d20 === 0) {
-    throw new Error("lagrangeQuadratic: duplicate x in fit window");
-  }
-  const c0 = y0 / d01;
-  const c1 = y1 / d10;
-  const c2 = y2 / d20;
-  // y = c0*(x-x1)*(x-x2) + c1*(x-x0)*(x-x2) + c2*(x-x0)*(x-x1)
-  // expand to a*x² + b*x + c
-  const a = c0 + c1 + c2;
-  const b =
-    -c0 * (x1 + x2) -
-    c1 * (x0 + x2) -
-    c2 * (x0 + x1);
-  const c =
-    c0 * x1 * x2 +
-    c1 * x0 * x2 +
-    c2 * x0 * x1;
-  return { a, b, c };
-}
-
-/**
- * Build the piecewise-quadratic curve from sorted (xBytes, factor) breakpoints.
- * Each segment uses a 3-point Lagrange window centered around the segment.
- *   - First segment: window = points [0, 1, 2]
- *   - Last segment:  window = points [n-3, n-2, n-1]
- *   - Interior i:    window = points [i-1, i, i+1]   (for segment between i and i+1, we choose [i-1, i, i+1] for left bias; alternative would be [i, i+1, i+2])
- * Picking a left-biased window keeps continuity at x_i where consecutive
- * segments share a point. Right at x_{i+1} the transition jumps to the next
- * segment's window — discontinuity is bounded by the data spread, and stays
- * small for monotonic curves.
- *
- * Requires ≥3 breakpoints; throws otherwise (caller should fall back to a
- * linear interpolant for sparser data).
- */
-export function buildPiecewiseQuadratic(
-  breakpoints: CurveBreakpoint[],
-): PiecewiseQuadraticCurve {
-  if (breakpoints.length < 3) {
-    throw new Error(`buildPiecewiseQuadratic: need >=3 points, got ${breakpoints.length}`);
-  }
-  const sorted = [...breakpoints].sort((a, b) => a.xBytes - b.xBytes);
-  const n = sorted.length;
-  const segments: PiecewiseQuadraticCurve["segments"] = [];
-  for (let i = 0; i < n - 1; i++) {
-    let i0: number, i1: number, i2: number;
-    if (i === 0) {
-      [i0, i1, i2] = [0, 1, 2];
-    } else if (i === n - 2) {
-      [i0, i1, i2] = [n - 3, n - 2, n - 1];
-    } else {
-      [i0, i1, i2] = [i - 1, i, i + 1];
-    }
-    const p0: [number, number] = [sorted[i0].xBytes, sorted[i0].factor];
-    const p1: [number, number] = [sorted[i1].xBytes, sorted[i1].factor];
-    const p2: [number, number] = [sorted[i2].xBytes, sorted[i2].factor];
-    const { a, b, c } = lagrangeQuadratic(p0, p1, p2);
-    (segments as { a: number; b: number; c: number; xLo: number; xHi: number }[]).push({
-      a,
-      b,
-      c,
-      xLo: sorted[i].xBytes,
-      xHi: sorted[i + 1].xBytes,
-    });
-  }
-  return { breakpoints: sorted, segments };
-}
-
-/**
- * Evaluate the curve at `xBytes`. Clamps below the first breakpoint to its
- * factor, and above the last breakpoint extrapolates the final segment's
- * quadratic (caller may want to clamp instead — surface the choice via the
- * `clampHigh` option).
- */
-export function evaluateCurve(
-  curve: PiecewiseQuadraticCurve,
-  xBytes: number,
-  opts?: { clampHigh?: boolean },
-): number {
-  const { breakpoints, segments } = curve;
-  if (xBytes <= breakpoints[0].xBytes) return breakpoints[0].factor;
-  if (xBytes >= breakpoints[breakpoints.length - 1].xBytes) {
-    if (opts?.clampHigh) return breakpoints[breakpoints.length - 1].factor;
-    const last = segments[segments.length - 1];
-    return last.a * xBytes * xBytes + last.b * xBytes + last.c;
-  }
-  for (const seg of segments) {
-    if (xBytes >= seg.xLo && xBytes <= seg.xHi) {
-      return seg.a * xBytes * xBytes + seg.b * xBytes + seg.c;
-    }
-  }
-  throw new Error(`evaluateCurve: ${xBytes} fell through segments`);
-}
-
-/**
- * Convenience: produce breakpoints from per-agent quality scores. Orders by
- * size, normalizes factor=qualityMax/quality, and floors factor to 1.0
- * (smallest size becomes the anchor).
- */
-export function fitFromQualityScores(scores: QualityScore[]): PiecewiseQuadraticCurve {
-  if (scores.length < 3) {
-    throw new Error(`fitFromQualityScores: need >=3 scores, got ${scores.length}`);
-  }
+export function samplesFromScores(scores: ReadonlyArray<QualityScore>): CurveSample[] {
+  if (scores.length === 0) return [];
   const sorted = [...scores].sort((a, b) => a.agentSizeBytes - b.agentSizeBytes);
   const qmax = Math.max(...sorted.map((s) => s.quality));
-  const breakpoints: CurveBreakpoint[] = sorted.map((s) => ({
+  return sorted.map((s) => ({
     xBytes: s.agentSizeBytes,
     factor: Math.max(1, qualityToFactor(s.quality, qmax)),
   }));
-  return buildPiecewiseQuadratic(breakpoints);
+}
+
+/**
+ * Merge two sample sets, with policy for collisions on identical xBytes.
+ *   - "replace-on-collision" (default): newer sample wins
+ *   - "average-on-collision": (factor_old + factor_new) / 2
+ *   - "keep-both": both retained (rare; produces duplicate x and a degenerate
+ *     fit unless degree is high enough to interpolate)
+ *
+ * Output is sorted by xBytes ascending. Used by `--mode update`.
+ */
+export function mergeSamples(
+  base: ReadonlyArray<CurveSample>,
+  fresh: ReadonlyArray<CurveSample>,
+  policy: "replace-on-collision" | "average-on-collision" | "keep-both" = "replace-on-collision",
+): CurveSample[] {
+  if (policy === "keep-both") {
+    return [...base, ...fresh].sort((a, b) => a.xBytes - b.xBytes);
+  }
+  const byX = new Map<number, number>();
+  for (const s of base) byX.set(s.xBytes, s.factor);
+  for (const s of fresh) {
+    const prior = byX.get(s.xBytes);
+    if (prior == null) {
+      byX.set(s.xBytes, s.factor);
+    } else if (policy === "average-on-collision") {
+      byX.set(s.xBytes, (prior + s.factor) / 2);
+    } else {
+      byX.set(s.xBytes, s.factor); // replace-on-collision: newer wins
+    }
+  }
+  return [...byX.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([xBytes, factor]) => ({ xBytes, factor }));
+}
+
+/** Convenience: fit a regression directly from per-agent quality scores. */
+export function fitFromQualityScores(
+  scores: ReadonlyArray<QualityScore>,
+  degree: number = 2,
+): { samples: CurveSample[]; regression: PolynomialRegression } {
+  const samples = samplesFromScores(scores);
+  const regression = fitPolynomialRegression(samples, degree);
+  return { samples, regression };
 }

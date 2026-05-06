@@ -404,6 +404,29 @@ export function buildCli(): Command {
         }),
     )
     .addCommand(
+      new Command("audit-lessons")
+        .description(
+          "Score every section of an agent's CLAUDE.md by intrinsic quality (in vacuum — no run history, no comparison across sections). Per-section sonnet calls rate each lesson on the same 0-1 scale as write-time predictedUtility. Advisory only (Phase 1); destructive --apply / --confirm deferred. Combine with `vp-dev agents prune-lessons` for the historical-reinforcement signal.",
+        )
+        .argument("<agentId>", "Agent to audit (e.g. agent-916a)")
+        .option("--json", "Print machine-readable JSON")
+        .option(
+          "--max-cost-usd <usd>",
+          "Cumulative cost cap across all section scoring calls (default 5).",
+          parsePositive,
+          5,
+        )
+        .option(
+          "--concurrency <n>",
+          "Parallel scoring calls (default 3 — respects Anthropic rate limits while keeping audit walltime bounded).",
+          parsePositive,
+          3,
+        )
+        .action(async (agentId, opts) => {
+          await cmdAgentsAuditLessons(agentId, opts);
+        }),
+    )
+    .addCommand(
       new Command("stats")
         .description("Per-agent rollup of PR outcomes (merge rate, median rework, median CI cycles).")
         .option("--json", "Print machine-readable JSON")
@@ -2398,6 +2421,35 @@ async function cmdAgentsPruneLessons(
     `\nConfirm token: ${token} (15-min TTL, written to state/lesson-prune-confirm-${token}.json)\n` +
       `Apply with:    vp-dev agents prune-lessons ${agentId} --confirm ${token}\n`,
   );
+}
+
+interface AgentsAuditLessonsOpts {
+  json?: boolean;
+  maxCostUsd: number;
+  concurrency: number;
+}
+
+async function cmdAgentsAuditLessons(
+  agentId: string,
+  opts: AgentsAuditLessonsOpts,
+): Promise<void> {
+  const reg = await loadRegistry();
+  const agent = reg.agents.find((a) => a.agentId === agentId);
+  if (!agent) {
+    process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+    process.exit(2);
+  }
+  const { proposeAudit, formatAuditProposal } = await import("./agent/auditLessons.js");
+  const proposal = await proposeAudit({
+    agentId,
+    maxCostUsd: opts.maxCostUsd,
+    concurrency: opts.concurrency,
+  });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(proposal, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(formatAuditProposal(proposal) + "\n");
 }
 
 interface AgentsTightenClaudeMdOpts {

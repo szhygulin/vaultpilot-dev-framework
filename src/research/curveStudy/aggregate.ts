@@ -81,7 +81,7 @@ export async function aggregateLogsDir(opts: {
   agentSizes: Map<string, number>;
 }): Promise<Cell[]> {
   const files = await fs.readdir(opts.logsDir);
-  const re = new RegExp(`^${opts.prefix}(agent-\\d+)-(\\d+)\\.log$`);
+  const re = new RegExp(`^${opts.prefix}(agent-[a-z0-9-]+)-(\\d+)\\.log$`);
   const cells: Cell[] = [];
   for (const f of files.sort()) {
     const m = re.exec(f);

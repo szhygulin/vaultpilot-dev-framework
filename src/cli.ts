@@ -120,6 +120,10 @@ import {
   evaluateLocalClaudeUtilityGate,
   type LocalClaudeUtilityGateResult,
 } from "./agent/localClaudeQueue.js";
+import {
+  openLocalClaudePr,
+  type OpenLocalClaudePrOutcome,
+} from "./agent/localClaudePr.js";
 import { isLocalClaudeCandidate } from "./util/promotionMarkers.js";
 import {
   applyTrimProposal,
@@ -437,6 +441,10 @@ export function buildCli(): Command {
         .option("--json", "Print machine-readable JSON listing of pending candidates and exit (no mutation)")
         .option("--yes", "Auto-accept every candidate that passes validation (non-interactive use only)")
         .option("--global", "Append accepted entries to the global pool (~/.vaultpilot/shared-lessons/) instead of the per-target pool")
+        .option(
+          "--pr",
+          "For `@local-claude` candidates: open a chore PR appending the lesson to project-local CLAUDE.md instead of staging to the queue file. With --yes, autonomous: gate=let-through → PR; gate=skip → queue. PR failures fall back to the queue so data isn't lost. Operator-invoked CLI flow — exempt from the in-run write-side-effect rule.",
+        )
         .action(async (opts) => {
           await cmdLessonsReview(opts);
         }),
@@ -2856,6 +2864,7 @@ interface LessonsReviewOpts {
   json?: boolean;
   yes?: boolean;
   global?: boolean;
+  pr?: boolean;
 }
 
 async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
@@ -2899,7 +2908,7 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
   );
 
   if (opts.yes) {
-    await runAutoAcceptLoop(pending, tier);
+    await runAutoAcceptLoop(pending, tier, !!opts.pr);
     return;
   }
 
@@ -2910,7 +2919,7 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
     process.exit(2);
   }
 
-  await runInteractiveReview(pending, tier);
+  await runInteractiveReview(pending, tier, !!opts.pr);
 }
 
 /**
@@ -2937,7 +2946,31 @@ async function computeLocalClaudeGate(
   });
 }
 
-async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier): Promise<void> {
+/**
+ * Try to open a PR for an accepted @local-claude candidate. On any failure,
+ * caller falls back to the queue path so the lesson isn't lost. Returns the
+ * outcome (with PR URL on success) or null when the path doesn't apply.
+ */
+async function tryOpenLocalClaudePr(
+  p: PendingCandidate,
+  ts: string,
+  gate: LocalClaudeUtilityGateResult | null,
+): Promise<OpenLocalClaudePrOutcome | null> {
+  if (!isLocalClaudeCandidate(p.candidate.domain)) return null;
+  return openLocalClaudePr({
+    sourceAgentId: p.agentId,
+    ts,
+    utility: p.candidate.utility,
+    gate: gate ?? undefined,
+    body: p.candidate.body,
+  });
+}
+
+async function runAutoAcceptLoop(
+  pending: PendingCandidate[],
+  tier: LessonTier,
+  usePr: boolean,
+): Promise<void> {
   let acceptedCount = 0;
   let rejectedCount = 0;
   let skippedCount = 0;
@@ -2958,6 +2991,32 @@ async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier):
       );
       skippedCount += 1;
       continue;
+    }
+    // Autonomous PR path (#196 Phase 2): when --pr is set AND the local
+    // gate is let-through, open a chore PR directly. Failure falls back to
+    // the queue path so the lesson isn't lost.
+    if (usePr && localGate && localGate.decision === "let-through") {
+      const ts = new Date().toISOString();
+      const prOutcome = await tryOpenLocalClaudePr(p, ts, localGate);
+      if (prOutcome && prOutcome.kind === "pr-opened") {
+        // Rewrite the source marker so the candidate doesn't resurface.
+        await rejectCandidate({
+          pending: p,
+          reason: `promoted-local via PR ${prOutcome.prUrl}`,
+          ts,
+        }).catch(() => {});
+        process.stdout.write(
+          `accepted [@local-claude] ${p.agentId} -> PR ${prOutcome.prUrl} (branch ${prOutcome.branchName})\n`,
+        );
+        acceptedCount += 1;
+        continue;
+      }
+      if (prOutcome && prOutcome.kind === "pr-failed") {
+        process.stdout.write(
+          `PR-creation failed (${prOutcome.reason}); falling back to queue.\n`,
+        );
+      }
+      // fall through to queue
     }
     const result = await acceptCandidate({
       pending: p,
@@ -2994,7 +3053,11 @@ async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier):
   );
 }
 
-async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTier): Promise<void> {
+async function runInteractiveReview(
+  pending: PendingCandidate[],
+  tier: LessonTier,
+  usePr: boolean,
+): Promise<void> {
   const { createInterface } = await import("node:readline/promises");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let acceptedCount = 0;
@@ -3038,6 +3101,31 @@ async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTie
           process.stdout.write("Cannot accept — validation failed. Treating as skip.\n");
           skippedCount += 1;
           continue;
+        }
+        // Interactive --pr: try to open a PR for an accepted @local-claude
+        // candidate (operator's accept overrides the L2 gate). On PR
+        // failure, fall back to the queue path.
+        if (usePr && isLocalClaudeCandidate(p.candidate.domain)) {
+          const ts = new Date().toISOString();
+          const prOutcome = await tryOpenLocalClaudePr(p, ts, localGate);
+          if (prOutcome && prOutcome.kind === "pr-opened") {
+            await rejectCandidate({
+              pending: p,
+              reason: `promoted-local via PR ${prOutcome.prUrl}`,
+              ts,
+            }).catch(() => {});
+            process.stdout.write(
+              `Accepted [@local-claude]: opened PR ${prOutcome.prUrl} (branch ${prOutcome.branchName}).\n`,
+            );
+            acceptedCount += 1;
+            continue;
+          }
+          if (prOutcome && prOutcome.kind === "pr-failed") {
+            process.stdout.write(
+              `PR-creation failed (${prOutcome.reason}); falling back to queue.\n`,
+            );
+          }
+          // fall through to queue
         }
         const result = await acceptCandidate({
           pending: p,

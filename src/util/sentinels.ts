@@ -251,6 +251,52 @@ export function expireSentinelsInContent(
 }
 
 /**
+ * Drop sentinel blocks whose stable IDs match `stableIdsToDrop`. Stable IDs
+ * are computed via the supplied `deriveId` callback so this module doesn't
+ * need to import the lessonUtility hashing logic. Used by the prune-lessons
+ * CLI (#179 Phase 1, option C) to remove specifically-listed sections.
+ *
+ * Idempotent — re-applying with the same drop set on already-pruned content
+ * is a no-op.
+ */
+export function dropSentinelsByStableId(
+  content: string,
+  stableIdsToDrop: ReadonlySet<string>,
+  deriveId: (header: SentinelHeader) => string,
+): ExpireResult {
+  if (stableIdsToDrop.size === 0) return { content, droppedHeaders: [] };
+  const lines = content.split("\n");
+  const located = locateSentinels(lines);
+  if (located.length === 0) return { content, droppedHeaders: [] };
+
+  const dropIndices: number[] = [];
+  const dropped: SentinelHeader[] = [];
+  for (let i = 0; i < located.length; i++) {
+    const id = deriveId(located[i].header);
+    if (stableIdsToDrop.has(id)) {
+      dropIndices.push(i);
+      dropped.push(located[i].header);
+    }
+  }
+  if (dropIndices.length === 0) return { content, droppedHeaders: [] };
+
+  const dropSet = new Set(dropIndices);
+  const out: string[] = [];
+  for (let i = 0; i < located[0].startLine; i++) out.push(lines[i]);
+  for (let idx = 0; idx < located.length; idx++) {
+    const loc = located[idx];
+    if (dropSet.has(idx)) {
+      // Trim a single trailing blank line so the dropped block's leading
+      // blank doesn't survive the drop. Mirrors expireSentinelsInContent.
+      if (out.length > 0 && out[out.length - 1] === "") out.pop();
+      continue;
+    }
+    for (let i = loc.startLine; i < loc.endLine; i++) out.push(lines[i]);
+  }
+  return { content: out.join("\n"), droppedHeaders: dropped };
+}
+
+/**
  * Backward-compatible wrapper: drop expired `failure-lesson` blocks using
  * the legacy single-K rule. Delegates to `expireSentinelsInContent` with
  * the failure-lesson policy only.

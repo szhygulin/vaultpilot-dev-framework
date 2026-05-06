@@ -2,18 +2,25 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import {
+  checkLessonNovelty,
   deriveStableSectionId,
   extractCitedStableIds,
   extractPastIncidentDates,
+  findStaleSections,
   lessonUtilityPath,
   loadLessonUtility,
   recordIntroduction,
   recordMergeHistory,
   recordPushback,
   recordReinforcement,
+  resolveDedupJaccardMin,
   resolveJaccardMin,
+  DEFAULT_DEDUP_JACCARD_MIN,
+  DEFAULT_PRUNE_MIN_SIBLINGS_AFTER,
   DEFAULT_REINFORCEMENT_JACCARD_MIN,
   LESSON_UTILITY_SCHEMA_VERSION,
+  type AgentUtilityFile,
+  type SectionUtilityRecord,
 } from "./lessonUtility.js";
 
 // STATE_DIR is captured at module-load via path.resolve(process.cwd(),
@@ -347,4 +354,208 @@ test("extractCitedStableIds: returns empty on a CLAUDE.md with no attributable s
 test("lessonUtilityPath is under STATE_DIR", () => {
   const p = lessonUtilityPath("agent-916a");
   assert.match(p, /state[\\/]lesson-utility-agent-916a\.json$/);
+});
+
+// -----------------------------------------------------------------------
+// #179 Phase 1, option G — checkLessonNovelty
+// -----------------------------------------------------------------------
+
+test("checkLessonNovelty: empty CLAUDE.md → novel", () => {
+  const result = checkLessonNovelty({
+    heading: "Test rule",
+    body: "Test body",
+    claudeMd: "",
+  });
+  assert.equal(result.kind, "novel");
+});
+
+test("checkLessonNovelty: near-duplicate heading → duplicate", () => {
+  const claudeMd = [
+    "# Project rules",
+    "",
+    "<!-- run:run-A issue:#42 outcome:implement ts:2026-05-01T10:00:00Z -->",
+    "## Verify build before opening a PR",
+    "",
+    "Always run typecheck and tests before pushing.",
+    "",
+  ].join("\n");
+  // Same heading concept, different specific phrasing.
+  const result = checkLessonNovelty({
+    heading: "Verify build before opening a PR",
+    body: "Run typecheck and tests before pushing — catches obvious regressions.",
+    claudeMd,
+    jaccardMin: 0.5, // lower threshold to make the test deterministic
+  });
+  assert.equal(result.kind, "duplicate");
+  if (result.kind === "duplicate") {
+    assert.equal(result.matchedStableIds.length, 1);
+  }
+});
+
+test("checkLessonNovelty: semantically distinct candidate → novel", () => {
+  const claudeMd = [
+    "# Project rules",
+    "",
+    "<!-- run:run-A issue:#42 outcome:implement ts:2026-05-01T10:00:00Z -->",
+    "## Verify build before opening a PR",
+    "",
+    "Always run typecheck and tests before pushing.",
+    "",
+  ].join("\n");
+  const result = checkLessonNovelty({
+    heading: "Solana RPC drops transactions above 1.4M compute units",
+    body: "Stay under the CU ceiling for reliable inclusion.",
+    claudeMd,
+  });
+  assert.equal(result.kind, "novel");
+});
+
+test("resolveDedupJaccardMin: defaults + env override + invalid env", () => {
+  assert.equal(resolveDedupJaccardMin({}), DEFAULT_DEDUP_JACCARD_MIN);
+  assert.equal(resolveDedupJaccardMin({ VP_DEV_DEDUP_JACCARD_MIN: "0.7" }), 0.7);
+  assert.equal(
+    resolveDedupJaccardMin({ VP_DEV_DEDUP_JACCARD_MIN: "abc" }),
+    DEFAULT_DEDUP_JACCARD_MIN,
+  );
+  assert.equal(
+    resolveDedupJaccardMin({ VP_DEV_DEDUP_JACCARD_MIN: "1.5" }),
+    DEFAULT_DEDUP_JACCARD_MIN,
+  );
+});
+
+// -----------------------------------------------------------------------
+// #179 Phase 1, option C — findStaleSections
+// -----------------------------------------------------------------------
+
+function makeSection(opts: {
+  sectionId: string;
+  introducedAt: string;
+  reinforcementRuns?: string[];
+  pushbackRuns?: string[];
+}): SectionUtilityRecord {
+  return {
+    sectionId: opts.sectionId,
+    introducedRunId: `run-${opts.sectionId.slice(0, 6)}`,
+    introducedAt: opts.introducedAt,
+    reinforcementRuns: opts.reinforcementRuns ?? [],
+    pushbackRuns: opts.pushbackRuns ?? [],
+    pastIncidentDates: [],
+    crossReferenceCount: 0,
+  };
+}
+
+function makeUtilityFile(sections: SectionUtilityRecord[]): AgentUtilityFile {
+  return {
+    agentId: "test-agent",
+    schemaVersion: LESSON_UTILITY_SCHEMA_VERSION,
+    sections,
+    mergeHistory: [],
+  };
+}
+
+test("findStaleSections: empty file → empty", async () => {
+  const result = await findStaleSections({
+    agentId: "test-agent",
+    fileOverride: null,
+  });
+  assert.deepEqual(result, []);
+});
+
+test("findStaleSections: zero-reinforcement old section is stale", async () => {
+  // Section S0 is the oldest; all 11 others are newer. S0 has zero
+  // reinforcements → stale. The 11 newer ones haven't accumulated 10
+  // siblings-after yet, so they're not eligible.
+  const sections: SectionUtilityRecord[] = [
+    makeSection({ sectionId: "S0", introducedAt: "2026-04-01T00:00:00Z" }),
+  ];
+  for (let i = 1; i <= 11; i++) {
+    sections.push(
+      makeSection({
+        sectionId: `S${i}`,
+        introducedAt: `2026-04-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+        reinforcementRuns: [`run-${i}`], // each has 1 reinforcement → not stale even if eligible
+      }),
+    );
+  }
+  const result = await findStaleSections({
+    agentId: "test-agent",
+    fileOverride: makeUtilityFile(sections),
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].record.sectionId, "S0");
+  assert.equal(result[0].reason, "zero-reinforcement");
+  assert.equal(result[0].siblingsIntroducedAfter, 11);
+});
+
+test("findStaleSections: cool-off prevents pruning brand-new zero-reinforcement section", async () => {
+  // 5 sections, all zero-reinforcement. The youngest has 0 siblings-after
+  // → not eligible regardless. The oldest has 4 siblings-after, less than
+  // the default 10 → also not eligible.
+  const sections: SectionUtilityRecord[] = [];
+  for (let i = 0; i < 5; i++) {
+    sections.push(
+      makeSection({
+        sectionId: `S${i}`,
+        introducedAt: `2026-04-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+      }),
+    );
+  }
+  const result = await findStaleSections({
+    agentId: "test-agent",
+    fileOverride: makeUtilityFile(sections),
+  });
+  assert.deepEqual(result, []);
+});
+
+test("findStaleSections: pushback-dominant section is stale (bonus J)", async () => {
+  const sections: SectionUtilityRecord[] = [
+    makeSection({
+      sectionId: "S0",
+      introducedAt: "2026-04-01T00:00:00Z",
+      reinforcementRuns: ["run-r1"],
+      pushbackRuns: ["run-p1", "run-p2", "run-p3"], // 3 pushbacks > 1 reinforcement
+    }),
+  ];
+  for (let i = 1; i <= 11; i++) {
+    sections.push(
+      makeSection({
+        sectionId: `S${i}`,
+        introducedAt: `2026-04-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+        reinforcementRuns: [`run-${i}`],
+      }),
+    );
+  }
+  const result = await findStaleSections({
+    agentId: "test-agent",
+    fileOverride: makeUtilityFile(sections),
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].record.sectionId, "S0");
+  assert.equal(result[0].reason, "pushback-dominant");
+});
+
+test("findStaleSections: minSiblingsAfter override loosens cool-off", async () => {
+  const sections: SectionUtilityRecord[] = [];
+  for (let i = 0; i < 5; i++) {
+    sections.push(
+      makeSection({
+        sectionId: `S${i}`,
+        introducedAt: `2026-04-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+      }),
+    );
+  }
+  const result = await findStaleSections({
+    agentId: "test-agent",
+    fileOverride: makeUtilityFile(sections),
+    minSiblingsAfter: 2,
+  });
+  // S0 (4 after), S1 (3 after), S2 (2 after) all eligible at threshold 2;
+  // all zero-reinforcement → all flagged.
+  assert.equal(result.length, 3);
+  const ids = result.map((r) => r.record.sectionId).sort();
+  assert.deepEqual(ids, ["S0", "S1", "S2"]);
+});
+
+test("DEFAULT_PRUNE_MIN_SIBLINGS_AFTER is the documented default", () => {
+  assert.equal(DEFAULT_PRUNE_MIN_SIBLINGS_AFTER, 10);
 });

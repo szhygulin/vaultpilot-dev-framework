@@ -370,6 +370,31 @@ export function buildCli(): Command {
         }),
     )
     .addCommand(
+      new Command("prune-lessons")
+        .description(
+          "Propose removal of stale sections from an agent's CLAUDE.md (#179 Phase 1, option C). Uses utility-scoring data already collected by #178: drops sections with zero reinforcementRuns OR pushbackRuns > reinforcementRuns, after a cool-off of N later siblings. With --apply: mint a confirm token (15-min TTL); with --confirm <token>: perform the destructive rewrite under the per-file lock. Two-step pattern mirrors compact-claude-md.",
+        )
+        .argument("<agentId>", "Agent to inspect (e.g. agent-916a)")
+        .option("--json", "Print machine-readable JSON")
+        .option(
+          "--min-siblings-after <n>",
+          "Cool-off: a section is eligible only if at least this many other sections were introduced after it (default 10).",
+          parsePositive,
+          10,
+        )
+        .option(
+          "--apply",
+          "Compute the proposal AND mint a confirm token under state/lesson-prune-confirm-<token>.json (15-min TTL). Re-invoke with --confirm <token> to perform the rewrite.",
+        )
+        .option(
+          "--confirm <token>",
+          "Apply the proposal recorded in the named token, after re-validating against the live file content.",
+        )
+        .action(async (agentId, opts) => {
+          await cmdAgentsPruneLessons(agentId, opts);
+        }),
+    )
+    .addCommand(
       new Command("stats")
         .description("Per-agent rollup of PR outcomes (merge rate, median rework, median CI cycles).")
         .option("--json", "Print machine-readable JSON")
@@ -2251,6 +2276,114 @@ async function cmdAgentsCompactClaudeMdConfirm(
       `  ${(result.bytesBefore / 1024).toFixed(1)}KB -> ${(result.bytesAfter / 1024).toFixed(1)}KB ` +
       `(${result.clustersApplied} cluster(s), ${result.sectionsMerged} sections merged)\n` +
       `  merge runId: ${result.runId}\n`,
+  );
+}
+
+interface AgentsPruneLessonsOpts {
+  json?: boolean;
+  minSiblingsAfter: number;
+  apply?: boolean;
+  confirm?: string;
+}
+
+async function cmdAgentsPruneLessons(
+  agentId: string,
+  opts: AgentsPruneLessonsOpts,
+): Promise<void> {
+  const {
+    proposeLessonPrune,
+    formatLessonPruneProposal,
+    computePruneProposalHash,
+    applyLessonPrune,
+  } = await import("./agent/lessonPrune.js");
+  const {
+    mintToken,
+    writeLessonPruneConfirmToken,
+    readLessonPruneConfirmToken,
+    deleteLessonPruneConfirmToken,
+  } = await import("./state/lessonPruneConfirm.js");
+  const { agentClaudeMdPath } = await import("./agent/specialization.js");
+
+  if (opts.confirm) {
+    const tokenResult = await readLessonPruneConfirmToken(opts.confirm);
+    if (!tokenResult.ok) {
+      process.stderr.write(`ERROR: ${tokenResult.message}\n`);
+      process.exit(2);
+    }
+    const { record } = tokenResult;
+    if (record.agentId !== agentId) {
+      process.stderr.write(
+        `ERROR: token ${opts.confirm} is bound to ${record.agentId}, not ${agentId}.\n`,
+      );
+      process.exit(2);
+    }
+    const result = await applyLessonPrune({
+      agentId,
+      proposal: record.proposal,
+      expectedProposalHash: record.proposalHash,
+    });
+    if (result.kind === "drift-rejected") {
+      process.stderr.write(`ERROR: ${result.details}\n`);
+      process.exit(2);
+    }
+    await deleteLessonPruneConfirmToken(opts.confirm);
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, token: opts.confirm, result }, null, 2) + "\n",
+      );
+      return;
+    }
+    process.stdout.write(
+      `Pruned ${agentId}/CLAUDE.md\n` +
+        `  ${(result.bytesBefore / 1024).toFixed(1)}KB -> ${(result.bytesAfter / 1024).toFixed(1)}KB ` +
+        `(${result.sectionsDropped} section(s) dropped)\n`,
+    );
+    return;
+  }
+
+  const proposal = await proposeLessonPrune({
+    agentId,
+    minSiblingsAfter: opts.minSiblingsAfter,
+  });
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(proposal, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write(formatLessonPruneProposal(proposal) + "\n");
+
+  if (!opts.apply) return;
+
+  if (proposal.pruned.length === 0) {
+    process.stdout.write(
+      "Nothing to prune; no token minted.\n",
+    );
+    return;
+  }
+
+  // Compute hash from the live file (the proposal hash binds plan-time bytes
+  // to the listed stable IDs; any drift between plan and confirm rejects).
+  let currentFile = "";
+  try {
+    currentFile = await fs.readFile(agentClaudeMdPath(agentId), "utf-8");
+  } catch {
+    process.stderr.write(
+      `ERROR: agents/${agentId}/CLAUDE.md is missing; cannot mint a token.\n`,
+    );
+    process.exit(2);
+  }
+  const proposalHash = computePruneProposalHash(proposal, currentFile);
+  const token = mintToken();
+  await writeLessonPruneConfirmToken({
+    token,
+    agentId,
+    proposal,
+    proposalHash,
+  });
+  process.stdout.write(
+    `\nConfirm token: ${token} (15-min TTL, written to state/lesson-prune-confirm-${token}.json)\n` +
+      `Apply with:    vp-dev agents prune-lessons ${agentId} --confirm ${token}\n`,
   );
 }
 

@@ -93,6 +93,22 @@ test("recordIntroduction: creates a fresh record when file is absent", async () 
     assert.deepEqual(sec.pastIncidentDates, ["2026-05-06"]);
     assert.equal(sec.crossReferenceCount, 0);
     assert.deepEqual(sec.reinforcementRuns, []);
+    assert.equal(sec.predictedUtility, undefined);
+  });
+});
+
+test("recordIntroduction: persists predictedUtility when provided", async () => {
+  await withTestAgent(async (agentId) => {
+    await recordIntroduction({
+      agentId,
+      runId: "run-1",
+      issueId: 178,
+      body: "specific incident 2026-05-06",
+      ts: "2026-05-06T10:00:00.000Z",
+      predictedUtility: 0.8,
+    });
+    const file = await loadLessonUtility(agentId);
+    assert.equal(file?.sections[0].predictedUtility, 0.8);
   });
 });
 

@@ -25,6 +25,17 @@ export const SummarizerOutputSchema = z.object({
   skipReason: z.string().optional(),
   heading: z.string().min(3).max(HEADING_MAX).optional(),
   body: z.string().min(3).max(BODY_MAX).optional(),
+  // #179 Phase 2 (option B from the cost/benefit menu, shipped early as a
+  // half-ready-curve data probe): the LLM's self-rating of how much
+  // future-leverage the lesson carries. 0 = restates an existing rule or
+  // captures a generic platitude; 1 = names a specific past failure with
+  // date/PR/file path that the agent would otherwise repeat. Optional for
+  // back-compat with summarizer responses pre-this-change; missing field
+  // means the gate in `runIssueCore.maybeAppendSummary` lets the lesson
+  // through (no signal to act on). Persisted into
+  // `SectionUtilityRecord.predictedUtility` so post-hoc analysis can
+  // correlate self-ratings with actual reinforcement.
+  predictedUtility: z.number().min(0).max(1).optional(),
 });
 export type SummarizerOutput = z.infer<typeof SummarizerOutputSchema>;
 
@@ -253,8 +264,17 @@ Hard rules:
 - Do NOT mention the specific issue number, PR number, or run id — that's in the provenance comment. Talk about the class of situation, not this instance.
 - Inside heading / body / skipReason string values: escape every double-quote as \\" and every literal newline as \\n. Do NOT escape apostrophes — \\' is INVALID JSON (the parser only knows \\", \\\\, \\/, \\b, \\f, \\n, \\r, \\t, \\uXXXX). Write apostrophes as a plain ': don't, isn't, can't. Prefer single-quote ' or backticks for emphasis when the alternative is acceptable.
 
-Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Use \`{"skip": false, "heading": "...", "body": "..."}\` when there is a lesson worth saving, and \`{"skip": true, "skipReason": "..."}\` otherwise. Schema:
-  {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
+Predicted-utility self-rating (issue #179, half-ready-curve probe):
+- For every non-skip emission, ALSO emit \`predictedUtility\` — a number in [0, 1] estimating how much future-leverage the lesson carries. The harness uses this to decide whether the lesson's expected benefit justifies the byte-cost in the cost-transparency line above; it gets persisted so the operator can later correlate self-ratings with whether the lesson actually fired (got reinforced by future runs).
+- Calibration:
+  - 0.0–0.2: restates an existing rule; generic platitude ("verify before merging"); applies-to-everything; adds little beyond rules already in the file.
+  - 0.3–0.5: useful but partially redundant or could be inferred from existing sections; modest sharpening of an already-known principle.
+  - 0.6–0.8: introduces a specific rule with a named failure mode the agent has hit before or would hit again; cites concrete files / tools / protocols.
+  - 0.9–1.0: names a specific past incident (date / PR / file path / function name) with a concrete failure mode the agent would otherwise repeat; high-leverage rule with narrow tells.
+- Be calibrated, not generous. A field full of 0.8s is useless for tuning. If you'd skip the lesson under the cost-transparency line above, mark it 0.1–0.3 instead of inflating.
+
+Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Use \`{"skip": false, "heading": "...", "body": "...", "predictedUtility": 0.X}\` when there is a lesson worth saving, and \`{"skip": true, "skipReason": "..."}\` otherwise. Schema:
+  {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string, "predictedUtility"?: number}`;
 
 const FAILURE_SUMMARIZER_SYSTEM_PROMPT = `You are a distillation agent. A coding agent JUST FAILED on a single GitHub issue — CI red after retry, agent gave up, envelope decision="error", or the SDK crashed mid-run after producing partial work. Your job is to extract the highest-signal failure lesson worth committing to the agent's CLAUDE.md.
 
@@ -278,6 +298,13 @@ Cross-agent promotion (optional, gated by human review):
 - Cap the wrapped content at ~40 non-empty lines / ~1500 chars.
 - Promote-candidates are queued for human review; they do NOT auto-promote. The human reviewer rejects noise.
 
+Predicted-utility self-rating (issue #179, half-ready-curve probe):
+- For every non-skip failure-lesson emission, ALSO emit \`predictedUtility\` — a number in [0, 1] estimating how much future-leverage the lesson carries. Failure lessons skew higher than success lessons because they capture signal that's normally lost; calibration:
+  - 0.0–0.3: agent burned turns on a one-off configuration quirk; lesson is "this run was unlucky"; nothing repeatable.
+  - 0.4–0.7: lesson names a specific tooling / SDK / protocol shape the agent didn't anticipate but a sibling agent would.
+  - 0.8–1.0: lesson names a structural fact (with concrete file path / function / protocol field) that prevents the same failure mode on the next similar issue. Strong candidate for cross-agent promotion if wrapped.
+- Be calibrated, not generous. The harness gates appends on this score; inflating it wastes the byte-budget on weak lessons.
+
 Hard rules:
 - If the failure was genuinely uninformative (single ambiguous error string, no agent reasoning, no clear missed assumption), emit \`{"skip": true, "skipReason": "<one short sentence>"}\`. Wrong-lesson risk beats noisy-lesson risk.
 - Heading: ≤ 120 chars, no trailing colon, no markdown prefix (no leading "##"). The append step prepends "##".
@@ -286,7 +313,7 @@ Hard rules:
 - Inside heading / body / skipReason string values: escape every double-quote as \\" and every literal newline as \\n. Do NOT escape apostrophes — \\' is INVALID JSON. Write apostrophes as a plain ': don't, isn't, can't.
 
 Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Schema:
-  {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
+  {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string, "predictedUtility"?: number}`;
 
 export function buildFailurePrompt(input: FailureSummarizerInput): string {
   const trace = input.toolUseTrace
@@ -328,7 +355,7 @@ Agent's final reasoning text (truncated):
 ${truncate(input.finalText, 4000)}
 ${costLine}
 
-Decide: is there a generalizable failure lesson worth committing to this agent's CLAUDE.md? Lean toward yes — failure-mode runs exist to capture signal that success-mode discards. If yes, emit {"skip": false, "heading": "...", "body": "..."}. If the failure is genuinely opaque, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only — escape every \\" inside string values.`;
+Decide: is there a generalizable failure lesson worth committing to this agent's CLAUDE.md? Lean toward yes — failure-mode runs exist to capture signal that success-mode discards. If yes, emit {"skip": false, "heading": "...", "body": "...", "predictedUtility": 0.X}. If the failure is genuinely opaque, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes; predictedUtility is mandatory whenever skip=false. JSON only — escape every \\" inside string values.`;
 }
 
 export function buildPrompt(input: SummarizerInput): string {
@@ -362,7 +389,7 @@ Agent's final reasoning text (truncated):
 ${truncate(input.finalText, 4000)}
 ${costLine}
 
-Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md? If yes, emit {"skip": false, "heading": "...", "body": "..."}. If no, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only — escape every \\" inside string values.`;
+Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md? If yes, emit {"skip": false, "heading": "...", "body": "...", "predictedUtility": 0.X}. If no, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes; predictedUtility is mandatory whenever skip=false. JSON only — escape every \\" inside string values.`;
 }
 
 function truncate(s: string, max: number): string {

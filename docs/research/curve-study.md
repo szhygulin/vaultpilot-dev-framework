@@ -90,12 +90,31 @@ OLS polynomial regression degree. Default `2` (quadratic — fits the expected c
     "n": 10,
     "rss": ...,
     "tss": ...,
-    "rSquared": 0.94
+    "rSquared": 0.94,
+    "rSquaredAdjusted": 0.92,
+    "significance": {
+      "fStatistic": 41.7,
+      "fDfRegression": 2,
+      "fDfResidual": 7,
+      "fPValue": 1.3e-4,
+      "coefficients": [
+        { "estimate": ..., "standardError": ..., "tStatistic": ..., "pValue": ... }
+      ],
+      "residualStdError": ...
+    }
   }
 }
 ```
 
-The operator copies `samples` into `CONTEXT_COST_SAMPLES` in `src/util/contextCostCurve.ts`, updates the provenance comment with the model version + specialty + R², and commits. The runtime regression is re-fitted from `CONTEXT_COST_SAMPLES` on first `contextCostFactor()` call — coefficients aren't pasted into source.
+The operator copies `samples` into `CONTEXT_COST_SAMPLES` in `src/util/contextCostCurve.ts`, updates the provenance comment with the model version + specialty + R² + F-test p-value, and commits. The runtime regression is re-fitted from `CONTEXT_COST_SAMPLES` on first `contextCostFactor()` call — coefficients aren't pasted into source.
+
+### Reading significance
+
+- `significance.fPValue` — overall F-test against the intercept-only null. Below 0.05 means the regression is more than chance; above means the curve isn't doing meaningful work and the operator should either gather more samples or drop a degree.
+- `significance.coefficients[i].pValue` — two-sided t-test on coefficient `i`. The highest-degree term's p-value tells you whether the curvature is real. If `coefficients[2].pValue > 0.1` at degree 2, a linear fit (degree 1) likely captures everything.
+- `rSquaredAdjusted` — R² penalized for degree. Compare across degrees rather than raw R² to avoid favoring higher-degree fits that just memorize noise.
+
+The CLI prints a `WARNING: overall F-test p-value > 0.05 …` line when the fit isn't statistically significant; downstream callers can read `significance` directly off `getContextCostRegression()`.
 
 ## Cost & wall time
 

@@ -3142,7 +3142,18 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
   process.stdout.write(`\nDone. ${result.cells.length} cells, $${result.totalCostUsd.toFixed(2)}, ${(result.wallMs / 60000).toFixed(1)}min.\n`);
   process.stdout.write(`Mode: ${result.mode}. Proposal written to ${opts.output}.\n`);
   if (result.regression) {
-    process.stdout.write(`\nRegression (degree=${result.regression.degree}, n=${result.regression.n}, R²=${result.regression.rSquared.toFixed(3)}).\n`);
+    const r = result.regression;
+    const sig = r.significance;
+    const adj = Number.isFinite(r.rSquaredAdjusted) ? r.rSquaredAdjusted.toFixed(3) : "n/a";
+    const fp = Number.isFinite(sig.fPValue) ? sig.fPValue.toExponential(2) : "n/a";
+    process.stdout.write(
+      `\nRegression (degree=${r.degree}, n=${r.n}, R²=${r.rSquared.toFixed(3)}, adj-R²=${adj}, F(${sig.fDfRegression},${sig.fDfResidual})=${Number.isFinite(sig.fStatistic) ? sig.fStatistic.toFixed(2) : "n/a"}, p=${fp}).\n`,
+    );
+    if (Number.isFinite(sig.fPValue) && sig.fPValue > 0.05) {
+      process.stdout.write(
+        `WARNING: overall F-test p-value > 0.05 — fit is not statistically significant; consider more samples or fewer degree.\n`,
+      );
+    }
     process.stdout.write(`Samples to hand-merge into CONTEXT_COST_SAMPLES (src/util/contextCostCurve.ts):\n`);
     for (const s of result.samples) {
       process.stdout.write(`  { xBytes: ${s.xBytes}, factor: ${s.factor.toFixed(3)} },\n`);

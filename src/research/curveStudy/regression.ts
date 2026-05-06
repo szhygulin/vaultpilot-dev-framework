@@ -1,4 +1,5 @@
 import type { CurveSample } from "./types.js";
+import { fRightTailPValue, tTwoSidedPValue } from "./stats.js";
 
 /**
  * Result of an ordinary-least-squares polynomial regression. Coefficients are
@@ -26,6 +27,81 @@ export interface PolynomialRegression {
   tss: number;
   /** Coefficient of determination, 1 − rss/tss. NaN if tss=0 (all y identical). */
   rSquared: number;
+  /** Adjusted R² = 1 − (rss/(n−p)) / (tss/(n−1)), p = degree+1. NaN when n ≤ p. */
+  rSquaredAdjusted: number;
+  /** Statistical significance of the fit — overall F-test + per-coefficient t-tests. */
+  significance: RegressionSignificance;
+}
+
+export interface RegressionSignificance {
+  /** Overall F-statistic vs intercept-only null model. */
+  fStatistic: number;
+  /** F-test numerator df = degree (number of non-intercept regressors). */
+  fDfRegression: number;
+  /** F-test denominator df = n − degree − 1. */
+  fDfResidual: number;
+  /** Right-tail F p-value. NaN when df ≤ 0 or tss = 0. */
+  fPValue: number;
+  /** Per-coefficient inference. Index i corresponds to coefficients[i] (the x'^i term). */
+  coefficients: ReadonlyArray<{
+    estimate: number;
+    standardError: number;
+    tStatistic: number;
+    /** Two-sided t p-value. NaN when residual df ≤ 0. */
+    pValue: number;
+  }>;
+  /** Residual standard error, σ̂ = √(rss / (n − p)). NaN when n ≤ p. */
+  residualStdError: number;
+}
+
+/** Deep copy of a square matrix for in-place algorithms that don't want to mutate the input. */
+function cloneMatrix(A: ReadonlyArray<ReadonlyArray<number>>): number[][] {
+  return A.map((row) => [...row]);
+}
+
+/**
+ * Inverse of a small square matrix via Gauss–Jordan elimination with partial
+ * pivoting. Used to extract Var(β̂) = σ̂² · (XᵀX)⁻¹ for coefficient SEs.
+ */
+function inverseMatrix(A: ReadonlyArray<ReadonlyArray<number>>): number[][] {
+  const n = A.length;
+  const M = cloneMatrix(A);
+  const I: number[][] = Array.from({ length: n }, (_, i) =>
+    Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)),
+  );
+  for (let i = 0; i < n; i++) {
+    let pivot = i;
+    let pivotAbs = Math.abs(M[i][i]);
+    for (let k = i + 1; k < n; k++) {
+      const v = Math.abs(M[k][i]);
+      if (v > pivotAbs) {
+        pivotAbs = v;
+        pivot = k;
+      }
+    }
+    if (pivotAbs < 1e-12) {
+      throw new Error("inverseMatrix: singular");
+    }
+    if (pivot !== i) {
+      [M[i], M[pivot]] = [M[pivot], M[i]];
+      [I[i], I[pivot]] = [I[pivot], I[i]];
+    }
+    const div = M[i][i];
+    for (let j = 0; j < n; j++) {
+      M[i][j] /= div;
+      I[i][j] /= div;
+    }
+    for (let k = 0; k < n; k++) {
+      if (k === i) continue;
+      const factor = M[k][i];
+      if (factor === 0) continue;
+      for (let j = 0; j < n; j++) {
+        M[k][j] -= factor * M[i][j];
+        I[k][j] -= factor * I[i][j];
+      }
+    }
+  }
+  return I;
 }
 
 /**
@@ -112,6 +188,8 @@ export function fitPolynomialRegression(
       XtY[r] += powers[r] * ys[i];
     }
   }
+  // Snapshot XtX BEFORE solveLinearSystem mutates it — we need it for SE(β̂).
+  const XtXFrozen: number[][] = XtX.map((r) => [...r]);
   const coefficients = solveLinearSystem(XtX, XtY);
 
   // Compute residuals + R²
@@ -131,7 +209,67 @@ export function fitPolynomialRegression(
     tss += (ys[i] - yMean) ** 2;
   }
   const rSquared = tss === 0 ? Number.NaN : 1 - rss / tss;
-  return { degree, coefficients, xMean, xStd, n, rss, tss, rSquared };
+  const dfResidual = n - m;
+  const rSquaredAdjusted =
+    dfResidual <= 0 || tss === 0
+      ? Number.NaN
+      : 1 - (rss / dfResidual) / (tss / (n - 1));
+
+  // Significance:
+  //   F-test: F = ((tss − rss)/degree) / (rss/(n − degree − 1))
+  //   t-test: SE_i = √(σ̂² · (XᵀX)⁻¹_ii); t_i = β̂_i / SE_i
+  let fStatistic = Number.NaN;
+  let fPValue = Number.NaN;
+  let residualStdError = Number.NaN;
+  let coefStats: RegressionSignificance["coefficients"] = coefficients.map((est) => ({
+    estimate: est,
+    standardError: Number.NaN,
+    tStatistic: Number.NaN,
+    pValue: Number.NaN,
+  }));
+  if (dfResidual > 0 && tss > 0) {
+    const sigmaSq = rss / dfResidual;
+    residualStdError = Math.sqrt(sigmaSq);
+    if (degree >= 1) {
+      fStatistic = ((tss - rss) / degree) / sigmaSq;
+      fPValue = fRightTailPValue(fStatistic, degree, dfResidual);
+    }
+    try {
+      const inv = inverseMatrix(XtXFrozen);
+      coefStats = coefficients.map((est, i) => {
+        const variance = sigmaSq * inv[i][i];
+        const se = variance > 0 ? Math.sqrt(variance) : Number.NaN;
+        const tStat = se > 0 && Number.isFinite(se) ? est / se : Number.NaN;
+        const pValue = Number.isFinite(tStat)
+          ? tTwoSidedPValue(tStat, dfResidual)
+          : Number.NaN;
+        return { estimate: est, standardError: se, tStatistic: tStat, pValue };
+      });
+    } catch {
+      // Singular XtX (collinear regressors at this degree) — leave SEs as NaN
+    }
+  }
+  const significance: RegressionSignificance = {
+    fStatistic,
+    fDfRegression: degree,
+    fDfResidual: Math.max(0, dfResidual),
+    fPValue,
+    coefficients: coefStats,
+    residualStdError,
+  };
+
+  return {
+    degree,
+    coefficients,
+    xMean,
+    xStd,
+    n,
+    rss,
+    tss,
+    rSquared,
+    rSquaredAdjusted,
+    significance,
+  };
 }
 
 /** Evaluate the regression at raw `xBytes`. Reverses internal normalization. */

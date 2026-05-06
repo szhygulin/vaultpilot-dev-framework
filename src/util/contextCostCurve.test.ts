@@ -21,6 +21,17 @@ test("getContextCostRegression: degree 2, R² above 0.9 on the seeded samples", 
   assert.ok(reg.rSquared > 0.9, `R²=${reg.rSquared}`);
 });
 
+test("getContextCostRegression: significance fields populated and finite", () => {
+  resetContextCostCurveCache();
+  const reg = getContextCostRegression();
+  const sig = reg.significance;
+  assert.ok(Number.isFinite(sig.fStatistic), `F=${sig.fStatistic}`);
+  assert.ok(Number.isFinite(sig.fPValue), `F p-value=${sig.fPValue}`);
+  assert.equal(sig.coefficients.length, reg.degree + 1);
+  assert.equal(sig.fDfRegression, reg.degree);
+  assert.equal(sig.fDfResidual, reg.n - reg.degree - 1);
+});
+
 test("contextCostFactor: returns >= 1 across the full sample range", () => {
   resetContextCostCurveCache();
   const xs = CONTEXT_COST_SAMPLES.map((s) => s.xBytes);

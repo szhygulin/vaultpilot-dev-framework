@@ -45,11 +45,14 @@ export const TOKEN_COST_SAMPLES: ReadonlyArray<CurveSample> = [
 ];
 
 /**
- * Polynomial degree for the regression fit on each curve. Degree 2 (quadratic)
- * is the default — fits the expected concave-up shape (factor accelerates
- * with size) without overfitting at typical sample counts (≤ 10).
+ * Regression form for the curve fit. Linear-log (degree 1, x→log(x)) is the
+ * default per #179 leg-1 finding: linear-log beat poly2-raw on both curves
+ * (accuracy p=0.097 vs 0.111, token-cost p=0.176 vs 0.404 at n=18) and uses
+ * one fewer parameter, so degrees-of-freedom remain comfortable at the
+ * sample counts typical for this study (n ≤ 20).
  */
-export const CONTEXT_COST_REGRESSION_DEGREE = 2;
+export const CONTEXT_COST_REGRESSION_DEGREE = 1;
+export const CONTEXT_COST_REGRESSION_X_TRANSFORM: "identity" | "log" = "log";
 
 /**
  * Default weights for {@link contextCostFactor}. Composite is
@@ -71,6 +74,7 @@ function getAccuracy(): PolynomialRegression {
     cachedAccuracy = fitPolynomialRegression(
       [...ACCURACY_DEGRADATION_SAMPLES],
       CONTEXT_COST_REGRESSION_DEGREE,
+      CONTEXT_COST_REGRESSION_X_TRANSFORM,
     );
   }
   return cachedAccuracy;
@@ -81,6 +85,7 @@ function getTokenCost(): PolynomialRegression {
     cachedTokenCost = fitPolynomialRegression(
       [...TOKEN_COST_SAMPLES],
       CONTEXT_COST_REGRESSION_DEGREE,
+      CONTEXT_COST_REGRESSION_X_TRANSFORM,
     );
   }
   return cachedTokenCost;

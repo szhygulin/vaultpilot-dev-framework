@@ -148,5 +148,6 @@ Plus tooling:
 
 **Future**
 
+- **K=13 follow-up** (variance reduction without changing curve shape): phase 3's K=3 produces a coarse y-axis grid because each agent only sees 6 issues — quality scores cluster on a tiny set of distinct ratios (leg 1 saw 16/18 agents at q ∈ {0.667, 0.733}, only 2 at 0.45). Scaling to K=13 (or running both legs on every agent so each agent sees 13 issues) makes the y-axis effectively continuous. Cheaper than running the full leg 2 if that fails to clear p — re-dispatch the same 18 agents against an additional ~7 fresh issues per repo. Past data 2026-05-06: leg 1 (vp-mcp, K=6/agent, linear-log) gave accuracy p=0.097 with the two `s10*029` outliers in; leave-them-out drops p to 2.76e-4 (R²=0.62). K=13 dilutes outlier leverage from 1/3 to 1/13 of each size's cells, so the same signal should clear p<0.05 organically. Within-agent K is the single biggest leverage on variance.
 - **Phase 4** (if phase 3 produces a significant fit): harder issue set (curated cross-repo selection rather than "all open"), larger K (5–7), wider size range (4KB–80KB).
 - **Phase 5** (if phase 3 quality signal is still flat): switch the y-variable to `tokenCostFactor` only (drop the quality dimension), accept that quality is unmeasurable at the model+specialty's current capability ceiling for this issue class.

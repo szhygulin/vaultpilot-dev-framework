@@ -1,0 +1,150 @@
+{
+  "generatedAt": "2026-05-06T08:04:35.514Z",
+  "basis": "mean cost per implemented cell, anchored at min",
+  "samples": [
+    {
+      "xBytes": 6140,
+      "factor": 1.0818565056694174
+    },
+    {
+      "xBytes": 10255,
+      "factor": 1.2943008505026201
+    },
+    {
+      "xBytes": 14300,
+      "factor": 1
+    },
+    {
+      "xBytes": 18085,
+      "factor": 1.1580181878817501
+    },
+    {
+      "xBytes": 22026,
+      "factor": 1.008623827713761
+    },
+    {
+      "xBytes": 28911,
+      "factor": 1.0207684209437822
+    },
+    {
+      "xBytes": 35047,
+      "factor": 1.2850279618281357
+    },
+    {
+      "xBytes": 43091,
+      "factor": 1.3661863367691076
+    },
+    {
+      "xBytes": 50801,
+      "factor": 1.3219877020395405
+    },
+    {
+      "xBytes": 58654,
+      "factor": 1.3499672487379057
+    }
+  ],
+  "regression": {
+    "degree": 2,
+    "coefficients": [
+      1.1502229810801985,
+      0.07780613948827608,
+      0.03845072312840379
+    ],
+    "xMean": 28731,
+    "xStd": 16872.66619120997,
+    "n": 10,
+    "rss": 0.10791987558764828,
+    "tss": 0.20429778465755183,
+    "rSquared": 0.4717521006478568,
+    "rSquaredAdjusted": 0.3208241294043873,
+    "significance": {
+      "fStatistic": 3.1256770813333845,
+      "fDfRegression": 2,
+      "fDfResidual": 7,
+      "fPValue": 0.10713521005357218,
+      "coefficients": [
+        {
+          "estimate": 1.1502229810801985,
+          "standardError": 0.0605284526767679,
+          "tStatistic": 19.003013132065053,
+          "pValue": 2.780176999147999e-7
+        },
+        {
+          "estimate": 0.07780613948827608,
+          "standardError": 0.04304978313056006,
+          "tStatistic": 1.8073526468718324,
+          "pValue": 0.11365454494914363
+        },
+        {
+          "estimate": 0.03845072312840379,
+          "standardError": 0.04606496580969919,
+          "tStatistic": 0.8347064293339346,
+          "pValue": 0.4314444582563879
+        }
+      ],
+      "residualStdError": 0.12416571621808394
+    }
+  },
+  "perAgent": [
+    {
+      "agentId": "agent-9180",
+      "xBytes": 6140,
+      "meanCost": 4.655657500000001,
+      "n": 2
+    },
+    {
+      "agentId": "agent-9181",
+      "xBytes": 10255,
+      "meanCost": 5.569889749999998,
+      "n": 2
+    },
+    {
+      "agentId": "agent-9182",
+      "xBytes": 14300,
+      "meanCost": 4.3033965,
+      "n": 3
+    },
+    {
+      "agentId": "agent-9183",
+      "xBytes": 18085,
+      "meanCost": 4.983411416666666,
+      "n": 3
+    },
+    {
+      "agentId": "agent-9184",
+      "xBytes": 22026,
+      "meanCost": 4.340508250000002,
+      "n": 3
+    },
+    {
+      "agentId": "agent-9185",
+      "xBytes": 28911,
+      "meanCost": 4.392771249999999,
+      "n": 3
+    },
+    {
+      "agentId": "agent-9186",
+      "xBytes": 35047,
+      "meanCost": 5.529984833333333,
+      "n": 3
+    },
+    {
+      "agentId": "agent-9187",
+      "xBytes": 43091,
+      "meanCost": 5.879241499999999,
+      "n": 3
+    },
+    {
+      "agentId": "agent-9188",
+      "xBytes": 50801,
+      "meanCost": 5.689037250000001,
+      "n": 3
+    },
+    {
+      "agentId": "agent-9189",
+      "xBytes": 58654,
+      "meanCost": 5.8094443333333325,
+      "n": 3
+    }
+  ]
+}

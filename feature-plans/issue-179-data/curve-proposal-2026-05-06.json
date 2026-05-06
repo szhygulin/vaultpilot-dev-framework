@@ -1,0 +1,308 @@
+{
+  "generatedAt": "2026-05-06T08:03:55.430Z",
+  "mode": "replace",
+  "replaceMode": {
+    "samples": [
+      {
+        "xBytes": 6140,
+        "factor": 1
+      },
+      {
+        "xBytes": 10255,
+        "factor": 1
+      },
+      {
+        "xBytes": 14300,
+        "factor": 1
+      },
+      {
+        "xBytes": 18085,
+        "factor": 1
+      },
+      {
+        "xBytes": 22026,
+        "factor": 1
+      },
+      {
+        "xBytes": 28911,
+        "factor": 1
+      },
+      {
+        "xBytes": 35047,
+        "factor": 1
+      },
+      {
+        "xBytes": 43091,
+        "factor": 1
+      },
+      {
+        "xBytes": 50801,
+        "factor": 1
+      },
+      {
+        "xBytes": 58654,
+        "factor": 1
+      }
+    ],
+    "regression": {
+      "degree": 2,
+      "coefficients": [
+        1,
+        0,
+        0
+      ],
+      "xMean": 28731,
+      "xStd": 16872.66619120997,
+      "n": 10,
+      "rss": 0,
+      "tss": 0,
+      "rSquared": null,
+      "rSquaredAdjusted": null,
+      "significance": {
+        "fStatistic": null,
+        "fDfRegression": 2,
+        "fDfResidual": 7,
+        "fPValue": null,
+        "coefficients": [
+          {
+            "estimate": 1,
+            "standardError": null,
+            "tStatistic": null,
+            "pValue": null
+          },
+          {
+            "estimate": 0,
+            "standardError": null,
+            "tStatistic": null,
+            "pValue": null
+          },
+          {
+            "estimate": 0,
+            "standardError": null,
+            "tStatistic": null,
+            "pValue": null
+          }
+        ],
+        "residualStdError": null
+      }
+    }
+  },
+  "updateMode": {
+    "samples": [
+      {
+        "xBytes": 6140,
+        "factor": 1
+      },
+      {
+        "xBytes": 8192,
+        "factor": 1
+      },
+      {
+        "xBytes": 10255,
+        "factor": 1
+      },
+      {
+        "xBytes": 14300,
+        "factor": 1
+      },
+      {
+        "xBytes": 16384,
+        "factor": 1.2
+      },
+      {
+        "xBytes": 18085,
+        "factor": 1
+      },
+      {
+        "xBytes": 22026,
+        "factor": 1
+      },
+      {
+        "xBytes": 28911,
+        "factor": 1
+      },
+      {
+        "xBytes": 32768,
+        "factor": 2.5
+      },
+      {
+        "xBytes": 35047,
+        "factor": 1
+      },
+      {
+        "xBytes": 43091,
+        "factor": 1
+      },
+      {
+        "xBytes": 49152,
+        "factor": 4
+      },
+      {
+        "xBytes": 50801,
+        "factor": 1
+      },
+      {
+        "xBytes": 58654,
+        "factor": 1
+      },
+      {
+        "xBytes": 65536,
+        "factor": 6
+      }
+    ],
+    "regression": {
+      "degree": 2,
+      "coefficients": [
+        1.0693211651914702,
+        0.6058450642251736,
+        0.5773455014751964
+      ],
+      "xMean": 30622.8,
+      "xStd": 18538.979836010392,
+      "n": 15,
+      "rss": 16.036301440577184,
+      "tss": 30.017333333333337,
+      "rSquared": 0.4657652875923739,
+      "rSquaredAdjusted": 0.37672616885776955,
+      "significance": {
+        "fStatistic": 5.231018615319672,
+        "fDfRegression": 2,
+        "fDfResidual": 12,
+        "fPValue": 0.02324837593898428,
+        "coefficients": [
+          {
+            "estimate": 1.0693211651914702,
+            "standardError": 0.45865035475145755,
+            "tStatistic": 2.331451734668198,
+            "pValue": 0.037970265467840596
+          },
+          {
+            "estimate": 0.6058450642251736,
+            "standardError": 0.32741846388538487,
+            "tStatistic": 1.850369270675138,
+            "pValue": 0.08902380956125162
+          },
+          {
+            "estimate": 0.5773455014751964,
+            "standardError": 0.34823782728887415,
+            "tStatistic": 1.6579057650628812,
+            "pValue": 0.12322733764016953
+          }
+        ],
+        "residualStdError": 1.1560097116293755
+      }
+    }
+  },
+  "runMeta": {
+    "targetRepo": "szhygulin/vaultpilot-mcp-smoke-test",
+    "issues": [
+      50,
+      52,
+      54
+    ],
+    "cellCount": 28,
+    "totalCostUsd": 143.2344805
+  },
+  "scores": [
+    {
+      "agentId": "agent-9180",
+      "agentSizeBytes": 6140,
+      "cellCount": 2,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9181",
+      "agentSizeBytes": 10255,
+      "cellCount": 2,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9182",
+      "agentSizeBytes": 14300,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9183",
+      "agentSizeBytes": 18085,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9184",
+      "agentSizeBytes": 22026,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9185",
+      "agentSizeBytes": 28911,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9186",
+      "agentSizeBytes": 35047,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9187",
+      "agentSizeBytes": 43091,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9188",
+      "agentSizeBytes": 50801,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    },
+    {
+      "agentId": "agent-9189",
+      "agentSizeBytes": 58654,
+      "cellCount": 3,
+      "implementRate": 1,
+      "pushbackAccuracyRate": 0,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7500000000000001
+    }
+  ]
+}

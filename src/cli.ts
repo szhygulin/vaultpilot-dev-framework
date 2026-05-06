@@ -533,7 +533,11 @@ export function buildCli(): Command {
           "When --mode update finds a fresh sample at the same xBytes as an existing one: replace-on-collision | average-on-collision | keep-both",
           "replace-on-collision",
         )
-        .option("--degree <n>", "OLS polynomial regression degree", parsePositive, 2)
+        .option(
+          "--curve-form <form>",
+          "Regression form: linear-log (y ~ a + b·log(x)) | linear-raw (y ~ a + b·x) | poly2-log (y ~ a + b·log(x) + c·log(x)²) | poly2-raw (y ~ a + b·x + c·x²). Default linear-log per #179 leg-1 finding (linear-log beat poly2-raw on accuracy p=0.097 vs 0.111 and token-cost p=0.176 vs 0.404 at n=18).",
+          "linear-log",
+        )
         .action(async (opts) => {
           await cmdResearchCurveStudy(opts);
         }),
@@ -3306,7 +3310,26 @@ interface ResearchCurveStudyOpts {
   maxTotalCostUsd?: number;
   mode: string;
   collisionPolicy: string;
-  degree: number;
+  curveForm: string;
+}
+
+type CurveForm = "linear-log" | "linear-raw" | "poly2-log" | "poly2-raw";
+
+function parseCurveForm(s: string): { degree: number; xTransform: "identity" | "log" } {
+  switch (s as CurveForm) {
+    case "linear-log":
+      return { degree: 1, xTransform: "log" };
+    case "linear-raw":
+      return { degree: 1, xTransform: "identity" };
+    case "poly2-log":
+      return { degree: 2, xTransform: "log" };
+    case "poly2-raw":
+      return { degree: 2, xTransform: "identity" };
+    default:
+      throw new Error(
+        `--curve-form must be one of linear-log|linear-raw|poly2-log|poly2-raw, got '${s}'`,
+      );
+  }
 }
 
 async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void> {
@@ -3321,6 +3344,7 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
   ) {
     throw new Error(`--collision-policy must be replace-on-collision|average-on-collision|keep-both, got '${opts.collisionPolicy}'`);
   }
+  const { degree, xTransform } = parseCurveForm(opts.curveForm);
   const agents = JSON.parse(await fs.readFile(opts.agentsSpec, "utf8")) as ReadonlyArray<{
     devAgentId: string;
     sizeBytes: number;
@@ -3353,19 +3377,20 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
     rubrics,
     mode: opts.mode,
     collisionPolicy: opts.collisionPolicy,
-    regressionDegree: opts.degree,
+    regressionDegree: degree,
+    regressionXTransform: xTransform,
     existingAccuracySamples,
     existingTokenCostSamples,
   });
   process.stdout.write(`\nDone. ${result.cells.length} cells, $${result.totalCostUsd.toFixed(2)}, ${(result.wallMs / 60000).toFixed(1)}min.\n`);
-  process.stdout.write(`Mode: ${result.mode}. Proposal written to ${opts.output}.\n`);
-  printCurveSummary("ACCURACY_DEGRADATION_SAMPLES", result.accuracy, opts.degree);
-  printCurveSummary("TOKEN_COST_SAMPLES", result.tokenCost, opts.degree);
+  process.stdout.write(`Mode: ${result.mode}. Curve form: ${opts.curveForm}. Proposal written to ${opts.output}.\n`);
+  printCurveSummary("ACCURACY_DEGRADATION_SAMPLES", result.accuracy, degree);
+  printCurveSummary("TOKEN_COST_SAMPLES", result.tokenCost, degree);
 }
 
 function printCurveSummary(
   label: string,
-  curve: { samples: ReadonlyArray<{ xBytes: number; factor: number }>; regression: { degree: number; n: number; rss: number; tss: number; rSquared: number; rSquaredAdjusted: number; significance: { fStatistic: number; fDfRegression: number; fDfResidual: number; fPValue: number } } | null },
+  curve: { samples: ReadonlyArray<{ xBytes: number; factor: number }>; regression: { degree: number; xTransform: "identity" | "log"; n: number; rss: number; tss: number; rSquared: number; rSquaredAdjusted: number; significance: { fStatistic: number; fDfRegression: number; fDfResidual: number; fPValue: number } } | null },
   degree: number,
 ): void {
   process.stdout.write(`\n=== ${label} ===\n`);
@@ -3379,7 +3404,7 @@ function printCurveSummary(
   const fp = Number.isFinite(sig.fPValue) ? sig.fPValue.toExponential(2) : "n/a";
   const fStat = Number.isFinite(sig.fStatistic) ? sig.fStatistic.toFixed(2) : "n/a";
   process.stdout.write(
-    `Regression (degree=${r.degree}, n=${r.n}, R²=${r.rSquared.toFixed(3)}, adj-R²=${adj}, F(${sig.fDfRegression},${sig.fDfResidual})=${fStat}, p=${fp})\n`,
+    `Regression (degree=${r.degree}, xTransform=${r.xTransform}, n=${r.n}, R²=${r.rSquared.toFixed(3)}, adj-R²=${adj}, F(${sig.fDfRegression},${sig.fDfResidual})=${fStat}, p=${fp})\n`,
   );
   if (Number.isFinite(sig.fPValue) && sig.fPValue > 0.05) {
     process.stdout.write(

@@ -4,7 +4,11 @@ import { dispatchCells, type CellSpec } from "./dispatch.js";
 import { aggregateLogsDir } from "./aggregate.js";
 import { scoreAllAgents } from "./score.js";
 import { mergeSamples, samplesFromCost, samplesFromScores } from "./fit.js";
-import { fitPolynomialRegression, type PolynomialRegression } from "./regression.js";
+import {
+  fitPolynomialRegression,
+  type PolynomialRegression,
+  type XTransform,
+} from "./regression.js";
 import type { Cell, CurveSample, QualityScore, RubricScore } from "./types.js";
 
 export type StudyMode = "replace" | "update";
@@ -44,7 +48,10 @@ export interface StudyInput {
   cwd: string;
   rubrics?: RubricScore[];
   mode?: StudyMode;
+  /** OLS polynomial degree. Default: 1 (linear). */
   regressionDegree?: number;
+  /** Pre-fit transform applied to xBytes. Default: "log". Combine with degree=1 for the linear-log default. */
+  regressionXTransform?: XTransform;
   /** Existing accuracy samples (mode="update" reads from contextCostCurve.ts). */
   existingAccuracySamples?: ReadonlyArray<CurveSample>;
   /** Existing token-cost samples (mode="update" reads from contextCostCurve.ts). */
@@ -79,7 +86,8 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
     input.agents.map((a) => [a.devAgentId, a.sizeBytes]),
   );
   const mode: StudyMode = input.mode ?? "replace";
-  const regressionDegree = input.regressionDegree ?? 2;
+  const regressionDegree = input.regressionDegree ?? 1;
+  const regressionXTransform: XTransform = input.regressionXTransform ?? "log";
 
   const t0 = Date.now();
   const logPrefix = "curveStudy-";
@@ -124,7 +132,7 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
       : freshAccuracy;
   const accuracyRegression =
     finalAccuracy.length > regressionDegree
-      ? safeFit(finalAccuracy, regressionDegree)
+      ? safeFit(finalAccuracy, regressionDegree, regressionXTransform)
       : null;
 
   // Token-cost curve: from per-cell costUsd, filtered to non-error cells
@@ -146,7 +154,7 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
       : freshTokenCost;
   const tokenCostRegression =
     finalTokenCost.length > regressionDegree
-      ? safeFit(finalTokenCost, regressionDegree)
+      ? safeFit(finalTokenCost, regressionDegree, regressionXTransform)
       : null;
 
   await fs.mkdir(path.dirname(input.outputPath), { recursive: true });
@@ -198,9 +206,13 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
   };
 }
 
-function safeFit(samples: CurveSample[], degree: number): PolynomialRegression | null {
+function safeFit(
+  samples: CurveSample[],
+  degree: number,
+  xTransform: XTransform,
+): PolynomialRegression | null {
   try {
-    return fitPolynomialRegression(samples, degree);
+    return fitPolynomialRegression(samples, degree, xTransform);
   } catch {
     // Degenerate inputs (zero variance in y, etc.) — surface null so callers
     // can flag the curve as unfittable rather than crash.

@@ -2,22 +2,33 @@ import type { CurveSample } from "./types.js";
 import { fRightTailPValue, tTwoSidedPValue } from "./stats.js";
 
 /**
+ * Optional pre-fit transform applied to xBytes. "log" linearizes monotonic
+ * size→factor relationships that aren't well-modeled by a low-degree raw
+ * polynomial (#179 leg-1 finding: linear-log fit beat poly2-raw on both
+ * curves at n=18, accuracy p=0.097 vs 0.111).
+ */
+export type XTransform = "identity" | "log";
+
+/**
  * Result of an ordinary-least-squares polynomial regression. Coefficients are
- * stored in NORMALIZED x-space (x' = (x - mean) / std) for numerical
- * conditioning — bytes-scale x values produce ill-conditioned Vandermonde
- * matrices at degree ≥ 2. evaluatePolynomial() reverses the normalization at
- * call time, so callers always pass raw bytes.
+ * stored in NORMALIZED transformed-x space (x' = (T(x) - mean) / std), where
+ * T is the optional transform (identity or log). Normalization handles the
+ * ill-conditioning of bytes-scale x values at degree ≥ 2; the log transform
+ * is independent — applied to raw x BEFORE normalization. evaluatePolynomial
+ * reverses both at call time, so callers always pass raw bytes.
  *
  * Layout: coefficients[i] is the coefficient for x'^i, so
  *   y = c0 + c1*x' + c2*x'^2 + ...
  */
 export interface PolynomialRegression {
   degree: number;
-  /** Per-degree coefficients in NORMALIZED x-space, indexed [c0, c1, c2, ...]. */
+  /** Optional transform applied to xBytes before fitting. */
+  xTransform: XTransform;
+  /** Per-degree coefficients in NORMALIZED transformed-x space, indexed [c0, c1, c2, ...]. */
   coefficients: ReadonlyArray<number>;
-  /** Mean of training x values. Used to normalize at evaluate time. */
+  /** Mean of T(x) over training samples. Used to normalize at evaluate time. */
   xMean: number;
-  /** Std (population, not sample) of training x values. Zero if all x's identical (caller error). */
+  /** Std (population, not sample) of T(x). Zero if all transformed x's identical (caller error). */
   xStd: number;
   /** Number of samples the fit was trained on. */
   n: number;
@@ -155,21 +166,33 @@ function solveLinearSystem(A: number[][], b: number[]): number[] {
  */
 export function fitPolynomialRegression(
   samples: ReadonlyArray<CurveSample>,
-  degree: number = 2,
+  degree: number = 1,
+  xTransform: XTransform = "log",
 ): PolynomialRegression {
   if (samples.length <= degree) {
     throw new Error(
       `fitPolynomialRegression: need >${degree} samples for degree-${degree} fit, got ${samples.length}`,
     );
   }
+  if (xTransform === "log") {
+    for (const s of samples) {
+      if (!(s.xBytes > 0)) {
+        throw new Error(
+          `fitPolynomialRegression: xTransform="log" requires xBytes > 0, got ${s.xBytes}`,
+        );
+      }
+    }
+  }
   const n = samples.length;
-  const xs = samples.map((s) => s.xBytes);
+  const xs = samples.map((s) => (xTransform === "log" ? Math.log(s.xBytes) : s.xBytes));
   const ys = samples.map((s) => s.factor);
   const xMean = xs.reduce((a, b) => a + b, 0) / n;
   const xVar = xs.reduce((a, x) => a + (x - xMean) ** 2, 0) / n;
   const xStd = Math.sqrt(xVar);
   if (xStd < 1e-12) {
-    throw new Error("fitPolynomialRegression: zero variance in x (all samples at the same byte size)");
+    throw new Error(
+      `fitPolynomialRegression: zero variance in ${xTransform === "log" ? "log(xBytes)" : "xBytes"} (all samples at the same byte size)`,
+    );
   }
   const xn = xs.map((x) => (x - xMean) / xStd);
 
@@ -260,6 +283,7 @@ export function fitPolynomialRegression(
 
   return {
     degree,
+    xTransform,
     coefficients,
     xMean,
     xStd,
@@ -272,9 +296,13 @@ export function fitPolynomialRegression(
   };
 }
 
-/** Evaluate the regression at raw `xBytes`. Reverses internal normalization. */
+/** Evaluate the regression at raw `xBytes`. Reverses internal transform + normalization. */
 export function evaluatePolynomial(reg: PolynomialRegression, xBytes: number): number {
-  const xn = (xBytes - reg.xMean) / reg.xStd;
+  if (reg.xTransform === "log" && !(xBytes > 0)) {
+    return Number.NaN;
+  }
+  const x = reg.xTransform === "log" ? Math.log(xBytes) : xBytes;
+  const xn = (x - reg.xMean) / reg.xStd;
   let y = 0;
   let pw = 1;
   for (let k = 0; k < reg.coefficients.length; k++) {

@@ -602,6 +602,46 @@ export function buildCli(): Command {
         .action(async (opts) => {
           await cmdResearchCurveStudy(opts);
         }),
+    )
+    .addCommand(
+      new Command("bench-specialists")
+        .description(
+          "Run experiment 2 of #179: dispatch the same N issues used in the curve study against the orchestrator's best-fit specialists (per-issue picker via Jaccard tag overlap). K=3 replicates per issue. Compares treatment cells against the curve-study trim baseline via paired Wilcoxon (cost: H1 specialist < trim; quality: H1 specialist > trim) + Holm-Bonferroni adjustment + Hedges' g effect size. ARCHIVE the 18 trim agents BEFORE running so the picker doesn't pick them.",
+        )
+        .requiredOption(
+          "--issues <list>",
+          "Comma-separated issue numbers (the same 13 used in experiment 1).",
+        )
+        .requiredOption("--target-repo <owner/repo>", "GitHub target repo")
+        .requiredOption(
+          "--clone-path <path>",
+          "Path to a fresh clone of the target repo (cwd for spawn).",
+        )
+        .requiredOption(
+          "--control-logs-dirs <list>",
+          "Comma-separated directories holding experiment-1 control cells (e.g. feature-plans/issue-179-data/logs-mcp,feature-plans/issue-179-data/logs-dev).",
+        )
+        .option(
+          "--replicates <n>",
+          "K replicates per issue (default 3).",
+          parsePositive,
+          3,
+        )
+        .option("--logs-dir <path>", "Where treatment-arm logs land", "feature-plans/issue-179-data/logs-bench")
+        .option("--output <path>", "Where to write the JSON output", "feature-plans/issue-179-data/bench-specialists.json")
+        .option(
+          "--max-cost-usd <usd>",
+          "Cumulative cap; aborts further dispatches when reached.",
+          parsePositive,
+        )
+        .option("--control-prefix <s>", "Filename prefix used by control logs", "curveStudy-")
+        .option(
+          "--skip-dispatch",
+          "Skip the dispatch step + only re-aggregate existing treatment logs (after a partial run).",
+        )
+        .action(async (opts) => {
+          await cmdResearchBenchSpecialists(opts);
+        }),
     );
   program.addCommand(researchCmd);
 
@@ -3738,6 +3778,71 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
   process.stdout.write(`Mode: ${result.mode}. Curve form: ${opts.curveForm}. Proposal written to ${opts.output}.\n`);
   printCurveSummary("ACCURACY_DEGRADATION_SAMPLES", result.accuracy, degree);
   printCurveSummary("TOKEN_COST_SAMPLES", result.tokenCost, degree);
+}
+
+interface ResearchBenchSpecialistsOpts {
+  issues: string;
+  targetRepo: string;
+  clonePath: string;
+  controlLogsDirs: string;
+  replicates: number;
+  logsDir: string;
+  output: string;
+  maxCostUsd?: number;
+  controlPrefix: string;
+  skipDispatch?: boolean;
+}
+
+async function cmdResearchBenchSpecialists(
+  opts: ResearchBenchSpecialistsOpts,
+): Promise<void> {
+  const { runSpecialistBench, formatBenchReport } = await import(
+    "./research/specialistBench/study.js"
+  );
+  const issueIds = opts.issues
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n));
+  if (issueIds.length === 0) {
+    process.stderr.write(`ERROR: --issues must be a comma-separated list of issue numbers.\n`);
+    process.exit(2);
+  }
+  const controlLogsDirs = opts.controlLogsDirs
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  const result = await runSpecialistBench({
+    issueIds,
+    targetRepo: opts.targetRepo,
+    clonePath: opts.clonePath,
+    replicates: opts.replicates,
+    logsDir: opts.logsDir,
+    controlLogsDirs,
+    controlPrefix: opts.controlPrefix,
+    outputPath: opts.output,
+    cwd: process.cwd(),
+    maxTotalCostUsd: opts.maxCostUsd,
+    skipDispatch: opts.skipDispatch,
+    onEvent: (e) => {
+      const ts = e.t.toISOString().slice(11, 19);
+      if (e.kind === "pick") {
+        process.stderr.write(`[${ts}] pick: issue #${e.issueId} → ${e.pickedAgentId}\n`);
+      } else if (e.kind === "start") {
+        process.stderr.write(
+          `[${ts}] start: issue #${e.spec.issueId} rep=${e.spec.replicate} agent=${e.spec.pickedAgentId}\n`,
+        );
+      } else if (e.kind === "done") {
+        process.stderr.write(
+          `[${ts}] done: issue #${e.spec.issueId} rep=${e.spec.replicate} rc=${e.rc}\n`,
+        );
+      } else if (e.kind === "budget-exhausted") {
+        process.stderr.write(`[${ts}] BUDGET EXHAUSTED at $${e.usdSoFar.toFixed(2)}\n`);
+      }
+    },
+  });
+  process.stdout.write("\n" + formatBenchReport(result) + "\n");
+  process.stdout.write(`\nProposal written to ${opts.output}.\n`);
 }
 
 function printCurveSummary(

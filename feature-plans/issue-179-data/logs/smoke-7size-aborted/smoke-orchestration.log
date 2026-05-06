@@ -1,0 +1,50 @@
+[07:44:40] agent-9171 / #47 start
+[07:44:40] agent-9171 / #48 start
+[07:44:40] agent-9171 / #49 start
+[07:44:43] agent-9171 / #49 done (rc=1)
+[07:44:43] agent-9171 / #47 done (rc=1)
+[07:44:43] agent-9171 / #50 start
+[07:44:43] agent-9171 / #51 start
+[07:47:43] agent-9171 / #48 done (rc=0)
+[07:47:43] agent-9171 / #52 start
+[07:50:26] agent-9171 / #51 done (rc=0)
+[07:50:26] agent-9171 / #53 start
+[07:53:27] agent-9171 / #52 done (rc=0)
+[07:53:27] agent-9171 / #54 start
+[07:55:48] agent-9171 / #53 done (rc=0)
+[07:55:48] agent-9171 / #55 start
+[07:56:11] agent-9171 / #50 done (rc=0)
+[07:56:11] agent-9171 / #56 start
+Terminated
+[07:57:24] all 70 cells done
+[07:57:38] agent-9171 / #54 done (rc=0)
+[07:59:00] agent-9171 / #55 done (rc=0)
+Terminated
+[07:59:18] agent-9171 / #56 done (rc=143)
+ 9171-54
+
+Remaining cells: 64
+[07:58:38] agent-9171 / #47 start
+[07:58:38] agent-9172 / #47 start
+[07:58:38] agent-9173 / #47 start
+[07:58:38] agent-9174 / #47 start
+[07:58:38] agent-9175 / #47 start
+[08:08:37] agent-9175 / #47 done (rc=0)
+[08:08:37] agent-9176 / #47 start
+[08:11:04] agent-9172 / #47 done (rc=0)
+[08:11:04] agent-9177 / #47 start
+[08:12:20] agent-9176 / #47 done (rc=0)
+[08:12:20] agent-9172 / #48 start
+[08:12:46] agent-9173 / #47 done (rc=0)
+[08:12:46] agent-9173 / #48 start
+[08:13:20] agent-9174 / #47 done (rc=0)
+[08:13:20] agent-9174 / #48 start
+Terminated
+[08:14:22] all remaining cells done
+[08:14:27] agent-9171 / #47 done (rc=0)
+[08:14:42] agent-9172 / #48 done (rc=0)
+[08:16:25] agent-9174 / #48 done (rc=0)
+environment: line 1: 702487 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path /home/szhygulin/dev/vaultpilot-smoke-test --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 703556 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path /home/szhygulin/dev/vaultpilot-smoke-test --dry-run --skip-summary > "$logf" 2>&1
+[08:16:41] agent-9177 / #47 done (rc=137)
+[08:16:41] agent-9173 / #48 done (rc=137)

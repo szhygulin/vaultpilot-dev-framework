@@ -1,0 +1,16 @@
+
+> vaultpilot-development-agents@0.1.0 vp-dev
+> node dist/bin/vp-dev.js spawn --agent agent-9171 --issue 49 --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path /home/szhygulin/dev/vaultpilot-smoke-test --dry-run --skip-summary
+
+Error: Command failed: git fetch origin main
+From github.com:szhygulin/vaultpilot-mcp-smoke-test
+ * branch            main       -> FETCH_HEAD
+   e7192d1..1c802db  main       -> origin/main
+error: fetching ref refs/remotes/origin/main failed: incorrect old value provided
+
+    at genericNodeError (node:internal/errors:983:15)
+    at wrappedFn (node:internal/errors:537:14)
+    at ChildProcess.exithandler (node:child_process:417:12)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1101:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:304:5)

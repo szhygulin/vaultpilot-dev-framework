@@ -1,0 +1,8 @@
+
+> vaultpilot-development-agents@0.1.0 vp-dev
+> node dist/bin/vp-dev.js spawn --agent agent-9180 --issue 50 --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path /tmp/study-clones/clone-1 --dry-run --skip-summary
+
+WARNING: 1 stale branch(es) attached to a worktree could not be pruned.
+  vp-dev/agent-9180/issue-47 — worktree at /tmp/study-clones/clone-1
+  To clean up: review the worktree, then `git worktree remove --force <path>` and `git branch -D <branch>`.
+  Recorded under `unprunableStaleBranches` in the run-state JSON for later audit.

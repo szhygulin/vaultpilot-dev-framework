@@ -1,0 +1,157 @@
+[08:19:53] agent-9180 / #47 (path=/tmp/study-clones/clone-1) start
+[08:19:53] agent-9182 / #47 (path=/tmp/study-clones/clone-3) start
+[08:19:53] agent-9181 / #47 (path=/tmp/study-clones/clone-2) start
+[08:19:53] agent-9184 / #47 (path=/tmp/study-clones/clone-5) start
+[08:19:53] agent-9183 / #47 (path=/tmp/study-clones/clone-4) start
+[08:19:53] agent-9185 / #47 (path=/tmp/study-clones/clone-6) start
+[08:19:53] agent-9186 / #47 (path=/tmp/study-clones/clone-7) start
+[08:19:53] agent-9188 / #47 (path=/tmp/study-clones/clone-9) start
+[08:19:53] agent-9189 / #47 (path=/tmp/study-clones/clone-10) start
+[08:19:53] agent-9187 / #47 (path=/tmp/study-clones/clone-8) start
+[08:31:13] agent-9188 / #47 done (rc=0)
+[08:31:13] agent-9180 / #48 (path=/tmp/study-clones/clone-1) start
+[08:31:27] agent-9189 / #47 done (rc=0)
+[08:31:27] agent-9181 / #48 (path=/tmp/study-clones/clone-2) start
+[08:32:23] agent-9182 / #47 done (rc=0)
+[08:32:23] agent-9182 / #48 (path=/tmp/study-clones/clone-3) start
+[08:32:28] agent-9185 / #47 done (rc=0)
+[08:32:28] agent-9183 / #48 (path=/tmp/study-clones/clone-4) start
+[08:33:21] agent-9187 / #47 done (rc=0)
+[08:33:21] agent-9184 / #48 (path=/tmp/study-clones/clone-5) start
+[08:33:46] agent-9184 / #47 done (rc=0)
+[08:33:46] agent-9185 / #48 (path=/tmp/study-clones/clone-6) start
+[08:33:52] agent-9181 / #47 done (rc=0)
+[08:33:52] agent-9186 / #48 (path=/tmp/study-clones/clone-7) start
+[08:34:29] agent-9183 / #47 done (rc=0)
+[08:34:29] agent-9187 / #48 (path=/tmp/study-clones/clone-8) start
+[08:36:26] agent-9186 / #47 done (rc=0)
+[08:36:26] agent-9188 / #48 (path=/tmp/study-clones/clone-9) start
+[08:38:51] agent-9187 / #48 done (rc=0)
+[08:38:51] agent-9189 / #48 (path=/tmp/study-clones/clone-10) start
+[08:40:05] agent-9181 / #48 done (rc=0)
+[08:40:05] agent-9180 / #49 (path=/tmp/study-clones/clone-1) start
+Terminated
+[08:41:43] agent-9180 / #47 done (rc=143)
+[08:41:43] agent-9181 / #49 (path=/tmp/study-clones/clone-2) start
+Terminated
+[08:42:18] agent-9180 / #49 done (rc=143)
+[08:42:18] agent-9182 / #49 (path=/tmp/study-clones/clone-3) start
+environment: line 1: 722879 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:33] agent-9181 / #49 done (rc=137)
+[08:42:33] agent-9183 / #49 (path=/tmp/study-clones/clone-4) start
+environment: line 1: 723356 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:33] agent-9182 / #49 done (rc=137)
+[08:42:33] agent-9184 / #49 (path=/tmp/study-clones/clone-5) start
+environment: line 1: 723678 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:33] agent-9183 / #49 done (rc=137)
+[08:42:33] agent-9185 / #49 (path=/tmp/study-clones/clone-6) start
+environment: line 1: 723704 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:33] agent-9184 / #49 done (rc=137)
+[08:42:33] agent-9186 / #49 (path=/tmp/study-clones/clone-7) start
+environment: line 1: 723742 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:33] agent-9185 / #49 done (rc=137)
+[08:42:33] agent-9187 / #49 (path=/tmp/study-clones/clone-8) start
+environment: line 1: 723783 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:33] agent-9186 / #49 done (rc=137)
+[08:42:33] agent-9188 / #49 (path=/tmp/study-clones/clone-9) start
+environment: line 1: 723824 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:34] agent-9187 / #49 done (rc=137)
+[08:42:34] agent-9189 / #49 (path=/tmp/study-clones/clone-10) start
+environment: line 1: 723868 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:34] agent-9188 / #49 done (rc=137)
+[08:42:34] agent-9180 / #50 (path=/tmp/study-clones/clone-1) start
+environment: line 1: 723899 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:42:34] agent-9189 / #49 done (rc=137)
+[08:42:34] agent-9181 / #50 (path=/tmp/study-clones/clone-2) start
+[08:43:35] agent-9180 / #48 done (rc=0)
+[08:43:35] agent-9182 / #50 (path=/tmp/study-clones/clone-3) start
+[08:44:42] agent-9182 / #48 done (rc=0)
+[08:44:42] agent-9183 / #50 (path=/tmp/study-clones/clone-4) start
+[08:45:47] agent-9185 / #48 done (rc=0)
+[08:45:47] agent-9184 / #50 (path=/tmp/study-clones/clone-5) start
+[08:46:09] agent-9186 / #48 done (rc=0)
+[08:46:09] agent-9185 / #50 (path=/tmp/study-clones/clone-6) start
+[08:47:01] agent-9183 / #48 done (rc=0)
+[08:47:01] agent-9186 / #50 (path=/tmp/study-clones/clone-7) start
+[08:52:26] agent-9188 / #48 done (rc=0)
+[08:52:26] agent-9187 / #50 (path=/tmp/study-clones/clone-8) start
+environment: line 1: 721106 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 727377 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:35] agent-9189 / #48 done (rc=137)
+environment: line 1: 717784 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:35] agent-9184 / #48 done (rc=137)
+[08:52:35] agent-9188 / #50 (path=/tmp/study-clones/clone-9) start
+[08:52:35] agent-9184 / #50 done (rc=137)
+environment: line 1: 723975 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:35] agent-9189 / #50 (path=/tmp/study-clones/clone-10) start
+[08:52:35] agent-9181 / #50 done (rc=137)
+[08:52:35] agent-9180 / #51 (path=/tmp/study-clones/clone-1) start
+environment: line 1: 725584 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 727745 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:35] agent-9185 / #50 done (rc=137)
+environment: line 1: 728348 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 723937 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:35] agent-9182 / #51 (path=/tmp/study-clones/clone-3) start
+[08:52:35] agent-9181 / #51 (path=/tmp/study-clones/clone-2) start
+[08:52:35] agent-9180 / #50 done (rc=137)
+environment: line 1: 731378 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 726548 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:35] agent-9186 / #50 done (rc=137)
+[08:52:35] agent-9182 / #50 done (rc=137)
+[08:52:35] agent-9183 / #50 done (rc=137)
+[08:52:35] agent-9187 / #50 done (rc=137)
+[08:52:35] agent-9183 / #51 (path=/tmp/study-clones/clone-4) start
+[08:52:35] agent-9184 / #51 (path=/tmp/study-clones/clone-5) start
+[08:52:35] agent-9185 / #51 (path=/tmp/study-clones/clone-6) start
+[08:52:35] agent-9187 / #51 (path=/tmp/study-clones/clone-8) start
+[08:52:35] agent-9186 / #51 (path=/tmp/study-clones/clone-7) start
+environment: line 1: 731582 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 731612 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 731574 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 731589 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 731643 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:50] agent-9189 / #50 done (rc=137)
+environment: line 1: 731641 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:50] agent-9188 / #50 done (rc=137)
+[08:52:50] agent-9180 / #51 done (rc=137)
+[08:52:50] agent-9181 / #51 done (rc=137)
+[08:52:50] agent-9185 / #51 done (rc=137)
+[08:52:50] agent-9184 / #51 done (rc=137)
+[08:52:50] agent-9188 / #51 (path=/tmp/study-clones/clone-9) start
+environment: line 1: 731649 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:50] agent-9180 / #52 (path=/tmp/study-clones/clone-1) start
+[08:52:50] agent-9182 / #52 (path=/tmp/study-clones/clone-3) start
+[08:52:50] agent-9181 / #52 (path=/tmp/study-clones/clone-2) start
+environment: line 1: 731611 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 731628 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:50] agent-9189 / #51 (path=/tmp/study-clones/clone-10) start
+[08:52:50] agent-9187 / #51 done (rc=137)
+[08:52:50] agent-9182 / #51 done (rc=137)
+[08:52:50] agent-9183 / #52 (path=/tmp/study-clones/clone-4) start
+[08:52:50] agent-9183 / #51 done (rc=137)
+environment: line 1: 731650 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:52:50] agent-9185 / #52 (path=/tmp/study-clones/clone-6) start
+[08:52:50] agent-9186 / #52 (path=/tmp/study-clones/clone-7) start
+[08:52:50] agent-9184 / #52 (path=/tmp/study-clones/clone-5) start
+[08:52:50] agent-9186 / #51 done (rc=137)
+[08:52:50] agent-9187 / #52 (path=/tmp/study-clones/clone-8) start
+environment: line 1: 733470 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 733454 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:54:26] agent-9180 / #52 done (rc=137)
+[08:54:26] agent-9188 / #51 done (rc=137)
+environment: line 1: 733476 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 733473 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:54:26] agent-9181 / #52 done (rc=137)
+environment: line 1: 733488 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 733499 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:54:26] agent-9189 / #51 done (rc=137)
+[08:54:26] agent-9183 / #52 done (rc=137)
+[08:54:26] agent-9185 / #52 done (rc=137)
+environment: line 1: 733502 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:54:26] agent-9184 / #52 done (rc=137)
+environment: line 1: 733537 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 733472 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+environment: line 1: 733501 Killed                  npm run vp-dev -- spawn --agent "$agent" --issue "$issue" --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path "$path" --dry-run --skip-summary > "$logf" 2>&1
+[08:54:26] agent-9187 / #52 done (rc=137)
+[08:54:26] agent-9182 / #52 done (rc=137)
+[08:54:26] agent-9186 / #52 done (rc=137)

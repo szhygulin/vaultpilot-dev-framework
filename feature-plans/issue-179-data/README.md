@@ -26,6 +26,13 @@ $164.50 across 33 cells (mean $4.98/cell).
 
 The 10 study agents (`agent-9180` through `agent-9189`) and 10 isolated clones (`/tmp/study-clones/clone-1..10`) remain in place locally; the dispatch harness at `/tmp/smoke10_dispatch_phase2.sh` will run the missing 28 cells (8×#50 + 10×#52 + 10×#54) when relaunched.
 
-## What's NOT in this archive
+## Full archive (gitignored sources committed per operator request)
 
-Per the project's local CLAUDE.md rule (`agents/`, `state/`, `logs/`, `dist/` are gitignored), the following are not committed: registry mutations (`state/agents-registry.json`), per-agent transcripts (`logs/smoke10-agent-*.log`), spawn run-state JSON (`state/run-*.json`). Re-extracting the cell envelopes from the logs is reproducible via the `cells.json` snapshot's source paths, all of which point at gitignored log files.
+`agents/`, `state/`, `logs/` are gitignored at the repo level, but the operator overrode that for this archive so the experiment is fully reproducible from the branch.
+
+- `scripts/` — 18 dispatch + analysis scripts (`smoke10_dispatch.sh`, `build_10_trims.py`, `fork_10.py`, `extract_cells.py`, etc.)
+- `logs/pilot-vp-mcp/` — 20 logs from the 3-size × 5-issue pilot against vaultpilot-mcp
+- `logs/smoke-7size-aborted/` — 20 logs from the abandoned 7-size run (worktree contention)
+- `logs/smoke-10size/` — 60 logs from the current 10-size run (16 envelope-complete + 44 partial/soft-failed)
+- `agent-dirs/` — 20 per-agent directories with their CLAUDE.md (3 pilot + 7 aborted + 10 current)
+- `state-agents-registry-snapshot.json` — registry state at pause point, includes all 20 study agent entries

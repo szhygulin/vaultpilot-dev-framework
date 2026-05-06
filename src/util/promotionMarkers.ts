@@ -20,14 +20,35 @@
 // reads like instructions to a sibling agent.
 
 const DOMAIN_RE = /^[a-z][a-z0-9-]*$/;
-const PROMOTE_OPEN_RE = /^\s*<!--\s*promote-candidate:([a-z][a-z0-9-]*)\s*-->\s*$/;
+
+/**
+ * Special domain reserved for project-local CLAUDE.md candidates (#179
+ * Phase 2 follow-up). The summarizer wraps a project-wide rule with this
+ * domain when the lesson should land in the repo's tracked CLAUDE.md
+ * rather than the per-domain shared-lessons pool. Operator-side
+ * `vp-dev lessons review` routes accepted entries to a queue file
+ * (`state/local-claude-md-pending.md`) instead of the pool, applying a
+ * stricter utility-vs-cost gate against the local CLAUDE.md size.
+ *
+ * Reserves the `@`-prefix character class for future special domains.
+ * Today only `@local-claude` is accepted.
+ */
+export const LOCAL_CLAUDE_DOMAIN = "@local-claude";
+
+const PROMOTE_OPEN_RE =
+  /^\s*<!--\s*promote-candidate:(@local-claude|[a-z][a-z0-9-]*)(?:\s+utility=([0-9](?:\.[0-9]+)?))?\s*-->\s*$/;
 const PROMOTE_CLOSE_RE = /^\s*<!--\s*\/promote-candidate\s*-->\s*$/;
 
 export const MAX_ENTRY_LINES = 40;
 export const MAX_ENTRY_CHARS = 1500;
 
 export function isValidDomain(s: string): boolean {
+  if (s === LOCAL_CLAUDE_DOMAIN) return true;
   return DOMAIN_RE.test(s);
+}
+
+export function isLocalClaudeCandidate(domain: string): boolean {
+  return domain === LOCAL_CLAUDE_DOMAIN;
 }
 
 export interface PromoteCandidate {
@@ -37,6 +58,14 @@ export interface PromoteCandidate {
   startLine: number;
   /** 0-based line index of the closing `<!-- /promote-candidate -->` (inclusive). */
   endLine: number;
+  /**
+   * Optional `utility=N.M` value parsed from the marker. Used by the
+   * operator-side L2 gate for `@local-claude` candidates (utility vs
+   * local-CLAUDE.md cost). Absent when the summarizer didn't emit it; the
+   * gate then falls back to the outer `SummarizerOutput.predictedUtility`
+   * recorded elsewhere, or skips the gate if neither is available.
+   */
+  utility?: number;
 }
 
 /**
@@ -55,6 +84,11 @@ export function findPromoteCandidates(content: string): PromoteCandidate[] {
       continue;
     }
     const domain = open[1];
+    const utilityRaw = open[2];
+    const utility =
+      utilityRaw !== undefined && utilityRaw !== ""
+        ? Number(utilityRaw)
+        : undefined;
     let close = -1;
     for (let j = i + 1; j < lines.length; j++) {
       // Reject nested opens — treat as malformed and skip the outer.
@@ -74,7 +108,11 @@ export function findPromoteCandidates(content: string): PromoteCandidate[] {
       continue;
     }
     const body = lines.slice(i + 1, close).join("\n");
-    out.push({ domain, body, startLine: i, endLine: close });
+    const candidate: PromoteCandidate = { domain, body, startLine: i, endLine: close };
+    if (utility !== undefined && Number.isFinite(utility)) {
+      candidate.utility = utility;
+    }
+    out.push(candidate);
     i = close + 1;
   }
   return out;

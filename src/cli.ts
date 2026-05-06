@@ -117,6 +117,11 @@ import {
   type LessonTier,
 } from "./agent/sharedLessons.js";
 import {
+  evaluateLocalClaudeUtilityGate,
+  type LocalClaudeUtilityGateResult,
+} from "./agent/localClaudeQueue.js";
+import { isLocalClaudeCandidate } from "./util/promotionMarkers.js";
+import {
   applyTrimProposal,
   formatTrimProposal,
   proposeTrim,
@@ -2908,6 +2913,30 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
   await runInteractiveReview(pending, tier);
 }
 
+/**
+ * Read the project-local CLAUDE.md size (cwd-relative) and run the L2 gate
+ * for an `@local-claude` candidate. Returns `null` for non-local domains so
+ * the caller skips this branch cleanly.
+ */
+async function computeLocalClaudeGate(
+  p: PendingCandidate,
+): Promise<LocalClaudeUtilityGateResult | null> {
+  if (!isLocalClaudeCandidate(p.candidate.domain)) return null;
+  let currentBytes = 0;
+  try {
+    const content = await fs.readFile("CLAUDE.md", "utf-8");
+    currentBytes = Buffer.byteLength(content, "utf-8");
+  } catch {
+    // No project CLAUDE.md → treat as zero-cost; gate will let through.
+  }
+  const candidateBytes = Buffer.byteLength(p.candidate.body, "utf-8");
+  return evaluateLocalClaudeUtilityGate({
+    utility: p.candidate.utility,
+    currentLocalClaudeMdBytes: currentBytes,
+    candidateBytes,
+  });
+}
+
 async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier): Promise<void> {
   let acceptedCount = 0;
   let rejectedCount = 0;
@@ -2920,15 +2949,37 @@ async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier):
       rejectedCount += 1;
       continue;
     }
-    const result = await acceptCandidate({ pending: p, tier });
-    if (result.appendOutcome.kind === "appended") {
+    const localGate = await computeLocalClaudeGate(p);
+    if (localGate && localGate.decision === "skip") {
+      // Auto-accept: respect the L2 gate and skip — the operator can re-run
+      // interactively to override.
       process.stdout.write(
-        `accepted [${tier}] ${p.agentId} -> ${p.candidate.domain} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines)\n`,
+        `skipped (local-gate: utility=${p.candidate.utility ?? "n/a"} < threshold=${localGate.threshold.toFixed(3)}) ${p.agentId} -> ${p.candidate.domain}\n`,
+      );
+      skippedCount += 1;
+      continue;
+    }
+    const result = await acceptCandidate({
+      pending: p,
+      tier,
+      localGate: localGate ?? undefined,
+    });
+    if (result.localQueueOutcome) {
+      process.stdout.write(
+        `accepted [@local-claude] ${p.agentId} -> queued at ${result.localQueueOutcome.filePath} (${result.localQueueOutcome.totalBytes} bytes total)\n`,
       );
       acceptedCount += 1;
-    } else if (result.appendOutcome.kind === "rejected-pool-full") {
+      continue;
+    }
+    const ao = result.appendOutcome;
+    if (ao && ao.kind === "appended") {
       process.stdout.write(
-        `skipped (pool full) [${tier}] ${p.agentId} -> ${p.candidate.domain}: ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool by hand and re-run review.\n`,
+        `accepted [${tier}] ${p.agentId} -> ${p.candidate.domain} (${ao.totalLines}/${MAX_POOL_LINES} lines)\n`,
+      );
+      acceptedCount += 1;
+    } else if (ao && ao.kind === "rejected-pool-full") {
+      process.stdout.write(
+        `skipped (pool full) [${tier}] ${p.agentId} -> ${p.candidate.domain}: ${ao.totalLines}/${MAX_POOL_LINES} lines. Trim the pool by hand and re-run review.\n`,
       );
       skippedCount += 1;
     } else {
@@ -2957,6 +3008,18 @@ async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTie
       process.stdout.write(`source:  ${sourceLabel}\n`);
       process.stdout.write(`domain:  ${p.candidate.domain}\n`);
       process.stdout.write(`source CLAUDE.md lines ${p.candidate.startLine + 1}..${p.candidate.endLine + 1}\n`);
+      const localGate = await computeLocalClaudeGate(p);
+      if (localGate) {
+        const utility = p.candidate.utility ?? undefined;
+        process.stdout.write(
+          `local-gate: utility=${utility ?? "n/a"} costScore=${localGate.costScore.toFixed(3)} threshold=${localGate.threshold.toFixed(3)} ratio=${localGate.ratio} decision=${localGate.decision}\n`,
+        );
+        if (localGate.decision === "skip") {
+          process.stdout.write(
+            `WARNING: utility below threshold — accept anyway only if the lesson is genuinely project-wide.\n`,
+          );
+        }
+      }
       if (p.validation.errors.length > 0) {
         process.stdout.write(`errors:  ${p.validation.errors.join("; ")}\n`);
       }
@@ -2976,19 +3039,35 @@ async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTie
           skippedCount += 1;
           continue;
         }
-        const result = await acceptCandidate({ pending: p, tier });
-        if (result.appendOutcome.kind === "appended") {
+        const result = await acceptCandidate({
+          pending: p,
+          tier,
+          localGate: localGate ?? undefined,
+        });
+        if (result.localQueueOutcome) {
           process.stdout.write(
-            `Accepted [${tier}]: appended to ${result.appendOutcome.filePath} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines).\n`,
+            `Accepted [@local-claude]: queued to ${result.localQueueOutcome.filePath} (${result.localQueueOutcome.totalBytes} bytes total).\n` +
+              `Read the queue and open a chore PR appending the section(s) to project-local CLAUDE.md.\n`,
           );
           acceptedCount += 1;
-        } else if (result.appendOutcome.kind === "rejected-pool-full") {
+          continue;
+        }
+        const ao = result.appendOutcome;
+        if (ao && ao.kind === "appended") {
           process.stdout.write(
-            `POOL FULL: ${result.appendOutcome.filePath} reached ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool file by hand and re-run review for this candidate. (Marker left in source CLAUDE.md.)\n`,
+            `Accepted [${tier}]: appended to ${ao.filePath} (${ao.totalLines}/${MAX_POOL_LINES} lines).\n`,
+          );
+          acceptedCount += 1;
+        } else if (ao && ao.kind === "rejected-pool-full") {
+          process.stdout.write(
+            `POOL FULL: ${ao.filePath} reached ${ao.totalLines}/${MAX_POOL_LINES} lines. Trim the pool file by hand and re-run review for this candidate. (Marker left in source CLAUDE.md.)\n`,
           );
           skippedCount += 1;
+        } else if (ao) {
+          process.stdout.write(`Append refused (validation): ${ao.validation.errors.join("; ")}\n`);
+          skippedCount += 1;
         } else {
-          process.stdout.write(`Append refused (validation): ${result.appendOutcome.validation.errors.join("; ")}\n`);
+          process.stdout.write(`Append refused: no outcome returned (unexpected).\n`);
           skippedCount += 1;
         }
         continue;

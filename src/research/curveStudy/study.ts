@@ -3,7 +3,7 @@ import path from "node:path";
 import { dispatchCells, type CellSpec } from "./dispatch.js";
 import { aggregateLogsDir } from "./aggregate.js";
 import { scoreAllAgents } from "./score.js";
-import { mergeSamples, samplesFromScores } from "./fit.js";
+import { mergeSamples, samplesFromCost, samplesFromScores } from "./fit.js";
 import { fitPolynomialRegression, type PolynomialRegression } from "./regression.js";
 import type { Cell, CurveSample, QualityScore, RubricScore } from "./types.js";
 
@@ -11,23 +11,19 @@ export type StudyMode = "replace" | "update";
 export type CollisionPolicy = "replace-on-collision" | "average-on-collision" | "keep-both";
 
 /**
- * Top-level orchestration of a curve study.
+ * Top-level orchestration of a curve study. Fits two curves from the same
+ * dispatch:
+ *   - Accuracy-degradation: factor = qualityMax / quality(agent)
+ *   - Token-cost: factor = meanCost(agent) / minMeanCost
  *
- * Operator-input model: the operator pre-trims the parent dev-agent into N
- * forks at chosen byte budgets and registers them. This tool receives
- * (devAgentId, sizeBytes, clonePath) triples + an issue list, dispatches with
- * 4-way parallelism + per-devAgent serialization, aggregates, scores, fits a
- * polynomial regression, and writes a JSON proposal at outputPath.
+ * Mode `replace`: proposal contains only the freshly-measured samples for
+ *   each curve.
+ * Mode `update`: merges fresh samples into the existing samples (passed via
+ *   `existingAccuracySamples` / `existingTokenCostSamples`) and re-fits.
  *
- * Mode `replace`: proposal contains only the freshly-measured samples.
- * Mode `update`: proposal merges the fresh samples into `existingSamples`
- *   (or reads them from `src/util/contextCostCurve.ts` if not passed) and
- *   re-fits the regression on the union.
- *
- * The operator hand-merges `samples` + `regression` into
+ * The operator hand-merges both arrays + provenance into
  * `src/util/contextCostCurve.ts`. We deliberately don't rewrite that file
- * from inside the tool — the operator should review the fitted shape +
- * residual error before the curve is committed.
+ * from inside the tool — operator should review fits + p-values first.
  */
 export interface StudyInput {
   agents: ReadonlyArray<{ devAgentId: string; sizeBytes: number; clonePath: string }>;
@@ -39,26 +35,26 @@ export interface StudyInput {
   outputPath: string;
   cwd: string;
   rubrics?: RubricScore[];
-  /** Default "replace". "update" merges fresh samples with existingSamples. */
   mode?: StudyMode;
-  /** Polynomial regression degree. Default 2. */
   regressionDegree?: number;
-  /** Existing samples to merge against (only used when mode="update"). If
-   *  undefined and mode="update", caller is expected to load them from
-   *  src/util/contextCostCurve.ts and pass via this field. */
-  existingSamples?: ReadonlyArray<CurveSample>;
-  /** Default "replace-on-collision". */
+  /** Existing accuracy samples (mode="update" reads from contextCostCurve.ts). */
+  existingAccuracySamples?: ReadonlyArray<CurveSample>;
+  /** Existing token-cost samples (mode="update" reads from contextCostCurve.ts). */
+  existingTokenCostSamples?: ReadonlyArray<CurveSample>;
   collisionPolicy?: CollisionPolicy;
+}
+
+export interface FittedCurve {
+  freshSamples: CurveSample[];
+  samples: CurveSample[];
+  regression: PolynomialRegression | null;
 }
 
 export interface StudyOutput {
   cells: Cell[];
   scores: QualityScore[];
-  /** Fresh samples derived from this run (always; regardless of mode). */
-  freshSamples: CurveSample[];
-  /** Final samples in the proposal (= freshSamples in replace mode, merged in update mode). */
-  samples: CurveSample[];
-  regression: PolynomialRegression | null;
+  accuracy: FittedCurve;
+  tokenCost: FittedCurve;
   totalCostUsd: number;
   wallMs: number;
   mode: StudyMode;
@@ -108,16 +104,38 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
   const scores = scoreAllAgents(allCells, input.rubrics);
   const totalCostUsd = allCells.reduce((s, c) => s + c.costUsd, 0);
 
-  const freshSamples = samplesFromScores(scores);
-  const samples =
+  // Accuracy curve: from per-agent quality scores
+  const freshAccuracy = samplesFromScores(scores);
+  const finalAccuracy =
     mode === "update"
-      ? mergeSamples(input.existingSamples ?? [], freshSamples, input.collisionPolicy)
-      : freshSamples;
+      ? mergeSamples(input.existingAccuracySamples ?? [], freshAccuracy, input.collisionPolicy)
+      : freshAccuracy;
+  const accuracyRegression =
+    finalAccuracy.length > regressionDegree
+      ? safeFit(finalAccuracy, regressionDegree)
+      : null;
 
-  let regression: PolynomialRegression | null = null;
-  if (samples.length > regressionDegree) {
-    regression = fitPolynomialRegression(samples, regressionDegree);
-  }
+  // Token-cost curve: from per-cell costUsd, filtered to non-error cells
+  const completedCells = allCells
+    .filter((c) => c.decision === "implement" || c.decision === "pushback")
+    .map((c) => ({
+      agentId: c.agentId,
+      agentSizeBytes: c.agentSizeBytes,
+      costUsd: c.costUsd,
+    }));
+  const freshTokenCost = samplesFromCost(completedCells);
+  const finalTokenCost =
+    mode === "update"
+      ? mergeSamples(
+          input.existingTokenCostSamples ?? [],
+          freshTokenCost,
+          input.collisionPolicy,
+        )
+      : freshTokenCost;
+  const tokenCostRegression =
+    finalTokenCost.length > regressionDegree
+      ? safeFit(finalTokenCost, regressionDegree)
+      : null;
 
   await fs.mkdir(path.dirname(input.outputPath), { recursive: true });
   await fs.writeFile(
@@ -133,14 +151,47 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
         totalCostUsd,
         wallMs,
         scores,
-        freshSamples,
-        samples,
-        regression,
+        accuracy: {
+          freshSamples: freshAccuracy,
+          samples: finalAccuracy,
+          regression: accuracyRegression,
+        },
+        tokenCost: {
+          freshSamples: freshTokenCost,
+          samples: finalTokenCost,
+          regression: tokenCostRegression,
+        },
       },
       null,
       2,
     ),
   );
 
-  return { cells: allCells, scores, freshSamples, samples, regression, totalCostUsd, wallMs, mode };
+  return {
+    cells: allCells,
+    scores,
+    accuracy: {
+      freshSamples: freshAccuracy,
+      samples: finalAccuracy,
+      regression: accuracyRegression,
+    },
+    tokenCost: {
+      freshSamples: freshTokenCost,
+      samples: finalTokenCost,
+      regression: tokenCostRegression,
+    },
+    totalCostUsd,
+    wallMs,
+    mode,
+  };
+}
+
+function safeFit(samples: CurveSample[], degree: number): PolynomialRegression | null {
+  try {
+    return fitPolynomialRegression(samples, degree);
+  } catch {
+    // Degenerate inputs (zero variance in y, etc.) — surface null so callers
+    // can flag the curve as unfittable rather than crash.
+    return null;
+  }
 }

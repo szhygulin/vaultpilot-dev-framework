@@ -69,3 +69,37 @@ export function fitFromQualityScores(
   const regression = fitPolynomialRegression(samples, degree);
   return { samples, regression };
 }
+
+/**
+ * Project per-agent token-cost data into curve samples. Each agent contributes
+ * one sample (sizeBytes → factor), where factor = meanCost / minMeanCost.
+ * Anchors at 1.0 at the cheapest agent, scales up as cost grows.
+ *
+ * Caller is expected to filter to cells that completed (decision in
+ * {implement, pushback}); error cells distort the cost mean.
+ */
+export function samplesFromCost(
+  cellsByAgent: ReadonlyArray<{ agentId: string; agentSizeBytes: number; costUsd: number }>,
+): CurveSample[] {
+  if (cellsByAgent.length === 0) return [];
+  const byAgent = new Map<string, { sizeBytes: number; costs: number[] }>();
+  for (const c of cellsByAgent) {
+    let bucket = byAgent.get(c.agentId);
+    if (!bucket) {
+      bucket = { sizeBytes: c.agentSizeBytes, costs: [] };
+      byAgent.set(c.agentId, bucket);
+    }
+    bucket.costs.push(c.costUsd);
+  }
+  const perAgent = [...byAgent.values()]
+    .filter((b) => b.costs.length > 0)
+    .map((b) => ({
+      sizeBytes: b.sizeBytes,
+      meanCost: b.costs.reduce((s, x) => s + x, 0) / b.costs.length,
+    }))
+    .sort((a, b) => a.sizeBytes - b.sizeBytes);
+  if (perAgent.length === 0) return [];
+  const minCost = Math.min(...perAgent.map((a) => a.meanCost));
+  if (minCost <= 0) return perAgent.map((a) => ({ xBytes: a.sizeBytes, factor: 1 }));
+  return perAgent.map((a) => ({ xBytes: a.sizeBytes, factor: a.meanCost / minCost }));
+}

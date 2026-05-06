@@ -3118,10 +3118,12 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
   const issues = opts.issues.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
   const rubrics = opts.rubrics ? JSON.parse(await fs.readFile(opts.rubrics, "utf8")) : undefined;
 
-  let existingSamples: ReadonlyArray<{ xBytes: number; factor: number }> | undefined;
+  let existingAccuracySamples: ReadonlyArray<{ xBytes: number; factor: number }> | undefined;
+  let existingTokenCostSamples: ReadonlyArray<{ xBytes: number; factor: number }> | undefined;
   if (opts.mode === "update") {
     const mod = await import("./util/contextCostCurve.js");
-    existingSamples = mod.CONTEXT_COST_SAMPLES;
+    existingAccuracySamples = mod.ACCURACY_DEGRADATION_SAMPLES;
+    existingTokenCostSamples = mod.TOKEN_COST_SAMPLES;
   }
 
   const result = await runCurveStudy({
@@ -3137,28 +3139,40 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
     mode: opts.mode,
     collisionPolicy: opts.collisionPolicy,
     regressionDegree: opts.degree,
-    existingSamples,
+    existingAccuracySamples,
+    existingTokenCostSamples,
   });
   process.stdout.write(`\nDone. ${result.cells.length} cells, $${result.totalCostUsd.toFixed(2)}, ${(result.wallMs / 60000).toFixed(1)}min.\n`);
   process.stdout.write(`Mode: ${result.mode}. Proposal written to ${opts.output}.\n`);
-  if (result.regression) {
-    const r = result.regression;
-    const sig = r.significance;
-    const adj = Number.isFinite(r.rSquaredAdjusted) ? r.rSquaredAdjusted.toFixed(3) : "n/a";
-    const fp = Number.isFinite(sig.fPValue) ? sig.fPValue.toExponential(2) : "n/a";
+  printCurveSummary("ACCURACY_DEGRADATION_SAMPLES", result.accuracy, opts.degree);
+  printCurveSummary("TOKEN_COST_SAMPLES", result.tokenCost, opts.degree);
+}
+
+function printCurveSummary(
+  label: string,
+  curve: { samples: ReadonlyArray<{ xBytes: number; factor: number }>; regression: { degree: number; n: number; rss: number; tss: number; rSquared: number; rSquaredAdjusted: number; significance: { fStatistic: number; fDfRegression: number; fDfResidual: number; fPValue: number } } | null },
+  degree: number,
+): void {
+  process.stdout.write(`\n=== ${label} ===\n`);
+  if (!curve.regression) {
+    process.stdout.write(`No regression fitted (need >${degree} samples; got ${curve.samples.length}).\n`);
+    return;
+  }
+  const r = curve.regression;
+  const sig = r.significance;
+  const adj = Number.isFinite(r.rSquaredAdjusted) ? r.rSquaredAdjusted.toFixed(3) : "n/a";
+  const fp = Number.isFinite(sig.fPValue) ? sig.fPValue.toExponential(2) : "n/a";
+  const fStat = Number.isFinite(sig.fStatistic) ? sig.fStatistic.toFixed(2) : "n/a";
+  process.stdout.write(
+    `Regression (degree=${r.degree}, n=${r.n}, R²=${r.rSquared.toFixed(3)}, adj-R²=${adj}, F(${sig.fDfRegression},${sig.fDfResidual})=${fStat}, p=${fp})\n`,
+  );
+  if (Number.isFinite(sig.fPValue) && sig.fPValue > 0.05) {
     process.stdout.write(
-      `\nRegression (degree=${r.degree}, n=${r.n}, R²=${r.rSquared.toFixed(3)}, adj-R²=${adj}, F(${sig.fDfRegression},${sig.fDfResidual})=${Number.isFinite(sig.fStatistic) ? sig.fStatistic.toFixed(2) : "n/a"}, p=${fp}).\n`,
+      `WARNING: overall F-test p-value > 0.05 — fit is not statistically significant.\n`,
     );
-    if (Number.isFinite(sig.fPValue) && sig.fPValue > 0.05) {
-      process.stdout.write(
-        `WARNING: overall F-test p-value > 0.05 — fit is not statistically significant; consider more samples or fewer degree.\n`,
-      );
-    }
-    process.stdout.write(`Samples to hand-merge into CONTEXT_COST_SAMPLES (src/util/contextCostCurve.ts):\n`);
-    for (const s of result.samples) {
-      process.stdout.write(`  { xBytes: ${s.xBytes}, factor: ${s.factor.toFixed(3)} },\n`);
-    }
-  } else {
-    process.stdout.write(`Not enough samples (<${opts.degree + 1}) — no regression fitted.\n`);
+  }
+  process.stdout.write(`Samples to hand-merge into ${label} (src/util/contextCostCurve.ts):\n`);
+  for (const s of curve.samples) {
+    process.stdout.write(`  { xBytes: ${s.xBytes}, factor: ${s.factor.toFixed(3)} },\n`);
   }
 }

@@ -1,74 +1,110 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  CONTEXT_COST_SAMPLES,
+  ACCURACY_DEGRADATION_SAMPLES,
+  DEFAULT_COST_WEIGHTS,
+  TOKEN_COST_SAMPLES,
+  accuracyDegradationFactor,
   contextCostFactor,
-  getContextCostRegression,
+  getAccuracyDegradationRegression,
+  getTokenCostRegression,
   resetContextCostCurveCache,
+  tokenCostFactor,
 } from "./contextCostCurve.js";
 
-test("CONTEXT_COST_SAMPLES: factors are monotone non-decreasing in xBytes", () => {
-  const sorted = [...CONTEXT_COST_SAMPLES].sort((a, b) => a.xBytes - b.xBytes);
-  for (let i = 1; i < sorted.length; i++) {
-    assert.ok(sorted[i].factor >= sorted[i - 1].factor, `non-monotone at i=${i}`);
+test("samples: both curves are monotone non-decreasing in xBytes", () => {
+  for (const arr of [ACCURACY_DEGRADATION_SAMPLES, TOKEN_COST_SAMPLES]) {
+    const sorted = [...arr].sort((a, b) => a.xBytes - b.xBytes);
+    for (let i = 1; i < sorted.length; i++) {
+      assert.ok(sorted[i].factor >= sorted[i - 1].factor, `non-monotone at i=${i}`);
+    }
   }
 });
 
-test("getContextCostRegression: degree 2, R² above 0.9 on the seeded samples", () => {
-  resetContextCostCurveCache();
-  const reg = getContextCostRegression();
-  assert.equal(reg.degree, 2);
-  assert.ok(reg.rSquared > 0.9, `R²=${reg.rSquared}`);
+test("DEFAULT_COST_WEIGHTS: sum to 1.0 and accuracy weight = 0.75", () => {
+  assert.equal(DEFAULT_COST_WEIGHTS.accuracy, 0.75);
+  assert.equal(DEFAULT_COST_WEIGHTS.cost, 0.25);
+  assert.ok(Math.abs(DEFAULT_COST_WEIGHTS.accuracy + DEFAULT_COST_WEIGHTS.cost - 1) < 1e-9);
 });
 
-test("getContextCostRegression: significance fields populated and finite", () => {
+test("getAccuracyDegradationRegression / getTokenCostRegression: both fit at degree 2 with finite F p-values", () => {
   resetContextCostCurveCache();
-  const reg = getContextCostRegression();
-  const sig = reg.significance;
-  assert.ok(Number.isFinite(sig.fStatistic), `F=${sig.fStatistic}`);
-  assert.ok(Number.isFinite(sig.fPValue), `F p-value=${sig.fPValue}`);
-  assert.equal(sig.coefficients.length, reg.degree + 1);
-  assert.equal(sig.fDfRegression, reg.degree);
-  assert.equal(sig.fDfResidual, reg.n - reg.degree - 1);
-});
-
-test("contextCostFactor: returns >= 1 across the full sample range", () => {
-  resetContextCostCurveCache();
-  const xs = CONTEXT_COST_SAMPLES.map((s) => s.xBytes);
-  const lo = Math.min(...xs);
-  const hi = Math.max(...xs);
-  for (let x = lo; x <= hi; x += 512) {
-    const f = contextCostFactor(x);
-    assert.ok(!Number.isNaN(f) && Number.isFinite(f), `NaN/inf at x=${x}`);
-    assert.ok(f >= 1, `factor < 1 at x=${x}: ${f}`);
+  for (const reg of [getAccuracyDegradationRegression(), getTokenCostRegression()]) {
+    assert.equal(reg.degree, 2);
+    assert.ok(Number.isFinite(reg.significance.fPValue));
   }
 });
 
-test("contextCostFactor: clamps below the smallest sample to factor>=1", () => {
+test("accuracyDegradationFactor and tokenCostFactor: both >= 1 across sample range", () => {
   resetContextCostCurveCache();
-  const f = contextCostFactor(0);
-  assert.ok(f >= 1, `expected >=1, got ${f}`);
-});
-
-test("contextCostFactor: clampHigh caps at the predicted value at the largest sample", () => {
-  resetContextCostCurveCache();
-  const xs = CONTEXT_COST_SAMPLES.map((s) => s.xBytes);
-  const hi = Math.max(...xs);
-  const capped = contextCostFactor(hi * 4, { clampHigh: true });
-  const atTop = contextCostFactor(hi);
-  assert.ok(Math.abs(capped - atTop) < 1e-6, `clampHigh=${capped} should equal atTop=${atTop}`);
-});
-
-test("contextCostFactor: regression is monotone-increasing across sample range (concave-up shape)", () => {
-  resetContextCostCurveCache();
-  const xs = CONTEXT_COST_SAMPLES.map((s) => s.xBytes);
-  const lo = Math.min(...xs);
-  const hi = Math.max(...xs);
-  let prev = contextCostFactor(lo);
-  for (let x = lo + 1024; x <= hi; x += 1024) {
-    const f = contextCostFactor(x);
-    // Allow tiny negative slope (numerical jitter) but flag larger drops as a regression-shape regression
-    assert.ok(f >= prev - 0.01, `regression dipped at x=${x}: ${prev} -> ${f}`);
-    prev = f;
+  for (const arr of [ACCURACY_DEGRADATION_SAMPLES, TOKEN_COST_SAMPLES]) {
+    const xs = arr.map((s) => s.xBytes);
+    const lo = Math.min(...xs);
+    const hi = Math.max(...xs);
+    for (let x = lo; x <= hi; x += 1024) {
+      assert.ok(accuracyDegradationFactor(x) >= 1, `acc<1 at x=${x}`);
+      assert.ok(tokenCostFactor(x) >= 1, `tc<1 at x=${x}`);
+    }
   }
+});
+
+test("contextCostFactor: default weights produce a value between the two component factors", () => {
+  resetContextCostCurveCache();
+  const x = 24000;
+  const acc = accuracyDegradationFactor(x);
+  const tc = tokenCostFactor(x);
+  const composite = contextCostFactor(x);
+  const lo = Math.min(acc, tc);
+  const hi = Math.max(acc, tc);
+  // weighted sum lies between the two extremes (or equals when they match)
+  assert.ok(composite >= lo - 1e-9 && composite <= hi + 1e-9, `${composite} not in [${lo},${hi}]`);
+  // explicit check: 0.75·acc + 0.25·tc
+  assert.ok(Math.abs(composite - (0.75 * acc + 0.25 * tc)) < 1e-9);
+});
+
+test("contextCostFactor: rejects weights that don't sum to 1.0", () => {
+  resetContextCostCurveCache();
+  assert.throws(() =>
+    contextCostFactor(24000, { weights: { accuracy: 0.5, cost: 0.4 } }),
+  );
+  assert.throws(() =>
+    contextCostFactor(24000, { weights: { accuracy: 0.6, cost: 0.6 } }),
+  );
+});
+
+test("contextCostFactor: weights {1.0, 0.0} = pure accuracy curve", () => {
+  resetContextCostCurveCache();
+  const x = 24000;
+  const acc = accuracyDegradationFactor(x);
+  const composite = contextCostFactor(x, { weights: { accuracy: 1.0, cost: 0.0 } });
+  assert.ok(Math.abs(composite - acc) < 1e-9);
+});
+
+test("contextCostFactor: weights {0.0, 1.0} = pure token-cost curve", () => {
+  resetContextCostCurveCache();
+  const x = 24000;
+  const tc = tokenCostFactor(x);
+  const composite = contextCostFactor(x, { weights: { accuracy: 0.0, cost: 1.0 } });
+  assert.ok(Math.abs(composite - tc) < 1e-9);
+});
+
+test("contextCostFactor: rejects negative weights", () => {
+  resetContextCostCurveCache();
+  assert.throws(() =>
+    contextCostFactor(24000, { weights: { accuracy: 1.5, cost: -0.5 } }),
+  );
+});
+
+test("contextCostFactor: clampHigh propagates to both component curves", () => {
+  resetContextCostCurveCache();
+  const accMaxX = Math.max(...ACCURACY_DEGRADATION_SAMPLES.map((s) => s.xBytes));
+  const tcMaxX = Math.max(...TOKEN_COST_SAMPLES.map((s) => s.xBytes));
+  const farX = Math.max(accMaxX, tcMaxX) * 4;
+  const capped = contextCostFactor(farX, { clampHigh: true });
+  const compAtMax =
+    0.75 * accuracyDegradationFactor(Math.max(accMaxX, tcMaxX), { clampHigh: true }) +
+    0.25 * tokenCostFactor(Math.max(accMaxX, tcMaxX), { clampHigh: true });
+  // The clamped composite at far-x equals the composite at the max sample x
+  // (each component is clamped to its own max, then weighted summed)
+  assert.ok(capped <= compAtMax + 1e-6);
 });

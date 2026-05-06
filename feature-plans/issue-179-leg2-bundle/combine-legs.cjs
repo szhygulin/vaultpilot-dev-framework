@@ -23,7 +23,7 @@ async function main() {
     );
     process.exit(1);
   }
-  const repoRoot = path.resolve(__dirname, "..", "..", "..");
+  const repoRoot = path.resolve(__dirname, "..", "..");
   const distRoot = path.join(repoRoot, "dist", "src", "research", "curveStudy");
   const { aggregateLogsDir } = require(path.join(distRoot, "aggregate.js"));
   const { scoreAllAgents } = require(path.join(distRoot, "score.js"));

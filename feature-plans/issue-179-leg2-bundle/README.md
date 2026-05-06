@@ -14,7 +14,7 @@ feature-plans/issue-179-leg2-bundle/
 ├── trims-phase3/                      (576 KB, 18 files) — pre-generated trim CLAUDE.mds
 ├── leg-1-curve-study-mcp.json         (56 KB) — leg-1 fit output (linear-log, 108 cells, $123.70)
 ├── leg-1-logs.tar.gz                  (60 KB compressed → 860 KB extracted, 109 files) — per-cell spawn logs from leg 1 (tarballed because *.log is in .gitignore)
-└── combine-legs.js                    — Node helper: aggregates leg-1 + leg-2 logs, fits linear-log, writes combined output
+└── combine-legs.cjs                    — Node helper: aggregates leg-1 + leg-2 logs, fits linear-log, writes combined output
 ```
 
 ## Prerequisites on the executing agent
@@ -137,7 +137,7 @@ After leg 2 completes, combine with leg 1 to get 18 agents × 13 issues each (6 
 ls feature-plans/issue-179-data/logs-dev/curveStudy-*.log | wc -l   # expect 126
 
 # Combined fit: per-agent cells pool across both legs, scored together, fit linear-log on the 18 sample points
-node feature-plans/issue-179-leg2-bundle/combine-legs.js \
+node feature-plans/issue-179-leg2-bundle/combine-legs.cjs \
   feature-plans/issue-179-data/logs-mcp \
   feature-plans/issue-179-data/logs-dev \
   feature-plans/issue-179-data/agents-spec-phase3-dev.json \

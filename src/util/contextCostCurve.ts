@@ -18,30 +18,54 @@ import type { CurveSample } from "../research/curveStudy/types.js";
  * runtime composite curve is a weighted combination — see
  * {@link contextCostFactor}.
  *
- * Provenance: seeded from #179's pilot on 2026-05-06 (claude-opus-4-7[1m],
- * advisory-scope-boundary specialty). Re-fit when the orchestrator's
- * primary model tier changes or when calibrating a different specialty.
- *
- * Status: the seed values below are the pre-study placeholders from #177's
- * body. The 2026-05-06 phase-2 run produced a null quality signal (every
- * cell implement) and a not-statistically-significant cost signal (F-test
- * p=0.107). Until a follow-up study with harder issues + operator rubrics
- * lands, these are guesses.
+ * Provenance: #179 phase 3, K=13 combined fit (legs 1 + 2) on 2026-05-06,
+ * claude-opus-4-7[1m], advisory-scope-boundary specialty. 18 trim agents at
+ * 6 sizes (~6K, 14K, 22K, 35K, 50K, 58K bytes), 13 issues each (6 vp-mcp +
+ * 7 vp-development-agents), 182 scored cells. Both curves clear F-test
+ * significance: accuracy p=3.96e-2 (R²=0.239), token-cost p=4.43e-3
+ * (R²=0.406). Re-fit when the orchestrator's primary model tier changes or
+ * when calibrating a different specialty.
  */
 export const ACCURACY_DEGRADATION_SAMPLES: ReadonlyArray<CurveSample> = [
-  { xBytes: 8192, factor: 1.0 },
-  { xBytes: 16384, factor: 1.2 },
-  { xBytes: 32768, factor: 2.5 },
-  { xBytes: 49152, factor: 4.0 },
-  { xBytes: 65536, factor: 6.0 },
+  { xBytes: 5935, factor: 1.0 },
+  { xBytes: 5975, factor: 1.045 },
+  { xBytes: 5978, factor: 1.017 },
+  { xBytes: 13777, factor: 1.06 },
+  { xBytes: 13935, factor: 1.06 },
+  { xBytes: 13964, factor: 1.06 },
+  { xBytes: 21873, factor: 1.06 },
+  { xBytes: 21918, factor: 1.06 },
+  { xBytes: 21976, factor: 1.19 },
+  { xBytes: 34192, factor: 1.704 },
+  { xBytes: 34556, factor: 1.127 },
+  { xBytes: 34786, factor: 1.19 },
+  { xBytes: 49010, factor: 1.704 },
+  { xBytes: 49726, factor: 1.179 },
+  { xBytes: 49745, factor: 1.167 },
+  { xBytes: 56247, factor: 1.167 },
+  { xBytes: 56493, factor: 1.15 },
+  { xBytes: 56680, factor: 1.15 },
 ];
 
 export const TOKEN_COST_SAMPLES: ReadonlyArray<CurveSample> = [
-  { xBytes: 8192, factor: 1.0 },
-  { xBytes: 16384, factor: 1.05 },
-  { xBytes: 32768, factor: 1.15 },
-  { xBytes: 49152, factor: 1.3 },
-  { xBytes: 65536, factor: 1.5 },
+  { xBytes: 5935, factor: 2.558 },
+  { xBytes: 5975, factor: 2.801 },
+  { xBytes: 5978, factor: 2.731 },
+  { xBytes: 13777, factor: 2.504 },
+  { xBytes: 13935, factor: 2.927 },
+  { xBytes: 13964, factor: 3.085 },
+  { xBytes: 21873, factor: 2.444 },
+  { xBytes: 21918, factor: 2.723 },
+  { xBytes: 21976, factor: 2.011 },
+  { xBytes: 34192, factor: 1.252 },
+  { xBytes: 34556, factor: 2.301 },
+  { xBytes: 34786, factor: 2.868 },
+  { xBytes: 49010, factor: 1.0 },
+  { xBytes: 49726, factor: 1.712 },
+  { xBytes: 49745, factor: 1.924 },
+  { xBytes: 56247, factor: 1.751 },
+  { xBytes: 56493, factor: 1.827 },
+  { xBytes: 56680, factor: 2.413 },
 ];
 
 /**

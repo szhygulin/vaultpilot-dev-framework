@@ -121,13 +121,27 @@ export function tokenCostFactor(
  * bytes:
  *   contextCost(section) = bytes(section) × contextCostFactor(currentTotalBytes)
  *
- * Combines both curves under the chosen weights:
- *   factor = w_acc · accuracyDegradationFactor(x) + w_cost · tokenCostFactor(x)
+ * Combines both curves under the chosen weights AFTER range-normalizing each
+ * to [1, 2] over its calibration sample range. Without normalization the
+ * accuracy curve's natural range (e.g. 1.0–6.0) would dominate the
+ * token-cost curve's narrower range (1.0–1.4) regardless of weights — the
+ * stated 75/25 wouldn't match the empirical contribution.
  *
- * Default weights are accuracy 0.75 / cost 0.25 — accuracy-degraded
- * decisions are the worse failure mode (a wrong action persists; a single
- * extra-expensive turn doesn't), but cost is non-zero and worth weighting
- * explicitly. Override via `opts.weights`; weights must sum to 1.0.
+ * Normalization:
+ *   accNorm(x)  = 1 + (accuracyDegradationFactor(x)  − 1) / (accuracyMax  − 1)
+ *   tcNorm(x)   = 1 + (tokenCostFactor(x)            − 1) / (tokenCostMax − 1)
+ *
+ * accuracyMax / tokenCostMax come from the largest factor in each curve's
+ * SAMPLE array — known constants, not the runtime regression. Inputs in the
+ * calibration range produce normalized factors in [1, 2]; extrapolations
+ * past the largest sample exceed 2.
+ *
+ * If a curve is flat (max factor = 1), its normalized contribution is 1
+ * everywhere (no signal in that dimension; the other curve dominates).
+ *
+ * The composite returns a factor ≥ 1 over the calibration range; the
+ * weights' empirical contributions match their stated values because both
+ * curves have been brought to a common dynamic range.
  */
 export function contextCostFactor(
   totalBytes: number,
@@ -146,9 +160,43 @@ export function contextCostFactor(
   if (w.accuracy < 0 || w.cost < 0) {
     throw new Error("contextCostFactor: weights must be non-negative");
   }
-  const acc = accuracyDegradationFactor(totalBytes, opts);
-  const tc = tokenCostFactor(totalBytes, opts);
-  return w.accuracy * acc + w.cost * tc;
+  const accNorm = normalizedAccuracyFactor(totalBytes, opts);
+  const tcNorm = normalizedTokenCostFactor(totalBytes, opts);
+  return w.accuracy * accNorm + w.cost * tcNorm;
+}
+
+/**
+ * Range-normalized accuracy-degradation factor: maps the curve's
+ * [1, accuracyMax] range to [1, 2]. Returns 1 everywhere for flat curves.
+ * Used internally by {@link contextCostFactor}; exposed for diagnostics.
+ */
+export function normalizedAccuracyFactor(
+  totalBytes: number,
+  opts?: { clampHigh?: boolean },
+): number {
+  const raw = accuracyDegradationFactor(totalBytes, opts);
+  return rangeNormalize(raw, sampleMaxFactor(ACCURACY_DEGRADATION_SAMPLES));
+}
+
+/**
+ * Range-normalized token-cost factor: maps the curve's [1, tokenCostMax]
+ * range to [1, 2]. Returns 1 everywhere for flat curves.
+ */
+export function normalizedTokenCostFactor(
+  totalBytes: number,
+  opts?: { clampHigh?: boolean },
+): number {
+  const raw = tokenCostFactor(totalBytes, opts);
+  return rangeNormalize(raw, sampleMaxFactor(TOKEN_COST_SAMPLES));
+}
+
+function sampleMaxFactor(samples: ReadonlyArray<CurveSample>): number {
+  return samples.reduce((m, s) => (s.factor > m ? s.factor : m), 1);
+}
+
+function rangeNormalize(rawFactor: number, sampleMax: number): number {
+  if (sampleMax <= 1 + 1e-9) return 1; // flat curve
+  return 1 + (rawFactor - 1) / (sampleMax - 1);
 }
 
 function evaluateClamped(

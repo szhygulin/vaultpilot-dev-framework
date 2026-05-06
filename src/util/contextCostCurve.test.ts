@@ -8,6 +8,8 @@ import {
   contextCostFactor,
   getAccuracyDegradationRegression,
   getTokenCostRegression,
+  normalizedAccuracyFactor,
+  normalizedTokenCostFactor,
   resetContextCostCurveCache,
   tokenCostFactor,
 } from "./contextCostCurve.js";
@@ -48,18 +50,52 @@ test("accuracyDegradationFactor and tokenCostFactor: both >= 1 across sample ran
   }
 });
 
-test("contextCostFactor: default weights produce a value between the two component factors", () => {
+test("contextCostFactor: default weights produce a value in [1, 2] across the calibration range", () => {
+  resetContextCostCurveCache();
+  const xs = [
+    ...ACCURACY_DEGRADATION_SAMPLES.map((s) => s.xBytes),
+    ...TOKEN_COST_SAMPLES.map((s) => s.xBytes),
+  ];
+  const lo = Math.min(...xs);
+  const hi = Math.max(...xs);
+  for (let x = lo; x <= hi; x += 1024) {
+    const composite = contextCostFactor(x);
+    assert.ok(composite >= 1 - 1e-9, `composite < 1 at x=${x}: ${composite}`);
+    assert.ok(composite <= 2 + 1e-3, `composite > 2 at x=${x}: ${composite}`);
+  }
+});
+
+test("contextCostFactor: composite equals weighted sum of normalized factors", () => {
   resetContextCostCurveCache();
   const x = 24000;
-  const acc = accuracyDegradationFactor(x);
-  const tc = tokenCostFactor(x);
+  const accN = normalizedAccuracyFactor(x);
+  const tcN = normalizedTokenCostFactor(x);
   const composite = contextCostFactor(x);
-  const lo = Math.min(acc, tc);
-  const hi = Math.max(acc, tc);
-  // weighted sum lies between the two extremes (or equals when they match)
-  assert.ok(composite >= lo - 1e-9 && composite <= hi + 1e-9, `${composite} not in [${lo},${hi}]`);
-  // explicit check: 0.75·acc + 0.25·tc
-  assert.ok(Math.abs(composite - (0.75 * acc + 0.25 * tc)) < 1e-9);
+  assert.ok(Math.abs(composite - (0.75 * accN + 0.25 * tcN)) < 1e-9);
+});
+
+test("normalizedAccuracyFactor: maps largest sample to factor 2", () => {
+  resetContextCostCurveCache();
+  const maxX = ACCURACY_DEGRADATION_SAMPLES.reduce((m, s) => (s.factor > m.factor ? s : m), ACCURACY_DEGRADATION_SAMPLES[0]).xBytes;
+  const norm = normalizedAccuracyFactor(maxX);
+  assert.ok(Math.abs(norm - 2) < 1e-2, `norm=${norm} at largest sample`);
+});
+
+test("normalizedTokenCostFactor: maps largest sample to factor 2", () => {
+  resetContextCostCurveCache();
+  const maxX = TOKEN_COST_SAMPLES.reduce((m, s) => (s.factor > m.factor ? s : m), TOKEN_COST_SAMPLES[0]).xBytes;
+  const norm = normalizedTokenCostFactor(maxX);
+  assert.ok(Math.abs(norm - 2) < 1e-2, `norm=${norm} at largest sample`);
+});
+
+test("contextCostFactor: weights {0.5, 0.5} reach exactly 2.0 at the size where both curves peak", () => {
+  resetContextCostCurveCache();
+  const accMaxX = ACCURACY_DEGRADATION_SAMPLES.reduce((m, s) => (s.factor > m.factor ? s : m), ACCURACY_DEGRADATION_SAMPLES[0]).xBytes;
+  const tcMaxX = TOKEN_COST_SAMPLES.reduce((m, s) => (s.factor > m.factor ? s : m), TOKEN_COST_SAMPLES[0]).xBytes;
+  if (accMaxX === tcMaxX) {
+    const composite = contextCostFactor(accMaxX, { weights: { accuracy: 0.5, cost: 0.5 } });
+    assert.ok(Math.abs(composite - 2) < 1e-2, `composite=${composite}`);
+  }
 });
 
 test("contextCostFactor: rejects weights that don't sum to 1.0", () => {
@@ -72,20 +108,20 @@ test("contextCostFactor: rejects weights that don't sum to 1.0", () => {
   );
 });
 
-test("contextCostFactor: weights {1.0, 0.0} = pure accuracy curve", () => {
+test("contextCostFactor: weights {1.0, 0.0} = pure NORMALIZED accuracy curve", () => {
   resetContextCostCurveCache();
   const x = 24000;
-  const acc = accuracyDegradationFactor(x);
+  const accN = normalizedAccuracyFactor(x);
   const composite = contextCostFactor(x, { weights: { accuracy: 1.0, cost: 0.0 } });
-  assert.ok(Math.abs(composite - acc) < 1e-9);
+  assert.ok(Math.abs(composite - accN) < 1e-9);
 });
 
-test("contextCostFactor: weights {0.0, 1.0} = pure token-cost curve", () => {
+test("contextCostFactor: weights {0.0, 1.0} = pure NORMALIZED token-cost curve", () => {
   resetContextCostCurveCache();
   const x = 24000;
-  const tc = tokenCostFactor(x);
+  const tcN = normalizedTokenCostFactor(x);
   const composite = contextCostFactor(x, { weights: { accuracy: 0.0, cost: 1.0 } });
-  assert.ok(Math.abs(composite - tc) < 1e-9);
+  assert.ok(Math.abs(composite - tcN) < 1e-9);
 });
 
 test("contextCostFactor: rejects negative weights", () => {
@@ -102,8 +138,8 @@ test("contextCostFactor: clampHigh propagates to both component curves", () => {
   const farX = Math.max(accMaxX, tcMaxX) * 4;
   const capped = contextCostFactor(farX, { clampHigh: true });
   const compAtMax =
-    0.75 * accuracyDegradationFactor(Math.max(accMaxX, tcMaxX), { clampHigh: true }) +
-    0.25 * tokenCostFactor(Math.max(accMaxX, tcMaxX), { clampHigh: true });
+    0.75 * normalizedAccuracyFactor(Math.max(accMaxX, tcMaxX), { clampHigh: true }) +
+    0.25 * normalizedTokenCostFactor(Math.max(accMaxX, tcMaxX), { clampHigh: true });
   // The clamped composite at far-x equals the composite at the max sample x
   // (each component is clamped to its own max, then weighted summed)
   assert.ok(capped <= compAtMax + 1e-6);

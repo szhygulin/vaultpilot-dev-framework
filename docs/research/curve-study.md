@@ -5,12 +5,17 @@ Re-fits the two calibration curves in `src/util/contextCostCurve.ts` from a stud
 - `ACCURACY_DEGRADATION_SAMPLES` — outcome-quality factor (how much worse the agent gets at picking the right action as context grows).
 - `TOKEN_COST_SAMPLES` — token-budget factor (how many more $/turns per cell the agent burns as context grows).
 
-Phase 3's per-section cost function combines both under explicit weights (default 75% accuracy, 25% cost):
+Phase 3's per-section cost function combines both under explicit weights (default 75% accuracy, 25% cost), AFTER range-normalizing each curve to a common dynamic range:
 
 ```
-contextCostFactor(x) = 0.75 · accuracyDegradationFactor(x) + 0.25 · tokenCostFactor(x)
+accNorm(x) = 1 + (accuracyDegradationFactor(x)  − 1) / (accuracyMax  − 1)   ∈ [1, 2]
+tcNorm(x)  = 1 + (tokenCostFactor(x)            − 1) / (tokenCostMax − 1)   ∈ [1, 2]
+
+contextCostFactor(x) = 0.75 · accNorm(x) + 0.25 · tcNorm(x)
 contextCost(section, currentTotalBytes) = bytes(section) × contextCostFactor(currentTotalBytes)
 ```
+
+The normalization step is non-optional: without it the curve with the larger natural range (accuracy, plausibly 1.0–6.0) dominates the curve with the narrower range (token cost, observed 1.0–1.4) regardless of weights. Stated 75/25 wouldn't match the empirical contribution. After normalization, both curves contribute exactly their weighted share of the [1, 2] composite range.
 
 Re-run when the orchestrator's primary model changes or when calibrating a different specialty class — both curves are model-version- and specialty-specific (#179).
 

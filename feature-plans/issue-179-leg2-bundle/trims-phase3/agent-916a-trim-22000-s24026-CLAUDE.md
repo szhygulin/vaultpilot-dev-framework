@@ -1,0 +1,176 @@
+## Crypto/DeFi Transaction Preflight Checks
+- Before preparing any on-chain tx, verify: native gas/bandwidth (TRX bandwidth on TRON), lending pause flags (`isWithdrawPaused` / `isSupplyPaused`), min borrow/supply thresholds, ERC-20 approval status.
+- Never use `uint256.max` for collateral withdrawal — fetch the exact balance.
+- Multi-step (approve + action): wait for the approval to confirm before sending the dependent tx.
+
+## Tool Usage Discipline
+- Don't repeat the same informational tool call within a single turn — cache mentally.
+- Ambiguous / empty result: verify once with a different method; don't loop without user consent.
+
+## Security Incident Response Tone
+- Diagnose malware/compromise with evidence-based scoping before recommending destructive actions (wipe, nuke, rotate-all). Never delete evidence files before reading them.
+
+## Issue Analysis
+- **When asked to work on an issue, read the comments too — not just the body — and fold relevant content into the analysis.** Comments are where reviewers add follow-up scope, push back on the original framing, or specify defense layers the body left implicit. Skipping them ships a half-answer to the wrong question. `gh api repos/<owner>/<repo>/issues/<N>/comments` returns the thread.
+- Past incident 2026-04-29: implemented #556 (burn-address approval refusal) from the body alone. The user's follow-up comment ("agent should route this through the approve tool, not prepare_custom_call") was the second defense layer the issue actually required — caught only after the user pointed it out, costing a round-trip.
+
+## Install-State-Aware Recommendations
+- **Before recommending a command that depends on how a tool is installed (npm-global vs local clone vs pipx vs system-package vs MCP-server registration), verify the actual install state first.** This is the `rnd` skill's "name the source before you name the fact" applied to recommendations: the source of truth is the user's actual installed state, not a plausible guess about how they installed it. One cheap read (`which <bin>`, `claude mcp get <name>`, `cat <config>`, `ls <expected dir>`) costs less than a command that silently switches the user off their dev build, points at the wrong binary, or installs a duplicate alongside the real one. Generalizes: any recommendation whose correctness depends on user-side state — shell, package manager, version, scope, env — verifies that state before naming the command.
+- Tells you're about to recommend without verifying:
+  - `npx -y <pkg>` for a tool the user runs from `node /path/to/dist/index.js`.
+  - `pip install` when the user has it under pipx / conda / system-package.
+  - `brew` on Linux, `apt` on macOS, or any pkg-manager that doesn't match the platform.
+  - `claude mcp add <name>` without `claude mcp get <name>` first to capture existing scope, command, args, env.
+  - `~/.bashrc` edits when the user runs zsh (or vice versa).
+- Format: lead with one observation line ("`claude mcp get` shows scope=local, launches via `node /path/dist/index.js`, no env vars set"), then the command tailored to that state. The observation line lets the user catch mismatches you missed.
+- Past incident 2026-04-29: drafted `claude mcp add vaultpilot-mcp --env SAFE_API_KEY=<key> -- npx -y vaultpilot-mcp` for a `SAFE_API_KEY` setup, assuming the published npm package. User actually runs a local dev clone at `/home/szhygulin/dev/recon-mcp/dist/index.js`. The recommended command would have switched their MCP off the dev build onto npm-latest, silently dropping unmerged local work. Caught only because the user asked for the exact command, forcing me to read `claude mcp get` first. Right move: read first, recommend second.
+
+## Advisory-prose security findings with no named MCP tool surface are architectural residual risk —...
+
+**Rule:** When a `security_finding` targets harmful content that lives only in agent-generated free-text prose — typosquat URLs, fabricated recovery contacts, phishing text, misleading instructions — and the issue body names no `prepare_*`, `preview_*`, signing, or other MCP tool call as the emission/sanitization point, push back as architectural residual risk. Do not investigate or attempt a code fix.
+
+**Past incidents:** issue #595 (run 2026-05-01, advisory-prose typosquat); issue #595 (run 2026-05-05, repeat of same class); issue #583 (run 2026-05-05, hallucinated download URLs / fake recovery contacts).
+
+**Why:**
+- The MCP server only controls flow through tool boundaries; it has no trust boundary over prose the LLM emits directly and cannot intercept or sanitize advisory text.
+- The correct defense layer is the chat-client output filter, model-safety tuning, upstream content policy, or the advisory-generating cooperating-agent skill — all out of scope for vaultpilot-mcp.
+- Accepting such issues as in-scope creates unbounded work, sets false precedent that this class belongs to the MCP layer, and produces pseudo-fixes (prompt snippets, schema fields) that yield false confidence without closing the actual attack surface. A canonical prior closure already establishes the pattern; re-litigating the architecture per report is wasteful.
+
+**How to apply:**
+1. On any `security_finding` / `advisory-prose` / `typosquat` / `fake-recovery-contacts` issue, first ask: does the harmful payload traverse a named MCP tool call?
+2. If no tool is implicated, search closed issues for the earliest canonical architectural-residual-risk disposition for this class.
+3. Post a pushback comment that includes:
+   - reference to that canonical prior closure (do not re-argue the architecture from scratch),
+   - the correct defense layer named explicitly (chat-client output filter / model-safety tuning / upstream content policy / cooperating-agent skill),
+   - concrete re-scope alternatives that *would* implicate a real tool surface — at minimum: (1) a named MCP tool surface through which the harmful content travels, (2) a meta-tracker, (3) an honestly-scoped cooperating-agent skill guidance with explicit scope statement.
+4. Offer re-scope only if the reporter identifies a specific MCP tool surface; otherwise close as architectural residual risk.
+
+**Tells (union):**
+- Issue body names "chat output filter," "chat client," "model safety," or "no MCP defense applies" as the fix location.
+- No `prepare_*` / `preview_*` / signing tool is mentioned as the emission point.
+- Issue body cites advisory cell IDs (e.g. `expert-xNNN-A.5`) or describes malicious URLs in free-text prose rather than in structured transaction fields.
+- Labels include `advisory-prose`, `typosquat`, `fake-recovery-contacts`, or `rogue-agent-triage`, often co-occurring with `security_finding`.
+<!-- run:merge-2026-05-05T21-49-44-518Z issue:#581+#585+#597 outcome:compacted ts:2026-05-05T21:49:44.519Z -->
+## SKILL.md content changes require a coordinated MCP-side EXPECTED_SKILL_SHA256 bump
+
+**Every content-changing SKILL.md edit must be paired with an MCP-side `EXPECTED_SKILL_SHA256` update shipped in a coordinated PR.**
+
+**Why:** vaultpilot-mcp pins `EXPECTED_SKILL_SHA256` to the last known-good sentinel hash (`vN_<hex>`). Bumping only the skill side leaves the integrity gate mismatched, silently blocking cooperating agents at runtime.
+
+**How to apply:** When a SKILL.md commit increments the sentinel (e.g., v12 → v13), open a paired PR in vaultpilot-mcp updating `EXPECTED_SKILL_SHA256`; merge-order so the MCP side never leads the skill side.
+
+**Tells:** scope notes contain 'coordinated PR pair'; sentinel string in SKILL.md changes; issue carries `c4-reframe`, `tool-misframing`, or `speculative-pick-refusal` tags.
+
+New SKILL.md sections scoped to cooperating-agent scenarios must carry the explicit `cooperating-agent-only` label per Rogue-Agent-Only Finding Triage policy.
+
+<!-- promote-candidate:cooperating-agent-guidance -->
+In the vaultpilot-security-skill repo, every SKILL.md change that alters the integrity sentinel string (`vN_<hex>`) has a required paired update in vaultpilot-mcp: the `EXPECTED_SKILL_SHA256` constant must be bumped to match. The two changes are always described in scope notes as a 'coordinated PR pair' and must be merge-ordered so the MCP side does not go live before the new skill content is present. Missing the MCP half causes the integrity gate to mismatch and breaks cooperating-agent runtime checks without an obvious error signal at authoring time.
+<!-- /promote-candidate -->
+
+<!-- run:run-2026-05-05T16-20-40-497Z issue:#129 outcome:implement ts:2026-05-05T16:26:30.113Z tags:co-signature,pr-attribution,resume-incomplete,salvage-workflow,workflow-prompt -->
+## Thread originating-agent identity end-to-end in resume and salvage workflows
+
+**When a resume or salvage path is introduced, originating-agent metadata (agentId, agentName, runId) must be explicitly piped from its source (registry or state file) through every intermediate data structure — ResumeContext, WorkflowVars, or equivalent — all the way to the rendered output artifact (PR body, commit message).**
+
+**Why:** Without explicit threading, the resumed agent has no data available to emit a co-signature line; post-hoc attribution audits (e.g., `gh pr list --search 'in:body "agent-XXXX"'`) silently miss the originating contributor. The data does not "flow through" by accident — each hop must be deliberate.
+
+**How to apply:** On any PR touching resume, salvage, or re-dispatch logic, trace the attribution field from its source to the final artifact. If any intermediate struct lacks the field, add it before writing the rendering layer.
+
+**Tells:** `ResumeContext` or `WorkflowVars` lacking `agentId`/`agentName` fields; workflow prompt templates with no co-signature block; operator-side hand-salvage paths that bypass `--resume-incomplete` entirely.
+
+<!-- promote-candidate:salvage-workflow -->
+In salvage and resume workflows, the originating agent's identity (agentId, agentName, runId) is typically available in the agent registry or a persisted state file, but it does not automatically propagate to the resumed agent's rendered prompt. Each intermediate data structure in the pipeline (e.g. ResumeContext, WorkflowVars) must explicitly carry these fields, or the resumed agent has nothing to attribute. PRs produced by salvaged runs without this threading will omit co-signature lines, making multi-contributor audit queries unreliable.
+<!-- /promote-candidate -->
+
+<!-- run:run-2026-05-05T16-33-14-458Z issue:#131 outcome:implement ts:2026-05-05T16:43:01.731Z tags:cost-surface,in-flight-signals,jsonl-log-parser,live-progress,operator-tooling,run-state-schema,status-cli -->
+## Cross-cutting features need a layer-chain audit and phase split along the data-layer / integratio...
+
+**Rule:** Cross-cutting orchestration / envelope / dedup / fee-rendering features touch a predictable plumbing chain that is consistently underestimated by 1.5–2×. Before dispatch, run a layer-chain audit; if ≥5–6 layers are implicated, propose a phased split along the natural seam, and gate Phase 1 so the merged artifact is a byte-identical no-op until Phase 2 wires activation.
+
+**Canonical layer chain:** `types` → `state/schema` → `workflow logic` → `orchestrator` → `CLI wiring` → `tests`. Each layer typically adds one file, making stated '4–5 file' estimates low by 1.5–2× (the ×1.5 calibration multiplier).
+
+**Past incidents:**
+- Issue #134 (run 2026-05-05, workflow-threading auto-phase-followup; 6-layer chain surfaced under-stated file count).
+- Issue #141 (run 2026-05-05, Phase 1 of multi-phase split landed as no-op via optional Zod fields + `autoPhaseFollowup` default-off guard).
+- Issue #140 (run 2026-05-05, dedup feature with `--apply-dedup` destructive flag; 6–8 file layer chain hidden behind ~5-file scope).
+- Issue #649 (run 2026-05-05, cost-preview multi-chain expansion; TRON net-burn enrichment forced a Phase 1 (render-and-wire) / Phase 2 (envelope schema extension + enrichment) split).
+
+**Natural split seams (use the one that fits):**
+- **Data-layer vs. integration-wiring** (general orchestration features): types + schema + render helpers in Phase 1; CLI + orchestrator + lifecycle hooks + tests in Phase 2.
+- **Advisory-vs-mutation seam** (dedup-style features): Phase A = detection + advisory report only; Phase B = destructive close path behind a flag like `--apply-dedup`.
+- **Envelope-vs-enrichment seam** (cost-preview / fee-rendering across chains): Phase 1 = render-and-wire against chains whose fee data already lives on the unsigned-tx envelope (`networkFee`, `priorityFee`, `feeEstimate`); Phase 2 = new envelope fields + enrichment math at build sites for chains needing on-chain computation.
+
+**Why:**
+- Issue authors enumerate the new logic file plus one or two call-sites; they consistently miss the integration glue at each layer boundary. The ×1.5 calibration multiplier reliably pushes stated ~5 counts past the 5-file dispatch threshold once every layer is counted.
+- Mixing render-only chains with enrichment-heavy chains in one PR produces cross-cutting diffs across types / data-fetch / render / wiring / tests simultaneously — exactly the shape phased-split targets.
+- Without a default-off Phase 1 gate, a missing CLI flag or unset config silently activates incomplete behavior before Phase 2 lands.
+
+**How to apply:**
+1. Count one file per layer actually touched against the canonical chain. If ≥5 layers (or ≥6 files for dedup-style features), treat the issue as 8+ files regardless of stated count.
+2. For envelope/fee work: grep each chain's unsigned-tx envelope type for existing fee fields. Any chain missing a displayable fee field needs a schema-extension phase first.
+3. Propose the appropriate phase split (data/integration, advisory/mutation, or envelope/enrichment) at the natural seam.
+4. **Phase 1 implementation pattern (mandatory for safety):**
+   - Add new Zod schema fields as `.optional()` (with URL or type validation as needed).
+   - Guard every new render section behind a boolean `WorkflowVars` flag (e.g. `autoPhaseFollowup`) that nothing currently sets — no default or explicit `false`.
+   - Write subtests for both the off-state (asserts baseline shape is byte-identical to pre-phase) and the on-state (asserts new section is present). Full suite must stay green in both states.
+5. Defer activation path (CLI flag wiring, config plumbing) explicitly to a later issue.
+
+**Domain-specific note (TRON / non-EVM fee rendering):** TRON cost-preview requires computing net burn after subtracting frozen-stake energy offsets. The raw `estimatedEnergyCostSun` value on the unsigned-tx envelope overstates actual user cost whenever the account holds frozen TRX for energy (common for active wallets). A derived `feeNetSun` field must be populated at tx-build sites via a `getAccountResource`-style call before the value reaches the render layer — display-time enrichment is too late because the resource query needs the sender address from build context.
+
+**Tells (union):**
+- Issue title contains 'auto-', 'wire', 'propagate', 'lifecycle', 'phase', 'Phase 1', 'no CLI yet', or 'data layer only'.
+- Touches CLI flag AND types AND workflow AND orchestrator simultaneously.
+- Issue mentions 'close duplicates', 'skip if already seen', 'pre-dispatch', or an `--apply-*` destructive flag.
+- Issue lists 3+ chains; at least one is TRON or uses staked-resource accounting; the others already carry a numeric fee on their envelope type.
+- Stated file count ≤ 5 but the feature is cross-cutting through the orchestration stack.
+- Scope notes explicitly defer activation path to a later issue.
+- Prior splits with the same shape (data → integration) have succeeded.
+<!-- run:run-2026-05-05T17-57-44-626Z issue:#150 outcome:implement ts:2026-05-05T18:03:31.335Z tags:data-layer-only,dedup,fail-soft,llm-call,orchestrator-llm-call,phased-split,schema-extension,zod-schema-extension -->
+## Calibrate HEADING_MAX to the LLM's observed synthesis-output distribution, not single-item intuition
+
+**When a constant caps both the LLM prompt constraint and the schema clamp, calibrate it against real production-data output — especially when two kinds of headings coexist.**
+
+**Why:** Phase A `appendBlock` headings (one rule → one title) fit comfortably in 100 chars; compaction-via-merge thesis-summary headings (3-6 rules → one synthesized heading) naturally run 110-145 chars. A single 100-char constant silently truncated every merged block with a literal `...` on the first production-data run.
+
+**How to apply:** Whenever a new compaction phase or merge step asks the LLM to synthesize multiple inputs into a single heading or title, verify the existing cap was designed for that use case. If two kinds of headings share one constant, widen the cap or split into two constants.
+
+**Tells:** LLM output consistently ends in `...`; the heading describes a cluster or group of source items rather than a single item; the same `HEADING_MAX` constant drives both the Zod schema clamp and the system-prompt instruction.
+
+<!-- promote-candidate:claude-md-compaction -->
+Compaction-via-merge thesis-summary headings — where the LLM synthesizes what 3-6 source sections have in common — naturally run 110-145 chars. Single-item appendBlock headings stay well under 100. A cap calibrated for single-item headings silently truncates synthesis headings with a literal `...` on the first production-data run. Observed safe cap for thesis-summary headings: 160 chars.
+<!-- /promote-candidate -->
+
+<!-- run:run-2026-05-05T22-51-54-224Z issue:#180 outcome:pushback ts:2026-05-05T22:53:39.411Z tags:advisory-vs-mutation-seam,agent-memory-growth,claude-md-compaction,dependency-ordering,phased-split,pre-dispatch-triage -->
+## Verify phase-dependency infrastructure in code before implementing a later-phase issue
+
+**Before writing any code for a 'Phase N' or explicitly sequenced issue, grep for the concrete artifacts — type names, state-file paths, schema constants — that predecessor phases were supposed to create; if they are absent, push back regardless of the predecessor issue's open/closed label.**
+
+**Why:** An issue can be marked open (or even closed) while the infrastructure it promised is still missing from the codebase. Implementing a later phase against empty infrastructure means every code path silently hits empty-state fallbacks, calibration thresholds are uninitialized, and the issue's own success metrics cannot be evaluated — producing code that is syntactically valid but semantically broken from day one.
+
+**How to apply:** When an issue title or body contains 'Phase N', 'Step N', or an explicit 'depends on #X' line, (1) check the dependency issue's state, AND (2) grep for 2–3 key identifiers called out in the dependency — type names, file patterns, exported constants. If grep returns zero matches, the prerequisite has not landed.
+
+**Tells:** Phase number in issue title; 'MUST land first' / 'depends on' language in body; state-file paths referenced by the new issue that nothing currently writes; schema type names with zero grep hits.
+
+<!-- promote-candidate:phased-split -->
+When a multi-phase feature set is implemented in separate issues, later phases routinely reference state files, schema types, and calibration constants that the earlier phase was supposed to create. Checking the predecessor issue status alone is insufficient — the actual file/type must be confirmed present in the codebase via grep before the later phase can produce correct behavior. Absent infrastructure causes silent empty-state fallbacks rather than compile errors, making the breakage hard to detect post-merge.
+<!-- /promote-candidate -->
+
+<!-- run:run-2026-05-05T22-51-54-224Z issue:#178 outcome:implement ts:2026-05-05T23:03:13.714Z tags:agent-memory-growth,data-layer-only,fail-soft-state,lesson-utility-scoring,phased-split,pushback-hook,stable-section-id,summarizer-hook -->
+## Research-study execution issues are operator/agent-seam mismatches — push back with a phase split
+
+**Rule:** When an issue's core deliverables are "raw per-run measurements" or "fitted curves" produced by running N-agent × M-issue studies with operator-judged scoring, classify the whole issue as an operator/agent-seam mismatch and push back with a concrete three-way split before touching any code.
+
+**Why:** A single coding agent has no authority to invoke the orchestrator against sibling forks and cannot perform the human-side scoring rubrics needed to label pushback accuracy. Attempting partial delivery produces phantom measurements or silent scope collapse.
+
+**How to apply:** Triggers when (a) estimated study cost >> remaining agent budget by ≥10×, AND (b) deliverables include empirical measurements that require actual multi-agent runs or operator-judged labels. Propose: Phase A — agent builds harness/methodology/util skeleton with a STUDY_PENDING placeholder; Phase B — operator runs the study manually; Phase C — a tiny follow-up issue encodes the results.
+
+**Tells:** Issue title contains "measure", "curve", or "calibrate"; body lists "raw per-run measurements" or "fitted" values; estimated execution cost is $50–$200 while agent budget is $1–$5.
+
+<!-- promote-candidate:research-study-scope -->
+Issues framed as "measure X curve at Y sizes" or "calibrate Z factor against outcome-quality" typically require:
+- Repeated orchestrator invocations across many agent forks (cost $50–$200 for a 7-size × 10-issue study)
+- Operator-side scoring rubrics that no single agent can self-evaluate
+- A phase split: agent builds the harness/skeleton (agent-doable), operator runs the study (operator-side), follow-up issue encodes results (agent-doable)
+Attempting full delivery in one agent run produces either phantom measurements or silent scope collapse.
+<!-- /promote-candidate -->
+

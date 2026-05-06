@@ -10,6 +10,7 @@ import {
 } from "./specialization.js";
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
 import { resolveExpiryPolicies } from "../util/sentinels.js";
+import { normalizedAccuracyFactor } from "../util/contextCostCurve.js";
 import {
   checkLessonNovelty,
   deriveStableSectionId,
@@ -252,6 +253,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
             body: summary.body ?? "",
             tags: envelope.memoryUpdate.addTags,
             logger: input.logger,
+            predictedUtility: summary.predictedUtility,
           });
         }
 
@@ -352,6 +354,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
               body: summary.body ?? "",
               tags: input.agent.tags,
               logger: input.logger,
+              predictedUtility: summary.predictedUtility,
             });
           }
         }
@@ -557,6 +560,30 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
     // Fall through to the normal append path — dedup is advisory.
   }
 
+  // Predicted-utility soft gate (#179 Phase 2 option B, half-ready-curve probe):
+  // if the LLM emitted a `predictedUtility` value, compare it to the cost
+  // score derived from `normalizedAccuracyFactor` at the post-append byte
+  // size. Skip if utility < cost × ratio. Always log the decision so the
+  // operator can analyze the (utility, cost, decision) distribution post-hoc.
+  // Missing predictedUtility = no signal to act on; let through (back-compat
+  // with summarizer responses pre-this-change).
+  const currentBytesForGate = await fs
+    .readFile(agentClaudeMdPath(args.agent.agentId), "utf-8")
+    .then((s) => Buffer.byteLength(s, "utf-8"))
+    .catch(() => 0);
+  const utilityGate = evaluatePredictedUtilityGate({
+    predictedUtility: args.summary.predictedUtility,
+    agentId: args.agent.agentId,
+    issueId: args.issue.id,
+    headingLength: args.summary.heading.length,
+    bodyLength: args.summary.body.length,
+    currentClaudeMdBytes: currentBytesForGate,
+    logger: args.logger,
+  });
+  if (utilityGate.kind === "skip") {
+    return { summarySkipReason: utilityGate.reason };
+  }
+
   const appendOutcome = await appendBlock({
     agentId: args.agent.agentId,
     runId: args.runId,
@@ -586,6 +613,96 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
   return { appendOutcome };
 }
 
+// Predicted-utility soft gate (#179 Phase 2 option B, half-ready-curve probe).
+// Computes a cost score from `normalizedAccuracyFactor` at the post-append
+// byte size and compares it to the LLM's self-rated `predictedUtility`.
+// Skip = utility < cost × ratio. Missing utility = let through (no signal).
+// Tunable via `VP_DEV_UTILITY_COST_RATIO` env var; default 1.0 means "utility
+// just needs to match the cost score."
+
+export const DEFAULT_UTILITY_COST_RATIO = 1.0;
+
+export function resolveUtilityCostRatio(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.VP_DEV_UTILITY_COST_RATIO;
+  if (raw == null || raw === "") return DEFAULT_UTILITY_COST_RATIO;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_UTILITY_COST_RATIO;
+  return n;
+}
+
+export interface UtilityGateInput {
+  predictedUtility?: number;
+  agentId: string;
+  issueId: number;
+  headingLength: number;
+  bodyLength: number;
+  /**
+   * Current byte size of the agent's CLAUDE.md. Caller reads it once and
+   * passes it in (mirrors the F-path's `currentClaudeMdBytes` plumbing).
+   * Undefined or 0 = treat as fresh / empty file → costScore=0 → any
+   * predictedUtility passes (no cost yet, gate is fully open).
+   */
+  currentClaudeMdBytes?: number;
+  logger: Logger;
+  /** Override env-resolved ratio for tests. */
+  ratio?: number;
+}
+
+export type UtilityGateResult =
+  | { kind: "let-through"; reason: "no-utility" | "utility-passes-gate" }
+  | { kind: "skip"; reason: "low-predicted-utility" };
+
+/**
+ * Decide whether the candidate's `predictedUtility` justifies the byte cost
+ * the lesson would add. Always logs the decision (with the computed cost
+ * score and the threshold) so post-hoc analysis can read the distribution.
+ *
+ * The estimated added bytes uses the heading + body lengths plus a small
+ * sentinel header allowance; it's a tighter forecast than the worst-case
+ * upper bound used by `buildCostTransparencyLine`.
+ *
+ * Pure function (no I/O) so tests can exercise the gate logic directly.
+ */
+export function evaluatePredictedUtilityGate(
+  input: UtilityGateInput,
+): UtilityGateResult {
+  if (input.predictedUtility === undefined) {
+    input.logger.info("specialization.utility_gate", {
+      agentId: input.agentId,
+      issueId: input.issueId,
+      decision: "let-through",
+      reason: "no-utility",
+    });
+    return { kind: "let-through", reason: "no-utility" };
+  }
+  const currentBytes = input.currentClaudeMdBytes ?? 0;
+  const sentinelOverhead = 200;
+  const projectedBytes =
+    currentBytes + input.headingLength + input.bodyLength + sentinelOverhead;
+  // normalizedAccuracyFactor returns values in [1, 2] across the calibration
+  // range, so subtracting 1 yields a 0-1 cost score directly.
+  const factor = normalizedAccuracyFactor(projectedBytes);
+  const costScore = Number.isFinite(factor)
+    ? Math.max(0, Math.min(1, factor - 1))
+    : 0;
+  const ratio = input.ratio ?? resolveUtilityCostRatio();
+  const threshold = costScore * ratio;
+  const decision = input.predictedUtility >= threshold ? "let-through" : "skip";
+  input.logger.info("specialization.utility_gate", {
+    agentId: input.agentId,
+    issueId: input.issueId,
+    decision,
+    predictedUtility: input.predictedUtility,
+    costScore,
+    threshold,
+    ratio,
+  });
+  if (decision === "skip") return { kind: "skip", reason: "low-predicted-utility" };
+  return { kind: "let-through", reason: "utility-passes-gate" };
+}
+
 // Issue #178 (Phase 1 of #177): per-section utility-scoring data collection.
 // These helpers wrap the lessonUtility module in fail-soft try/catch so a
 // utility-scoring write failure can never block the orchestrator's main path.
@@ -598,6 +715,13 @@ interface RecordUtilityForAppendArgs {
   body: string;
   tags?: string[];
   logger: Logger;
+  /**
+   * LLM self-rating from `SummarizerOutput.predictedUtility` (#179 Phase 2,
+   * option B). Persisted via `recordIntroduction` so post-hoc analysis can
+   * read it back. Optional for back-compat with summarizer responses
+   * pre-this-change.
+   */
+  predictedUtility?: number;
 }
 
 async function recordUtilityForAppend(
@@ -611,6 +735,7 @@ async function recordUtilityForAppend(
       issueId: args.issueId,
       body: args.body,
       ts,
+      predictedUtility: args.predictedUtility,
     });
     // Read the post-append CLAUDE.md and find which prior sections this
     // new block reinforces. Exclude the just-introduced block itself.

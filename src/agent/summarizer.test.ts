@@ -4,6 +4,7 @@ import {
   buildCostTransparencyLine,
   buildFailurePrompt,
   buildPrompt,
+  SummarizerOutputSchema,
   type FailureSummarizerInput,
   type SummarizerInput,
 } from "./summarizer.js";
@@ -143,4 +144,76 @@ test("buildFailurePrompt: omits cost line when currentClaudeMdBytes is undefined
   };
   const prompt = buildFailurePrompt(input);
   assert.doesNotMatch(prompt, /Marginal cost of adding a lesson/);
+});
+
+// -----------------------------------------------------------------------
+// #179 Phase 2 option B — predictedUtility schema + prompt
+// -----------------------------------------------------------------------
+
+test("SummarizerOutputSchema: accepts predictedUtility in [0, 1]", () => {
+  const ok = SummarizerOutputSchema.safeParse({
+    skip: false,
+    heading: "Some rule",
+    body: "Some body",
+    predictedUtility: 0.7,
+  });
+  assert.equal(ok.success, true);
+});
+
+test("SummarizerOutputSchema: rejects predictedUtility > 1", () => {
+  const out = SummarizerOutputSchema.safeParse({
+    skip: false,
+    heading: "Some rule",
+    body: "Some body",
+    predictedUtility: 1.5,
+  });
+  assert.equal(out.success, false);
+});
+
+test("SummarizerOutputSchema: rejects predictedUtility < 0", () => {
+  const out = SummarizerOutputSchema.safeParse({
+    skip: false,
+    heading: "Some rule",
+    body: "Some body",
+    predictedUtility: -0.1,
+  });
+  assert.equal(out.success, false);
+});
+
+test("SummarizerOutputSchema: predictedUtility is optional (back-compat)", () => {
+  const ok = SummarizerOutputSchema.safeParse({
+    skip: false,
+    heading: "Some rule",
+    body: "Some body",
+  });
+  assert.equal(ok.success, true);
+});
+
+test("buildPrompt: instructs the LLM to emit predictedUtility", () => {
+  // The system prompt is what carries the calibration anchor; the user
+  // prompt's tail also names the field. Check the user-prompt side here.
+  const input: SummarizerInput = {
+    agent: stubAgent,
+    issue: stubIssue,
+    envelope: stubEnvelope,
+    toolUseTrace: [],
+    finalText: "did the work",
+    logger: stubLogger,
+  };
+  const prompt = buildPrompt(input);
+  assert.match(prompt, /predictedUtility/);
+});
+
+test("buildFailurePrompt: instructs the LLM to emit predictedUtility", () => {
+  const input: FailureSummarizerInput = {
+    agent: stubAgent,
+    issue: stubIssue,
+    envelope: { ...stubEnvelope, decision: "error" },
+    errorReason: "max turns",
+    toolUseTrace: [],
+    finalText: "ran out of turns",
+    logger: stubLogger,
+  };
+  const prompt = buildFailurePrompt(input);
+  assert.match(prompt, /predictedUtility/);
 });

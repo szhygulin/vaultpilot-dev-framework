@@ -49,6 +49,16 @@ export interface SectionUtilityRecord {
   /** Updated by a separate sweep (out of scope for #178); defaults to 0. */
   crossReferenceCount: number;
   crossReferenceUpdatedAt?: string;
+  /**
+   * LLM self-rating at introduction time, in [0, 1] (#179 Phase 2 option B,
+   * shipped early as a half-ready-curve probe). Persisted so post-hoc
+   * analysis can correlate self-ratings with subsequent
+   * `reinforcementRuns.length` / `pushbackRuns.length`. Optional for
+   * back-compat with records written before this field existed; absent =
+   * the LLM didn't emit a value (older summarizer prompt) or the spawn
+   * couldn't parse it.
+   */
+  predictedUtility?: number;
 }
 
 export interface MergeHistoryEntry {
@@ -164,6 +174,13 @@ export interface RecordIntroductionInput {
   issueIds?: number[];
   body: string;
   ts: string;
+  /**
+   * LLM self-rating from `SummarizerOutput.predictedUtility` (#179 Phase 2
+   * option B). Persisted into the new record's `predictedUtility` field
+   * for post-hoc correlation with reinforcement / pushback signals.
+   * Optional — older summarizer responses don't carry the field.
+   */
+  predictedUtility?: number;
 }
 
 /**
@@ -194,6 +211,9 @@ export async function recordIntroduction(
       pushbackRuns: [],
       pastIncidentDates: dates,
       crossReferenceCount: 0,
+      ...(input.predictedUtility !== undefined
+        ? { predictedUtility: input.predictedUtility }
+        : {}),
     });
   });
 }

@@ -1,3 +1,0 @@
-{"ts":"2026-05-06T05:52:27.268Z","event":"spawn.started","runId":"spawn-2026-05-06T05-52-27-268Z-issue-50","agentId":"agent-9187","issueId":50,"targetRepo":"szhygulin/vaultpilot-mcp-smoke-test","targetRepoPath":"/tmp/study-clones/clone-8","dryRun":true,"skipSummary":true}
-{"ts":"2026-05-06T05:52:29.071Z","event":"worktree.stale_branches_swept","pruned":0,"kept":0,"unprunable":0}
-{"ts":"2026-05-06T05:52:30.879Z","event":"agent.spawned","agentId":"agent-9187","issueId":50,"worktree":"/tmp/study-clones/clone-8/.claude/worktrees/agent-9187-issue-50","branch":"vp-dev/agent-9187/issue-50"}

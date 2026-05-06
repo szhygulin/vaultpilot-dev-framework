@@ -1,4 +1,0 @@
-
-> vaultpilot-development-agents@0.1.0 vp-dev
-> node dist/bin/vp-dev.js spawn --agent agent-9182 --issue 49 --target-repo szhygulin/vaultpilot-mcp-smoke-test --target-repo-path /tmp/study-clones/clone-3 --dry-run --skip-summary
-

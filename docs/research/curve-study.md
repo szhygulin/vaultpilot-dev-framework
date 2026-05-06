@@ -168,6 +168,11 @@ The CLI prints a `WARNING: overall F-test p-value > 0.05 …` line when the fit 
 
 Forecast: `cellCount × $6.40` mean (observed in #179's pilot). Use `--parallelism` to trade wall time for concurrency; 4 is the calibrated default that avoids worktree-race contention.
 
-## Inaugural dataset
+## Inaugural-pilot writeups
 
-The seed dataset for the curve currently in source lives in `feature-plans/issue-179-data/`. See `feature-plans/issue-179-context-cost-curve.md` for the methodology writeup and `feature-plans/issue-179-results.md` for the operator-judged scoring tables.
+Methodology + results from the inaugural pilot are at:
+- `feature-plans/issue-179-context-cost-curve.md` — methodology, trim policy, dispatch plan.
+- `feature-plans/issue-179-results.md` — vp-mcp pilot per-cell results + open scoring rubrics.
+- `feature-plans/issue-179-results-phase2.md` — smoke-test phase 2 results + null-quality finding.
+
+Raw cell envelopes, logs, and per-agent CLAUDE.md trims from the inaugural runs are preserved in git history (commits on the `study/issue-179-pilot` branch through 2026-05-06) but are intentionally not in the working tree — they're machine-generated artifacts that don't belong in source. Phase-3+ research output lives under the gitignored `feature-plans/issue-179-data/` path.

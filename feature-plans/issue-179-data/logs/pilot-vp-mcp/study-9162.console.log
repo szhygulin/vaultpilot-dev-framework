@@ -1,5 +1,0 @@
-
-> vaultpilot-development-agents@0.1.0 vp-dev
-> node dist/bin/vp-dev.js run --agents 1 --prefer-agent agent-9162 --target-repo szhygulin/vaultpilot-mcp --issues 649,574,565,162,156 --dry-run --skip-summary --skip-dedup --max-cost-usd 15 --yes
-
-error: unknown option '--skip-summary'

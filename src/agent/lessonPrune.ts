@@ -23,6 +23,7 @@ import crypto from "node:crypto";
 import { withFileLock } from "../state/locks.js";
 import { agentClaudeMdPath } from "./specialization.js";
 import {
+  DEFAULT_PRUNE_MIN_SIBLINGS_AFTER,
   deriveStableSectionId,
   findStaleSections,
   type StaleSection,
@@ -81,12 +82,10 @@ export async function proposeLessonPrune(
     generatedAt: new Date().toISOString(),
     pruned: stale.map(toPrunedSection),
     bytesBefore: currentBytes,
-    minSiblingsAfter:
-      input.minSiblingsAfter ??
-      // Re-resolve via lessonUtility's default to keep the proposal self-describing.
-      stale[0]?.siblingsIntroducedAfter !== undefined
-        ? Math.min(...stale.map((s) => s.siblingsIntroducedAfter))
-        : 10,
+    // Surface the threshold that produced this proposal so the rendered
+    // output (and any consumer of the JSON) can self-describe the policy.
+    // Falls back to the documented default when the caller didn't override.
+    minSiblingsAfter: input.minSiblingsAfter ?? DEFAULT_PRUNE_MIN_SIBLINGS_AFTER,
   };
 }
 

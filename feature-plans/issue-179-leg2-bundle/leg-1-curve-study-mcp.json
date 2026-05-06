@@ -1,0 +1,1358 @@
+{
+  "generatedAt": "2026-05-06T11:22:21.422Z",
+  "mode": "replace",
+  "targetRepo": "szhygulin/vaultpilot-mcp",
+  "issues": [
+    156,
+    162,
+    565,
+    574,
+    649,
+    665
+  ],
+  "agents": [
+    {
+      "devAgentId": "agent-916a-trim-6000-s8026",
+      "sizeBytes": 5935,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s8026-vaultpilot-mcp",
+      "targetBytes": 6000,
+      "seed": 8026,
+      "selectedIds": [
+        "tool-usage-discipline",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths"
+      ],
+      "droppedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-6000-s1008029",
+      "sizeBytes": 5975,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s1008029-vaultpilot-mcp",
+      "targetBytes": 6000,
+      "seed": 1008029,
+      "selectedIds": [
+        "tool-usage-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "smallest-solution-discipline",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body"
+      ],
+      "droppedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "sdk-scope-probing-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-6000-s2008032",
+      "sizeBytes": 5978,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s2008032-vaultpilot-mcp",
+      "targetBytes": 6000,
+      "seed": 2008032,
+      "selectedIds": [
+        "tool-usage-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "smallest-solution-discipline",
+        "typed-data-signing-discipline",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor"
+      ],
+      "droppedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "sdk-scope-probing-discipline",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "install-state-aware-recommendations",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-14000-s16026",
+      "sizeBytes": 13935,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s16026-vaultpilot-mcp",
+      "targetBytes": 14000,
+      "seed": 16026,
+      "selectedIds": [
+        "chat-output-formatting",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "security-documentation-vocabulary",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "rogue-agent-only-finding-triage",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-14000-s1016029",
+      "sizeBytes": 13964,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s1016029-vaultpilot-mcp",
+      "targetBytes": 14000,
+      "seed": 1016029,
+      "selectedIds": [
+        "git-pr-workflow",
+        "security-incident-response-tone",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch"
+      ],
+      "droppedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-14000-s2016032",
+      "sizeBytes": 13777,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s2016032-vaultpilot-mcp",
+      "targetBytes": 14000,
+      "seed": 2016032,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "tool-usage-discipline",
+        "security-incident-response-tone",
+        "cross-repo-scope-splits",
+        "install-state-aware-recommendations",
+        "rogue-agent-only-finding-triage",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
+      ],
+      "droppedIds": [
+        "git-pr-workflow",
+        "sdk-scope-probing-discipline",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "smallest-solution-discipline",
+        "typed-data-signing-discipline",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-22000-s24026",
+      "sizeBytes": 21873,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s24026-vaultpilot-mcp",
+      "targetBytes": 22000,
+      "seed": 24026,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "tool-usage-discipline",
+        "security-incident-response-tone",
+        "issue-analysis",
+        "install-state-aware-recommendations",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "git-pr-workflow",
+        "sdk-scope-probing-discipline",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-22000-s1024029",
+      "sizeBytes": 21918,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s1024029-vaultpilot-mcp",
+      "targetBytes": 22000,
+      "seed": 1024029,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "git-pr-workflow",
+        "security-incident-response-tone",
+        "cross-repo-scope-splits",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-22000-s2024032",
+      "sizeBytes": 21976,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s2024032-vaultpilot-mcp",
+      "targetBytes": 22000,
+      "seed": 2024032,
+      "selectedIds": [
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "push-back-discipline",
+        "issue-analysis",
+        "smallest-solution-discipline",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
+      ],
+      "droppedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "chat-output-formatting",
+        "cross-repo-scope-splits",
+        "install-state-aware-recommendations",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-35000-s37026",
+      "sizeBytes": 34556,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s37026-vaultpilot-mcp",
+      "targetBytes": 35000,
+      "seed": 37026,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-35000-s1037029",
+      "sizeBytes": 34192,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s1037029-vaultpilot-mcp",
+      "targetBytes": 35000,
+      "seed": 1037029,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "smallest-solution-discipline",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths"
+      ],
+      "droppedIds": [
+        "cross-repo-scope-splits",
+        "install-state-aware-recommendations",
+        "documentation-style-concise-non-redundant-sharp",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-35000-s2037032",
+      "sizeBytes": 34786,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s2037032-vaultpilot-mcp",
+      "targetBytes": 35000,
+      "seed": 2037032,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition"
+      ],
+      "droppedIds": [
+        "cross-repo-scope-splits",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-50000-s52026",
+      "sizeBytes": 49745,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s52026-vaultpilot-mcp",
+      "targetBytes": 50000,
+      "seed": 52026,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "reference-framework-fastmcp",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "cross-repo-scope-splits",
+        "documentation-style-concise-non-redundant-sharp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-50000-s1052029",
+      "sizeBytes": 49010,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s1052029-vaultpilot-mcp",
+      "targetBytes": 50000,
+      "seed": 1052029,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-50000-s2052032",
+      "sizeBytes": 49726,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s2052032-vaultpilot-mcp",
+      "targetBytes": 50000,
+      "seed": 2052032,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "git-pr-workflow",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-58000-s60026",
+      "sizeBytes": 56247,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s60026-vaultpilot-mcp",
+      "targetBytes": 58000,
+      "seed": 60026,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "documentation-style-concise-non-redundant-sharp"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-58000-s1060029",
+      "sizeBytes": 56493,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s1060029-vaultpilot-mcp",
+      "targetBytes": 58000,
+      "seed": 1060029,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
+      ],
+      "repo": "vaultpilot-mcp"
+    },
+    {
+      "devAgentId": "agent-916a-trim-58000-s2060032",
+      "sizeBytes": 56680,
+      "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s2060032-vaultpilot-mcp",
+      "targetBytes": 58000,
+      "seed": 2060032,
+      "selectedIds": [
+        "crypto-defi-transaction-preflight-checks",
+        "git-pr-workflow",
+        "tool-usage-discipline",
+        "sdk-scope-probing-discipline",
+        "security-incident-response-tone",
+        "chat-output-formatting",
+        "push-back-discipline",
+        "issue-analysis",
+        "cross-repo-scope-splits",
+        "smallest-solution-discipline",
+        "install-state-aware-recommendations",
+        "typed-data-signing-discipline",
+        "rogue-agent-only-finding-triage",
+        "security-documentation-vocabulary",
+        "documentation-style-concise-non-redundant-sharp",
+        "reference-framework-fastmcp",
+        "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
+        "compound-rogue-mcp-security-findings-decompose-by-threat-layer-and-reject-mitigations-living-i",
+        "write-audit-trail-companion-fields-atomically-with-the-state-transition-flag-that-triggers-them",
+        "llm-curation-calls-must-emit-verdicts-only-never-rewrite-the-source-entry-text",
+        "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump",
+        "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
+        "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
+        "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
+        "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch",
+        "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
+        "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
+        "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue",
+        "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
+        "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
+      ],
+      "droppedIds": [
+        "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows"
+      ],
+      "repo": "vaultpilot-mcp"
+    }
+  ],
+  "cellCount": 108,
+  "totalCostUsd": 123.70080725000001,
+  "wallMs": 3051231,
+  "scores": [
+    {
+      "agentId": "agent-916a-trim-6000-s8026",
+      "agentSizeBytes": 5935,
+      "cellCount": 6,
+      "implementRate": 0.3333333333333333,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7333333333333333
+    },
+    {
+      "agentId": "agent-916a-trim-6000-s1008029",
+      "agentSizeBytes": 5975,
+      "cellCount": 6,
+      "implementRate": 0.3333333333333333,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7333333333333333
+    },
+    {
+      "agentId": "agent-916a-trim-6000-s2008032",
+      "agentSizeBytes": 5978,
+      "cellCount": 6,
+      "implementRate": 0.3333333333333333,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.7333333333333333
+    },
+    {
+      "agentId": "agent-916a-trim-14000-s2016032",
+      "agentSizeBytes": 13777,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-14000-s16026",
+      "agentSizeBytes": 13935,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-14000-s1016029",
+      "agentSizeBytes": 13964,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-22000-s24026",
+      "agentSizeBytes": 21873,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-22000-s1024029",
+      "agentSizeBytes": 21918,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-22000-s2024032",
+      "agentSizeBytes": 21976,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-35000-s1037029",
+      "agentSizeBytes": 34192,
+      "cellCount": 6,
+      "implementRate": 0,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 0,
+      "quality": 0.45
+    },
+    {
+      "agentId": "agent-916a-trim-35000-s37026",
+      "agentSizeBytes": 34556,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-35000-s2037032",
+      "agentSizeBytes": 34786,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-50000-s1052029",
+      "agentSizeBytes": 49010,
+      "cellCount": 6,
+      "implementRate": 0,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 0,
+      "quality": 0.45
+    },
+    {
+      "agentId": "agent-916a-trim-50000-s2052032",
+      "agentSizeBytes": 49726,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-50000-s52026",
+      "agentSizeBytes": 49745,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-58000-s60026",
+      "agentSizeBytes": 56247,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-58000-s1060029",
+      "agentSizeBytes": 56493,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    },
+    {
+      "agentId": "agent-916a-trim-58000-s2060032",
+      "agentSizeBytes": 56680,
+      "cellCount": 6,
+      "implementRate": 0.16666666666666666,
+      "pushbackAccuracyRate": 1,
+      "errorMaxTurnsRate": 0,
+      "prCorrectnessRate": 1,
+      "quality": 0.6666666666666666
+    }
+  ],
+  "accuracy": {
+    "freshSamples": [
+      {
+        "xBytes": 5935,
+        "factor": 1
+      },
+      {
+        "xBytes": 5975,
+        "factor": 1
+      },
+      {
+        "xBytes": 5978,
+        "factor": 1
+      },
+      {
+        "xBytes": 13777,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 13935,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 13964,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 21873,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 21918,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 21976,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 34192,
+        "factor": 1.6296296296296295
+      },
+      {
+        "xBytes": 34556,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 34786,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 49010,
+        "factor": 1.6296296296296295
+      },
+      {
+        "xBytes": 49726,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 49745,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 56247,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 56493,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 56680,
+        "factor": 1.1
+      }
+    ],
+    "samples": [
+      {
+        "xBytes": 5935,
+        "factor": 1
+      },
+      {
+        "xBytes": 5975,
+        "factor": 1
+      },
+      {
+        "xBytes": 5978,
+        "factor": 1
+      },
+      {
+        "xBytes": 13777,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 13935,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 13964,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 21873,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 21918,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 21976,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 34192,
+        "factor": 1.6296296296296295
+      },
+      {
+        "xBytes": 34556,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 34786,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 49010,
+        "factor": 1.6296296296296295
+      },
+      {
+        "xBytes": 49726,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 49745,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 56247,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 56493,
+        "factor": 1.1
+      },
+      {
+        "xBytes": 56680,
+        "factor": 1.1
+      }
+    ],
+    "regression": {
+      "degree": 2,
+      "coefficients": [
+        1.2345720610097666,
+        0.07157046457852698,
+        -0.09239099105091853
+      ],
+      "xMean": 30375.88888888889,
+      "xStd": 18271.433690292764,
+      "n": 18,
+      "rss": 0.41712275958629985,
+      "tss": 0.5589887212315193,
+      "rSquared": 0.25379038298424283,
+      "rSquaredAdjusted": 0.154295767382142,
+      "significance": {
+        "fStatistic": 2.5507951505557034,
+        "fDfRegression": 2,
+        "fDfResidual": 15,
+        "fPValue": 0.11129004393863706,
+        "coefficients": [
+          {
+            "estimate": 1.2345720610097666,
+            "standardError": 0.06705401022417382,
+            "tStatistic": 18.411606656818382,
+            "pValue": 1.042837862345627e-11
+          },
+          {
+            "estimate": 0.07157046457852698,
+            "standardError": 0.04005833219160271,
+            "tStatistic": 1.7866561252774784,
+            "pValue": 0.09421570386887597
+          },
+          {
+            "estimate": -0.09239099105091853,
+            "standardError": 0.05432624759326489,
+            "tStatistic": -1.7006694764313655,
+            "pValue": 0.10963795763750929
+          }
+        ],
+        "residualStdError": 0.16675786030175604
+      }
+    }
+  },
+  "tokenCost": {
+    "freshSamples": [
+      {
+        "xBytes": 5935,
+        "factor": 2.8391575590488403
+      },
+      {
+        "xBytes": 5975,
+        "factor": 3.3238472619206982
+      },
+      {
+        "xBytes": 5978,
+        "factor": 2.4929203872541
+      },
+      {
+        "xBytes": 13777,
+        "factor": 2.3411767248683604
+      },
+      {
+        "xBytes": 13935,
+        "factor": 2.9962599934359395
+      },
+      {
+        "xBytes": 13964,
+        "factor": 2.820525727790584
+      },
+      {
+        "xBytes": 21873,
+        "factor": 1.9386437497309625
+      },
+      {
+        "xBytes": 21918,
+        "factor": 2.485579592494305
+      },
+      {
+        "xBytes": 21976,
+        "factor": 2.743984140911874
+      },
+      {
+        "xBytes": 34192,
+        "factor": 1.3359693403555815
+      },
+      {
+        "xBytes": 34556,
+        "factor": 2.603956162833
+      },
+      {
+        "xBytes": 34786,
+        "factor": 4.4001217638540435
+      },
+      {
+        "xBytes": 49010,
+        "factor": 1
+      },
+      {
+        "xBytes": 49726,
+        "factor": 2.138768383317844
+      },
+      {
+        "xBytes": 49745,
+        "factor": 2.2993154960669218
+      },
+      {
+        "xBytes": 56247,
+        "factor": 2.168434155705529
+      },
+      {
+        "xBytes": 56493,
+        "factor": 2.1572563646769307
+      },
+      {
+        "xBytes": 56680,
+        "factor": 2.849307059415639
+      }
+    ],
+    "samples": [
+      {
+        "xBytes": 5935,
+        "factor": 2.8391575590488403
+      },
+      {
+        "xBytes": 5975,
+        "factor": 3.3238472619206982
+      },
+      {
+        "xBytes": 5978,
+        "factor": 2.4929203872541
+      },
+      {
+        "xBytes": 13777,
+        "factor": 2.3411767248683604
+      },
+      {
+        "xBytes": 13935,
+        "factor": 2.9962599934359395
+      },
+      {
+        "xBytes": 13964,
+        "factor": 2.820525727790584
+      },
+      {
+        "xBytes": 21873,
+        "factor": 1.9386437497309625
+      },
+      {
+        "xBytes": 21918,
+        "factor": 2.485579592494305
+      },
+      {
+        "xBytes": 21976,
+        "factor": 2.743984140911874
+      },
+      {
+        "xBytes": 34192,
+        "factor": 1.3359693403555815
+      },
+      {
+        "xBytes": 34556,
+        "factor": 2.603956162833
+      },
+      {
+        "xBytes": 34786,
+        "factor": 4.4001217638540435
+      },
+      {
+        "xBytes": 49010,
+        "factor": 1
+      },
+      {
+        "xBytes": 49726,
+        "factor": 2.138768383317844
+      },
+      {
+        "xBytes": 49745,
+        "factor": 2.2993154960669218
+      },
+      {
+        "xBytes": 56247,
+        "factor": 2.168434155705529
+      },
+      {
+        "xBytes": 56493,
+        "factor": 2.1572563646769307
+      },
+      {
+        "xBytes": 56680,
+        "factor": 2.849307059415639
+      }
+    ],
+    "regression": {
+      "degree": 2,
+      "coefficients": [
+        2.450447753892826,
+        -0.2466039557338099,
+        0.045953571867237954
+      ],
+      "xMean": 30375.88888888889,
+      "xStd": 18271.433690292764,
+      "n": 18,
+      "rss": 8.23183295067966,
+      "tss": 9.289085837686644,
+      "rSquared": 0.11381667749452962,
+      "rSquaredAdjusted": -0.004341098839532931,
+      "significance": {
+        "fStatistic": 0.9632601511790503,
+        "fDfRegression": 2,
+        "fDfResidual": 15,
+        "fPValue": 0.40404226252877784,
+        "coefficients": [
+          {
+            "estimate": 2.450447753892826,
+            "standardError": 0.29787982302478794,
+            "tStatistic": 8.22629652794212,
+            "pValue": 6.097125381296078e-7
+          },
+          {
+            "estimate": -0.2466039557338099,
+            "standardError": 0.1779545900984896,
+            "tStatistic": -1.3857690076851967,
+            "pValue": 0.18607637572607805
+          },
+          {
+            "estimate": 0.045953571867237954,
+            "standardError": 0.2413381834223018,
+            "tStatistic": 0.1904115263303645,
+            "pValue": 0.851539705890014
+          }
+        ],
+        "residualStdError": 0.7408028505470561
+      }
+    }
+  }
+}

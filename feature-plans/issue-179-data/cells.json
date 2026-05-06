@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-05-06T08:50:00Z",
-  "totalCells": 33,
-  "totalCostUsd": 164.50212275,
+  "generatedAt": "2026-05-06T13:00:00Z",
+  "totalCells": 48,
+  "totalCostUsd": 196.70859099999996,
   "cells": [
     {
       "log": "logs/smoke10-agent-9180-48.log",
@@ -824,6 +824,405 @@
           "upstream-sdk-drift",
           "oracle-setup",
           "anchor-idl"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9161-649.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9161",
+      "agentSizeBytes": 16445,
+      "issueId": 649,
+      "decision": "implement",
+      "reason": "Implemented option 3 from the issue thread: shipped the Solana / BTC / LTC cost preview block (extends EVM #636 / #648 to non-EVM chains) and split the TRON net-burn enrichment to a separate follow-up issue. New `renderNonEvmCostPreviewBlock` helper plus wiring in `collectVerificationBlocks` for Solana drafts, Solana pinned, BTC, and LTC; reuses existing envelope fee fields and DefiLlama price lookup with silent USD-degraded fallback. 196 test files / 2607 tests pass.",
+      "commentUrl": null,
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-649",
+      "scopeNotes": "TRON cost preview filed as a separate follow-up issue (TRON-specific post-stake net-burn enrichment); referenced descriptively in code comments since the dry-run gate returns a synthetic URL for the follow-up issue creation.",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 550493,
+      "costUsd": 4.346944500000001,
+      "memoryUpdate": {
+        "addTags": [
+          "cost-preview",
+          "fee-shock",
+          "solana",
+          "bitcoin",
+          "litecoin",
+          "non-evm",
+          "verification-block",
+          "defillama-pricing"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9161-574.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9161",
+      "agentSizeBytes": 16445,
+      "issueId": 574,
+      "decision": "pushback",
+      "reason": "User picked option 3 (skill-side rule). No MCP-side change \u2014 all three suggested in-MCP fixes (multi-RPC consensus, data_source marker, canonical-resolver anchor) route through the same MCP that returned the spoofed ENS mapping, so they don't bind the rogue-MCP threat. Filed the cooperating-agent rule in vaultpilot-security-skill (UNVERIFIED block + app.ens.domains URL anchor + reverse-resolution echo + offline-refusal) with explicit cooperating-agent-only scope label. Commented on #574 confirming the cross-repo file and deferring the durable rogue-MCP fix to the broader data-plane integrity work at #565/#566.",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/574",
+      "prUrl": null,
+      "scopeNotes": "Skill issue filed at vaultpilot-security-skill (dry-run synthetic URL: https://dry-run/issue-create/szhygulin/vaultpilot-security-skill/new). No MCP code change. Post-run human reviewer should adjust the placeholder issue link in the #574 comment to the real skill-side issue number once filed for real. Sentinel coordination noted in skill-issue body: when merged, MCP-side EXPECTED_SKILL_SHA256 must bump in a paired PR.",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 224005,
+      "costUsd": 1.0492229999999998,
+      "memoryUpdate": {
+        "addTags": [
+          "ens",
+          "ens-resolution",
+          "rogue-mcp",
+          "read-only-spoofing",
+          "cross-repo-split",
+          "cooperating-agent-guidance",
+          "data-plane-integrity",
+          "skill-side-rule"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9161-565.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9161",
+      "agentSizeBytes": 16445,
+      "issueId": 565,
+      "decision": "error",
+      "reason": "Worktree directory /home/szhygulin/dev/recon-mcp/.claude/worktrees/agent-9161-issue-565 was deleted mid-run after the first SECURITY.md Edit succeeded. Bash gate's allowlist blocks every recovery path (cd into repo, pushd, git -C, git --git-dir, bash -c subshell, env GIT_DIR), so I could not re-enter a git repo to stage/commit/push the documentation update. The intended SECURITY.md change \u2014 adding an 'Out-of-scope: read-only data-plane integrity' section per user directive in #565 comment \u2014 is fully drafted in the run transcript above but did not land on disk or in commits. No code on either MCP or skill side; user directive was explicitly documentation-only.",
+      "commentUrl": null,
+      "prUrl": null,
+      "scopeNotes": "User explicitly directed (issue #565 comment 4383095867): 'none of the fixes to implement. Instead, describe this attack in security model description as not covered. so we assume that MCP does not lie about read only data. the focus of the project to protect user from singing the wrong transaction' \u2014 pure documentation update aligned with closed precedent #558/#566/#591/#592.",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 349069,
+      "costUsd": 2.06328075,
+      "memoryUpdate": {
+        "addTags": [
+          "read-only-data-plane",
+          "advisory-prose",
+          "out-of-scope-documentation",
+          "rogue-mcp",
+          "security-model"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9161-162.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9161",
+      "agentSizeBytes": 16445,
+      "issueId": 162,
+      "decision": "pushback",
+      "reason": "Issue #162 is explicitly labeled `tracking` and its body states 'Action today: none' \u2014 gated on an external precondition (bigint-buffer or @solana/buffer-layout-utils shipping a fix). Verified upstream state has not changed since the 2026-04-25 filing: bigint-buffer is still installed at node_modules/bigint-buffer (last modified 2026-04-26), and the owner's 2026-04-29 comment 'waiting underlying package fix' still applies. Per Push-Back Discipline I flagged the faulty premise before acting and offered three concrete re-scopes (status re-probe, close-if-resolved, migrate off @solana/buffer-layout-utils).",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/162#issuecomment-dry-run",
+      "prUrl": null,
+      "scopeNotes": null,
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 84055,
+      "costUsd": 0.48258775,
+      "memoryUpdate": {
+        "addTags": [
+          "dependency-tracking",
+          "npm-audit",
+          "bigint-buffer",
+          "solana-sdks",
+          "tracking-issue",
+          "pushback"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9161-156.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9161",
+      "agentSizeBytes": 16445,
+      "issueId": 156,
+      "decision": "pushback",
+      "reason": "Issue #156 is a `tracking` label gated on external preconditions (npm publish of @mrgnlabs/marginfi-client-v2 >6.4.1 OR live user hitting a blocked supply path on a skipped bank). Re-checked both gates today (2026-05-06, ~24 h after agent-2a3d's last sweep): npm still 6.4.1 only, upstream mrgn-ts#1139 still OPEN with no activity since 2026-04-25, no new tracker comments report a live block. Sofia's pending question to the user from 2026-05-05 (which of options 1/2/3) is still unresolved; default remains option 1 (leave as-is). Posted a brief status-and-question comment rather than unilaterally picking option 2 (CI freshness check \u2014 separately-scoped) or option 3 (widening decode-error catch \u2014 speculative without a new error shape).",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/156#dry-run",
+      "prUrl": null,
+      "scopeNotes": null,
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 63186,
+      "costUsd": 0.29715674999999997,
+      "memoryUpdate": {
+        "addTags": [
+          "marginfi",
+          "sdk-tracking",
+          "external-gate",
+          "oracle-setup-drift",
+          "tracking-issue-discipline"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9162-649.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9162",
+      "agentSizeBytes": 32719,
+      "issueId": 649,
+      "decision": "implement",
+      "reason": "Extended the EVM cost-preview header (issue #636 / PR #648) to Solana, Bitcoin, and Litecoin. Added renderSolanaCostPreviewBlock / renderBitcoinCostPreviewBlock / renderLitecoinCostPreviewBlock funneling through a shared symbol-agnostic core, plus an injectable fetchNonEvmNativePrice opt on collectVerificationBlocks (defaults to existing DefiLlama helpers). All four chain branches now emit the cost block first, mirroring the EVM layout. TRON deferred to a follow-up issue per the user's option-3 disposition. Build clean; 2605 tests passing (12 new across 4 describe blocks).",
+      "commentUrl": null,
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-649",
+      "scopeNotes": "TRON cost preview deferred per option-3 in the issue thread \u2014 will need a separate issue covering feeNetSun enrichment (energy/bandwidth pool offsets after frozen-stake, fee_limit cap interaction). No envelope schema changes needed: every chain already carries its native fee on the unsigned tx (estimatedFeeLamports / decoded.feeBtc / decoded.feeLtc).",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 1320776,
+      "costUsd": 12.887464249999995,
+      "memoryUpdate": {
+        "addTags": [
+          "cost-preview",
+          "render-verification",
+          "solana-fee",
+          "bitcoin-fee",
+          "litecoin-fee",
+          "lamports",
+          "psbt-fee",
+          "defillama-coingecko",
+          "non-evm"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9162-574.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9162",
+      "agentSizeBytes": 32719,
+      "issueId": 574,
+      "decision": "pushback",
+      "reason": "Per maintainer direction 'do 3' from Fibonacci's pushback options, this is a cross-repo scope split: cooperating-agent advisory rule lives in vaultpilot-security-skill, not in MCP code. Filed skill-side issue (intercepted in dry-run; body at /tmp/skill-issue-ens-body.md) with rule body + explicit scope statement embedded per Rogue-Agent-Only Triage. Posted closing comment on #574 referencing the new skill issue + canonical Inv #15 tracker (#565); no MCP-side patch because every proposed in-MCP fix (multi-RPC consensus, data_source attestation, canonical-resolver pinning) is self-defeating against a rogue MCP.",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/574",
+      "prUrl": null,
+      "scopeNotes": "Skill-side issue filed at szhygulin/vaultpilot-security-skill (dry-run intercepted; body drafted at /tmp/skill-issue-ens-body.md for the human to file with title 'ENS resolution single-sourced through MCP \u2014 cooperating-agent advisory rule'). Skill PR will need a coordinated vaultpilot-mcp EXPECTED_SKILL_SHA256 bump per project rule. gh issue close is not allowlisted; maintainer to close #574 manually after skill issue lands.",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 117469,
+      "costUsd": 0.5520227500000001,
+      "memoryUpdate": {
+        "addTags": [
+          "ens",
+          "cross-repo-scope-split",
+          "cooperating-agent-guidance",
+          "rogue-mcp-residual-risk",
+          "read-only-data-plane-integrity",
+          "advisory-url-defense",
+          "smoke-test-batch-03"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9162-565.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9162",
+      "agentSizeBytes": 32719,
+      "issueId": 565,
+      "decision": "implement",
+      "reason": "Per project-owner direction in issue #565's comment thread (overriding the earlier Markov pushback), shipped a documentation-only change to SECURITY.md adding an 'Out-of-scope: read-only data-plane integrity' section. The threat model now explicitly assumes the MCP does not fabricate read-only tool output \u2014 the project's focus is preventing the user from signing the wrong transaction. The section names the smoke-test scripts (expert-074-F, newcomer-n145-B, newcomer-n217-B), explains why bytes-level invariants and the on-device anchor don't apply, why MCP-side signing is a self-attestation antipattern, and points to out-of-band user verification as the legitimate defense. No code, no skill issue, no new tracker \u2014 consistent with the rogue-agent triage policy.",
+      "commentUrl": null,
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-565",
+      "scopeNotes": "Documentation-only. Build + 2593 tests pass. No skill-side companion filed \u2014 user explicitly directed 'none of the fixes to implement'.",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 153822,
+      "costUsd": 1.0007255000000002,
+      "memoryUpdate": {
+        "addTags": [
+          "security-model-documentation",
+          "read-only-data-plane",
+          "out-of-scope-disposition",
+          "rogue-mcp-architectural-residual-risk",
+          "self-attestation-antipattern",
+          "advisory-prose-integrity"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9162-162.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9162",
+      "agentSizeBytes": 32719,
+      "issueId": 162,
+      "decision": "pushback",
+      "reason": "Issue #162 is explicitly labeled `tracking` and gated on external preconditions (upstream `bigint-buffer` fix or `@solana/buffer-layout-utils` migration). Verified both still unmet: bigint-buffer 1.1.5 unchanged since 2022-04; buffer-layout-utils@0.3.0 still pins it. Issue body itself states 'No action today.' Asked the user whether they want a freshness re-audit, an upstream nudge issue, or to close as no-op.",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/162#issuecomment-dry-run",
+      "prUrl": null,
+      "scopeNotes": null,
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 44708,
+      "costUsd": 0.3129155,
+      "memoryUpdate": {
+        "addTags": [
+          "tracking-issue",
+          "npm-audit",
+          "bigint-buffer",
+          "ghsa-3gc7-fjrx-p6mg",
+          "solana-buffer-layout-utils",
+          "external-precondition",
+          "transitive-cve"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9162-156.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9162",
+      "agentSizeBytes": 32719,
+      "issueId": 156,
+      "decision": "pushback",
+      "reason": "Issue #156 is a `tracking` issue gated on external preconditions (MarginFi SDK >6.4.1 or a live `prepare_marginfi_*` block). Verified both gates: npm still publishes 6.4.1, mrgn-ts#1139 still OPEN with no movement since 2026-04-25. Another agent's triage comment from 24h ago already laid out three options and is awaiting user direction \u2014 adding a duplicate analysis would be noise. Posted a brief pushback acknowledging Sofia's open question, defaulting to option 1 (leave as-is) and offering option 3 (suppress further auto-dispatches until a gate fires) to break the daily re-triage loop.",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/156#issuecomment-dry-run",
+      "prUrl": null,
+      "scopeNotes": "No code change. External gates verified unchanged from 2026-04-25 (mrgn-ts#1139) and 2026-05-05 (npm 6.4.1).",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 68974,
+      "costUsd": 0.44684,
+      "memoryUpdate": {
+        "addTags": [
+          "marginfi",
+          "tracking-issue",
+          "external-gate",
+          "idl-drift",
+          "duplicate-triage-avoidance"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9163-649.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9163",
+      "agentSizeBytes": 48830,
+      "issueId": 649,
+      "decision": "implement",
+      "reason": "Extended the cost preview block (#636/#648) to Solana, BTC, and LTC against existing envelope fee fields (estimatedFeeLamports / decoded.feeBtc / decoded.feeLtc), per option 3 of the issue thread. Added renderNonEvmCostPreviewBlock helper, wired it into all four user-facing emission points (Solana prepare draft, Solana pinned via previewSolanaSendHandler, Solana pinned via collectVerificationBlocks, BTC, LTC), and added a priceLookup opt for testability. TRON deliberately deferred \u2014 its post-stake net-burn math needs its own enrichment layer and was filed as a separate follow-up issue.",
+      "commentUrl": null,
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-649",
+      "scopeNotes": "TRON post-stake net-burn cost preview filed as a separate vaultpilot-mcp issue per option 3 of #649. Issue body drafted and submitted via gh issue create (dry-run intercepted).",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 561093,
+      "costUsd": 5.290687499999998,
+      "memoryUpdate": {
+        "addTags": [
+          "cost-preview",
+          "solana",
+          "bitcoin",
+          "litecoin",
+          "render-and-wire",
+          "phased-split",
+          "non-evm-fee",
+          "defillama-price-lookup"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9163-574.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9163",
+      "agentSizeBytes": 48830,
+      "issueId": 574,
+      "decision": "pushback",
+      "reason": "User explicitly chose option 3 (skill-side rule) per the issue thread. No MCP-side code change shipped: the threat is rogue-MCP returning a spoofed ENS resolution, and every MCP-internal mitigation (multi-RPC consensus, data-source attestation, canonical-resolver Safe Anchor) routes through the same MCP \u2014 self-defeating per the Rogue-Agent-Only/Compound-finding triage. Filed cooperating-agent guidance in the skill repo with explicit scope statement; redirected MCP issue to the skill half and to the existing #565/#566 read-only data-plane integrity trackers.",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/574#issuecomment-dry-run",
+      "prUrl": null,
+      "scopeNotes": "Skill-side companion filed at vaultpilot-security-skill#43 (Inv #21: ENS resolution unverified-source advisory + third-party-URL cross-check). Cooperating-agent guidance only, with explicit out-of-scope statement for the rogue-agent case. MCP issue #574 should be closed as architectural/cross-repo split \u2014 `gh issue close` is not on the worktree allowlist, so leaving that for the human/orchestrator; redirect comment posted.",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 140419,
+      "costUsd": 0.75450475,
+      "memoryUpdate": {
+        "addTags": [
+          "ens",
+          "name-resolution",
+          "rogue-mcp",
+          "cross-repo-scope-split",
+          "cooperating-agent-guidance",
+          "third-party-url-advisory",
+          "read-only-data-plane",
+          "skill-side-rule"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9163-565.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9163",
+      "agentSizeBytes": 48830,
+      "issueId": 565,
+      "decision": "implement",
+      "reason": "Per the user's definitive directive on #565 ('none of the fixes to implement. Instead, describe this attack in security model description as not covered'), added a new 'Out-of-scope: read-only data integrity (non-signing reads)' section to SECURITY.md. The section names the threat (rogue MCP fabricating advisory-prose reads), states the assumption (MCP does not lie about read-only data), explains why every in-process mitigation collapses under the stated threat (self-attestation antipattern), distinguishes the advisory-prose surface from signing-flow reads where Inv #14 + on-device display still apply, and cites the batch-02 smoke-test scripts (expert-074-F / n145-B / n217-B) as evidence. Build clean; 2593/2593 tests pass.",
+      "commentUrl": null,
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-565",
+      "scopeNotes": "No skill-side companion needed \u2014 the directive is to document residual risk, not ship a defense. No cross-repo issue filed in vaultpilot-security-skill.",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 242160,
+      "costUsd": 1.66662875,
+      "memoryUpdate": {
+        "addTags": [
+          "security-model-doc",
+          "out-of-scope-section",
+          "advisory-prose",
+          "rogue-mcp",
+          "read-only-data-plane",
+          "residual-risk",
+          "self-attestation-antipattern"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9163-162.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9163",
+      "agentSizeBytes": 48830,
+      "issueId": 162,
+      "decision": "pushback",
+      "reason": "Issue #162 is a tracking issue (label `tracking`) with explicit 'Action today: none' guidance, gated on upstream `bigint-buffer` shipping a fix or `@solana/buffer-layout-utils` migrating off it. Verified neither precondition has been met: bigint-buffer last published v1.1.5 in 2019-10-17, and @solana/buffer-layout-utils@0.3.0 (2025-09-23) still pulls bigint-buffer ^1.1.5. Pushed back with three re-scope options (leave as-is, file a concrete decode-path security_finding, or re-vendor with npm overrides) and a question for the user.",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/162#issuecomment-dry-run",
+      "prUrl": null,
+      "scopeNotes": null,
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 69361,
+      "costUsd": 0.53545275,
+      "memoryUpdate": {
+        "addTags": [
+          "tracking-issue",
+          "npm-audit",
+          "bigint-buffer",
+          "solana-spl-deps",
+          "upstream-gated"
+        ]
+      }
+    },
+    {
+      "log": "feature-plans/issue-179-data/logs/pilot-vp-mcp/study-agent-9163-156.log",
+      "phase": "pilot-vp-mcp",
+      "agentId": "agent-9163",
+      "agentSizeBytes": 48830,
+      "issueId": 156,
+      "decision": "pushback",
+      "reason": "Issue #156 is a tracking issue with the `tracking` label, explicitly gated on an external precondition (MarginFi SDK >6.4.1 OR a user hits a blocked supply path). A prior agent (Sofia) did this exact routine re-check yesterday (2026-05-05) and posted a three-options comment that the user has not yet responded to. 24h later both gates remain un-tripped: `@mrgnlabs/marginfi-client-v2@latest` is still 6.4.1 and upstream mrgnlabs/mrgn-ts#1139 still has updated_at 2026-04-25. Posted a brief comment confirming the gate hasn't moved, defaulting to option 1 (leave as-is), and offering to file a separate freshness-check tracker so this issue stops getting auto-dispatched.",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/156",
+      "prUrl": null,
+      "scopeNotes": "No code change. Tracker remains open. If the user wants to stop daily re-dispatches to this tracker, the cleanest follow-up is filing a small freshness-check tracker (option 2 from Sofia's comment).",
+      "isError": false,
+      "errorReason": null,
+      "durationMs": 72927,
+      "costUsd": 0.52003375,
+      "memoryUpdate": {
+        "addTags": [
+          "marginfi",
+          "sdk-idl-drift",
+          "tracking-issue",
+          "external-precondition-gate",
+          "oracle-setup"
         ]
       }
     }

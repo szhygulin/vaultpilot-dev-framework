@@ -23,6 +23,15 @@ export const LESSON_UTILITY_SCHEMA_VERSION = 1;
 /** Default Jaccard threshold for the heading/tag-overlap fallback matcher. */
 export const DEFAULT_REINFORCEMENT_JACCARD_MIN = 0.6;
 
+/**
+ * Default Jaccard threshold for the dedup gate (#179 Phase 1, option G).
+ * Stricter than `DEFAULT_REINFORCEMENT_JACCARD_MIN` because dedup says "this
+ * candidate IS one of the existing sections — don't append," while
+ * reinforcement says "this candidate cites Y — credit Y." Same metric,
+ * different decision threshold. Override via `VP_DEV_DEDUP_JACCARD_MIN`.
+ */
+export const DEFAULT_DEDUP_JACCARD_MIN = 0.85;
+
 export interface SectionUtilityRecord {
   /** Stable ID — sha256(runId + ":" + sorted compound-id token). Survives
    * positional renumbering and body edits. Compact merges synthesize a
@@ -411,6 +420,18 @@ export function resolveJaccardMin(
   return n;
 }
 
+export function resolveDedupJaccardMin(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.VP_DEV_DEDUP_JACCARD_MIN;
+  if (raw == null || raw === "") return DEFAULT_DEDUP_JACCARD_MIN;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > 1) {
+    return DEFAULT_DEDUP_JACCARD_MIN;
+  }
+  return n;
+}
+
 /**
  * Extract stable IDs of sections cited by the given text. Returns a deduped
  * list. Pure / synchronous so tests can exercise it without I/O.
@@ -454,4 +475,153 @@ export function extractCitedStableIds(input: ExtractCitedInput): string[] {
   }
 
   return [...out];
+}
+
+// ---------------------------------------------------------------------------
+// Dedup gate (#179 Phase 1, option G).
+//
+// Reuses `extractCitedStableIds` at a stricter threshold (default 0.85 vs
+// reinforcement's 0.6). Reinforcement says "candidate cites Y — credit Y";
+// dedup says "candidate IS Y — don't append, just credit Y." Same metric,
+// different decision.
+// ---------------------------------------------------------------------------
+
+export interface CheckLessonNoveltyInput {
+  /** Heading of the candidate lesson — the primary signal for dedup. */
+  heading: string;
+  /**
+   * Body of the candidate lesson. Currently unused by `checkLessonNovelty`
+   * (heading-only comparison) but accepted for interface symmetry with the
+   * rest of the lesson-add pipeline. Reserved for a future hybrid metric.
+   */
+  body?: string;
+  /** Tags this issue contributed. Reserved (see `body`). */
+  tags?: string[];
+  /** Current contents of the agent's CLAUDE.md. */
+  claudeMd: string;
+  /** Override threshold; defaults to env or DEFAULT_DEDUP_JACCARD_MIN. */
+  jaccardMin?: number;
+  /** Exclude these stable IDs from matching (e.g., the candidate's own future ID). */
+  exclude?: Set<string>;
+}
+
+export type LessonNoveltyResult =
+  | { kind: "novel" }
+  | { kind: "duplicate"; matchedStableIds: string[] };
+
+/**
+ * Check whether a candidate lesson is a near-duplicate of an existing
+ * section in the agent's CLAUDE.md. Pure / synchronous so tests can exercise
+ * it without I/O.
+ *
+ * Returns `{kind: "novel"}` if no existing section crosses the dedup
+ * threshold, or `{kind: "duplicate", matchedStableIds}` listing every
+ * section that did. The caller's responsibility is to decide what to do
+ * on duplicate (typical: skip the append + record reinforcement on the
+ * matched section instead).
+ *
+ * Comparison shape: heading-tokens-vs-heading-tokens. This deliberately
+ * differs from `extractCitedStableIds` (which compares
+ * heading+tags+body-tokens vs heading-only) — that function answers "does
+ * this lesson CITE Y?", whereas dedup asks "does this lesson IS Y?". A
+ * wide-vs-narrow Jaccard is right for citation but pessimistic for dedup;
+ * a narrow-vs-narrow Jaccard captures heading overlap directly.
+ */
+export function checkLessonNovelty(
+  input: CheckLessonNoveltyInput,
+): LessonNoveltyResult {
+  const min = input.jaccardMin ?? resolveDedupJaccardMin();
+  const exclude = input.exclude ?? new Set<string>();
+  const sections = withStableIds(parseClaudeMdSections(input.claudeMd));
+  if (sections.length === 0) return { kind: "novel" };
+
+  const candidateTokens = tokenize(input.heading);
+  const matched: string[] = [];
+  for (const section of sections) {
+    if (exclude.has(section.stableId)) continue;
+    const sectionTokens = tokenize(section.heading);
+    if (jaccard(candidateTokens, sectionTokens) >= min) {
+      matched.push(section.stableId);
+    }
+  }
+  if (matched.length === 0) return { kind: "novel" };
+  return { kind: "duplicate", matchedStableIds: matched };
+}
+
+// ---------------------------------------------------------------------------
+// Empirical post-hoc prune (#179 Phase 1, option C).
+//
+// Identifies sections that are eligible for pruning based on the utility
+// signals already collected by Phase 1 of #178:
+//   - "stale": the section has zero reinforcementRuns AND at least
+//     `minSiblingsAfter` other sections have been introduced after it.
+//   - "misleading" (bonus J): pushbackRuns.length > reinforcementRuns.length
+//     AND the same minSiblingsAfter cool-off applies.
+// Cool-off prevents pruning brand-new sections before they have a chance to
+// be cited. Default `minSiblingsAfter=10` is conservative; operators can
+// pass a smaller value (e.g., 5) when they trust the utility signal.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_PRUNE_MIN_SIBLINGS_AFTER = 10;
+
+export type StaleReason = "zero-reinforcement" | "pushback-dominant";
+
+export interface StaleSection {
+  record: SectionUtilityRecord;
+  /** Why this section is eligible for pruning. */
+  reason: StaleReason;
+  /** Number of sections introduced after this one. */
+  siblingsIntroducedAfter: number;
+}
+
+export interface FindStaleSectionsInput {
+  agentId: string;
+  /** Override default cool-off; sections need this many later siblings. */
+  minSiblingsAfter?: number;
+  /** Pre-loaded utility file (for tests); when omitted, we load from disk. */
+  fileOverride?: AgentUtilityFile | null;
+}
+
+/**
+ * Return the subset of an agent's sections that are stale per the rules
+ * above. Pure logic (`fileOverride` skips disk I/O for tests).
+ */
+export async function findStaleSections(
+  input: FindStaleSectionsInput,
+): Promise<StaleSection[]> {
+  const file =
+    input.fileOverride !== undefined
+      ? input.fileOverride
+      : await loadLessonUtility(input.agentId);
+  if (!file || file.sections.length === 0) return [];
+  const minSiblings =
+    input.minSiblingsAfter ?? DEFAULT_PRUNE_MIN_SIBLINGS_AFTER;
+
+  // Compute siblings-after via introducedAt timestamp comparison. Stable
+  // under hand-edits (timestamps don't shift) and concurrent-safe under the
+  // same atomic-write contract that protects the file.
+  const sortedByIntro = [...file.sections].sort((a, b) =>
+    a.introducedAt.localeCompare(b.introducedAt),
+  );
+  const siblingsAfter = new Map<string, number>();
+  for (let i = 0; i < sortedByIntro.length; i++) {
+    siblingsAfter.set(
+      sortedByIntro[i].sectionId,
+      sortedByIntro.length - 1 - i,
+    );
+  }
+
+  const out: StaleSection[] = [];
+  for (const r of file.sections) {
+    const siblings = siblingsAfter.get(r.sectionId) ?? 0;
+    if (siblings < minSiblings) continue;
+    if (r.reinforcementRuns.length === 0) {
+      out.push({ record: r, reason: "zero-reinforcement", siblingsIntroducedAfter: siblings });
+      continue;
+    }
+    if (r.pushbackRuns.length > r.reinforcementRuns.length) {
+      out.push({ record: r, reason: "pushback-dominant", siblingsIntroducedAfter: siblings });
+    }
+  }
+  return out;
 }

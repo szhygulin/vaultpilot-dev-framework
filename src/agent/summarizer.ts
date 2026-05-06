@@ -3,6 +3,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeBinPath } from "./sdkBinary.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { ORCHESTRATOR_MODEL_SUMMARIZER } from "../orchestrator/models.js";
+import { accuracyDegradationFactor } from "../util/contextCostCurve.js";
 import type { AgentRecord, IssueSummary, ResultEnvelope } from "../types.js";
 import type { Logger } from "../log/logger.js";
 
@@ -34,6 +35,18 @@ export interface SummarizerInput {
   toolUseTrace: { tool: string; input: string }[];
   finalText: string;
   logger: Logger;
+  /**
+   * Current size of the agent's CLAUDE.md, in bytes. Threaded by
+   * `runIssueCore` from a `Buffer.byteLength` of the file just before this
+   * summarizer call. Surfaced in the prompt as a marginal-cost transparency
+   * signal (#179 Phase 1, option F): the LLM sees what its proposed lesson
+   * will cost on the empirical accuracy-degradation curve before it commits.
+   * No gating — the LLM's existing "no GENERALIZABLE rule → skip" hard-rule
+   * absorbs cost-awareness on its own terms. Optional for back-compat with
+   * call sites that pre-date this field; absence drops the line from the
+   * prompt rather than failing.
+   */
+  currentClaudeMdBytes?: number;
 }
 
 export async function summarizeRun(input: SummarizerInput): Promise<SummarizerOutput> {
@@ -56,6 +69,8 @@ export interface FailureSummarizerInput {
   toolUseTrace: { tool: string; input: string }[];
   finalText: string;
   logger: Logger;
+  /** See `SummarizerInput.currentClaudeMdBytes`. */
+  currentClaudeMdBytes?: number;
 }
 
 export async function summarizeFailureRun(
@@ -273,7 +288,7 @@ Hard rules:
 Output: a single JSON object, no fences, no prose. The \`skip\` field is MANDATORY in every response. Schema:
   {"skip": boolean, "skipReason"?: string, "heading"?: string, "body"?: string}`;
 
-function buildFailurePrompt(input: FailureSummarizerInput): string {
+export function buildFailurePrompt(input: FailureSummarizerInput): string {
   const trace = input.toolUseTrace
     .slice(-12)
     .map((t) => `- ${t.tool}: ${t.input}`)
@@ -288,6 +303,8 @@ function buildFailurePrompt(input: FailureSummarizerInput): string {
   const tagsRemoved = input.envelope
     ? JSON.stringify(input.envelope.memoryUpdate.removeTags ?? [])
     : "[]";
+
+  const costLine = buildCostTransparencyLine(input.currentClaudeMdBytes);
 
   return `Agent ${input.agent.agentId} just FAILED work on an issue. Distill the lesson.
 
@@ -309,15 +326,17 @@ ${trace || "(none captured)"}
 
 Agent's final reasoning text (truncated):
 ${truncate(input.finalText, 4000)}
+${costLine}
 
 Decide: is there a generalizable failure lesson worth committing to this agent's CLAUDE.md? Lean toward yes — failure-mode runs exist to capture signal that success-mode discards. If yes, emit {"skip": false, "heading": "...", "body": "..."}. If the failure is genuinely opaque, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only — escape every \\" inside string values.`;
 }
 
-function buildPrompt(input: SummarizerInput): string {
+export function buildPrompt(input: SummarizerInput): string {
   const trace = input.toolUseTrace
     .slice(-12)
     .map((t) => `- ${t.tool}: ${t.input}`)
     .join("\n");
+  const costLine = buildCostTransparencyLine(input.currentClaudeMdBytes);
 
   return `Agent ${input.agent.agentId} just finished work.
 
@@ -341,6 +360,7 @@ ${trace || "(none captured)"}
 
 Agent's final reasoning text (truncated):
 ${truncate(input.finalText, 4000)}
+${costLine}
 
 Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md? If yes, emit {"skip": false, "heading": "...", "body": "..."}. If no, emit {"skip": true, "skipReason": "..."}. The skip field is mandatory in both shapes. JSON only — escape every \\" inside string values.`;
 }
@@ -348,5 +368,35 @@ Decide: is there a generalizable rule worth committing to this agent's CLAUDE.md
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 3) + "...";
+}
+
+/**
+ * Render a marginal-cost transparency line for the summarizer prompt. Returns
+ * an empty string when `currentClaudeMdBytes` is undefined (back-compat) or
+ * when the curve evaluates to NaN (e.g., zero-byte file before fork). The
+ * line cites #179 so the LLM has provenance for the prediction.
+ *
+ * The "added bytes" estimate uses the schema's HEADING_MAX (120) + BODY_MAX
+ * (2000) caps as an upper bound — the actual lesson will usually be smaller,
+ * making this a *worst-case* cost estimate. We don't see the body before the
+ * call, so this is the tightest forecast available without a chicken-and-egg.
+ */
+export function buildCostTransparencyLine(currentBytes: number | undefined): string {
+  if (currentBytes == null || !Number.isFinite(currentBytes) || currentBytes <= 0) {
+    return "";
+  }
+  const upperBoundAddedBytes = HEADING_MAX + BODY_MAX + 200; // 200 for sentinel + headings
+  const factorNow = accuracyDegradationFactor(currentBytes);
+  const factorAfter = accuracyDegradationFactor(currentBytes + upperBoundAddedBytes);
+  if (!Number.isFinite(factorNow) || !Number.isFinite(factorAfter)) return "";
+  const kbNow = (currentBytes / 1024).toFixed(1);
+  const kbAfter = ((currentBytes + upperBoundAddedBytes) / 1024).toFixed(1);
+  return [
+    "",
+    "Marginal cost of adding a lesson here (linear-log accuracy fit, #179):",
+    `  CLAUDE.md is currently ${kbNow} KB (predicted accuracy degradation factor ${factorNow.toFixed(3)}).`,
+    `  Adding a worst-case lesson grows it to ~${kbAfter} KB (factor ~${factorAfter.toFixed(3)}).`,
+    `  Skip if the lesson isn't carrying weight — every byte degrades future runs.`,
+  ].join("\n");
 }
 

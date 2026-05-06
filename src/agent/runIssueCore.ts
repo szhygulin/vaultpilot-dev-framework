@@ -11,6 +11,7 @@ import {
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
 import { resolveExpiryPolicies } from "../util/sentinels.js";
 import {
+  checkLessonNovelty,
   deriveStableSectionId,
   extractCitedStableIds,
   recordIntroduction,
@@ -190,6 +191,16 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       applyTagUpdate(input.agent, envelope);
 
       if (!input.skipSummary && !budgetExceededAtCompletion) {
+        // Read current CLAUDE.md size for the marginal-cost transparency line
+        // injected into the summarizer prompt (#179 Phase 1, option F). Surfaces
+        // the empirical accuracy-degradation cost so the LLM can choose to skip
+        // low-value lessons. Fail-soft: if the file is missing or unreadable, we
+        // pass undefined and the prompt drops the line cleanly.
+        const currentClaudeMdBytes = await fs
+          .readFile(agentClaudeMdPath(input.agent.agentId), "utf-8")
+          .then((s) => Buffer.byteLength(s, "utf-8"))
+          .catch(() => undefined);
+
         // Failure-mode branch: agent emitted decision="error" — fire the
         // failure summarizer (different prompt, biased toward extracting a
         // lesson). Success/pushback paths stay on summarizeRun.
@@ -203,6 +214,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
               toolUseTrace: result.toolUseTrace,
               finalText: result.finalText,
               logger: input.logger,
+              currentClaudeMdBytes,
             })
           : await summarizeRun({
               agent: input.agent,
@@ -211,6 +223,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
               toolUseTrace: result.toolUseTrace,
               finalText: result.finalText,
               logger: input.logger,
+              currentClaudeMdBytes,
             });
 
         const outcomeTag = isAgentFailure ? "failure-lesson" : envelope.decision;
@@ -299,6 +312,10 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
             reason: summarySkipReason,
           });
         } else if (result.errorReason || result.parseError || result.finalText) {
+          const currentClaudeMdBytes = await fs
+            .readFile(agentClaudeMdPath(input.agent.agentId), "utf-8")
+            .then((s) => Buffer.byteLength(s, "utf-8"))
+            .catch(() => undefined);
           const summary = await summarizeFailureRun({
             agent: input.agent,
             issue: input.issue,
@@ -306,6 +323,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
             toolUseTrace: result.toolUseTrace,
             finalText: result.finalText,
             logger: input.logger,
+            currentClaudeMdBytes,
           });
           const appendResult = await maybeAppendSummary({
             summary,
@@ -490,6 +508,53 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
       reason: summarySkipReason,
     });
     return { summarySkipReason };
+  }
+
+  // Dedup gate (#179 Phase 1, option G): if the candidate is a near-duplicate
+  // of an existing section, skip the append and credit the matched section
+  // via recordReinforcement instead. Fail-soft: read errors fall through to
+  // the normal append path so a missing file never blocks lesson capture.
+  try {
+    const claudeMd = await fs
+      .readFile(agentClaudeMdPath(args.agent.agentId), "utf-8")
+      .catch(() => "");
+    if (claudeMd) {
+      const novelty = checkLessonNovelty({
+        heading: args.summary.heading,
+        body: args.summary.body,
+        tags: args.tags,
+        claudeMd,
+      });
+      if (novelty.kind === "duplicate") {
+        args.logger.info("specialization.skipped_duplicate", {
+          agentId: args.agent.agentId,
+          issueId: args.issue.id,
+          matchedStableIds: novelty.matchedStableIds,
+          reason: "near-duplicate of existing section(s)",
+        });
+        // Credit the matched section(s) via reinforcement — the candidate
+        // didn't add new bytes, but it DID re-validate the existing rule.
+        await recordReinforcement({
+          agentId: args.agent.agentId,
+          runId: args.runId,
+          citedSectionStableIds: novelty.matchedStableIds,
+        }).catch((err) => {
+          args.logger.warn("specialization.utility_record_failed", {
+            agentId: args.agent.agentId,
+            issueId: args.issue.id,
+            err: (err as Error).message,
+          });
+        });
+        return { summarySkipReason: "duplicate" };
+      }
+    }
+  } catch (err) {
+    args.logger.warn("specialization.dedup_check_failed", {
+      agentId: args.agent.agentId,
+      issueId: args.issue.id,
+      err: (err as Error).message,
+    });
+    // Fall through to the normal append path — dedup is advisory.
   }
 
   const appendOutcome = await appendBlock({

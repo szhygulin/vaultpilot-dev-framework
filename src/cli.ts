@@ -249,6 +249,14 @@ export function buildCli(): Command {
     .option("--verbose", "Mirror a colorized event subset to stderr")
     .option("--skip-summary", "Skip summarizer + CLAUDE.md append")
     .option("--inspect-paths <csv>", "Comma-separated absolute paths the agent may inspect read-only (e.g. prior worktrees)")
+    .option(
+      "--allow-closed-issue",
+      "Allow dispatching against a closed issue. Default: spawn refuses with exit 2 when issue.state==='closed'. Used by the curve-study calibration flow with --issue-body-only to dispatch against closed-completed issues as ground-truth controls.",
+    )
+    .option(
+      "--issue-body-only",
+      "Workflow Step 1 fetches the issue body ONLY — no comments. Suspends the CLAUDE.md 'Issue Analysis' rule for this dispatch. Required for closed-issue calibration runs so the resolution-PR link in close comments doesn't contaminate measurements.",
+    )
     .action(async (opts) => {
       await cmdSpawn(opts);
     });
@@ -481,6 +489,14 @@ export function buildCli(): Command {
         .option("--parallelism <n>", "Max concurrent research agents", parsePositive, 4)
         .option("--rubrics <path>", "Optional JSON file: array of {agentId, issueId, pushbackAccuracy?, prCorrectness?}")
         .option("--no-dry-run", "Disable --dry-run on spawn (default: dry-run on; intercepts push/PR side effects)")
+        .option(
+          "--allow-closed-issue",
+          "Forward --allow-closed-issue to each cell's spawn. Required when --issues includes closed-completed issue numbers (ground-truth controls).",
+        )
+        .option(
+          "--issue-body-only",
+          "Forward --issue-body-only to each cell's spawn. Step 1 fetches body only — no comments. Required for closed-issue dispatches so the resolution-PR link doesn't contaminate the measurement.",
+        )
         .option(
           "--mode <mode>",
           "replace (proposal = freshly measured samples only) | update (proposal = existing CONTEXT_COST_SAMPLES merged with fresh samples, re-fitted)",
@@ -2396,6 +2412,8 @@ interface SpawnOpts {
   verbose?: boolean;
   skipSummary?: boolean;
   inspectPaths?: string;
+  allowClosedIssue?: boolean;
+  issueBodyOnly?: boolean;
 }
 
 async function cmdSpawn(opts: SpawnOpts): Promise<void> {
@@ -2405,8 +2423,8 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
     process.stderr.write(`ERROR: issue #${opts.issue} not found in ${opts.targetRepo}.\n`);
     process.exit(2);
   }
-  if (issue.state === "closed") {
-    process.stderr.write(`ERROR: issue #${opts.issue} is closed.\n`);
+  if (issue.state === "closed" && !opts.allowClosedIssue) {
+    process.stderr.write(`ERROR: issue #${opts.issue} is closed. Pass --allow-closed-issue to dispatch against it (used by the curve-study calibration flow with --issue-body-only).\n`);
     process.exit(2);
   }
 
@@ -2454,6 +2472,7 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       logger,
       skipSummary: !!opts.skipSummary,
       inspectPaths,
+      issueBodyOnly: !!opts.issueBodyOnly,
     });
 
     const out = {
@@ -3171,6 +3190,8 @@ interface ResearchCurveStudyOpts {
   parallelism: number;
   rubrics?: string;
   dryRun: boolean;
+  allowClosedIssue?: boolean;
+  issueBodyOnly?: boolean;
   mode: string;
   collisionPolicy: string;
   degree: number;
@@ -3210,6 +3231,8 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
     targetRepo: opts.targetRepo,
     parallelism: opts.parallelism,
     dryRun: opts.dryRun,
+    allowClosedIssue: !!opts.allowClosedIssue,
+    issueBodyOnly: !!opts.issueBodyOnly,
     logsDir: opts.logsDir,
     outputPath: opts.output,
     cwd: process.cwd(),

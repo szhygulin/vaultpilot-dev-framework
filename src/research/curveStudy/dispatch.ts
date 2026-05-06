@@ -26,6 +26,17 @@ export interface DispatchOptions {
   dryRun?: boolean;
   /** Working directory of the vp-dev binary (where node + npm find dist/). */
   cwd: string;
+  /**
+   * Pass --allow-closed-issue to vp-dev spawn, enabling dispatch against
+   * closed-completed issues (used as ground-truth controls in the curve study).
+   */
+  allowClosedIssue?: boolean;
+  /**
+   * Pass --issue-body-only to vp-dev spawn — Step 1 fetches the issue
+   * body only, no comments. Required for closed-issue dispatches so the
+   * resolution-PR link doesn't leak.
+   */
+  issueBodyOnly?: boolean;
   /** Optional progress callback fired on each cell start/done. */
   onEvent?: (e: DispatchEvent) => void;
 }
@@ -111,6 +122,8 @@ async function runCell(cell: CellSpec, opts: DispatchOptions): Promise<DispatchR
     "--skip-summary",
   ];
   if (opts.dryRun) args.push("--dry-run");
+  if (opts.allowClosedIssue) args.push("--allow-closed-issue");
+  if (opts.issueBodyOnly) args.push("--issue-body-only");
 
   const out = await fs.open(logPath, "w");
   const rc = await new Promise<number>((res, rej) => {

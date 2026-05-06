@@ -71,6 +71,11 @@ export interface RunIssueCoreInput {
    * pre-#142 behavior (no Step N+1 rendered, no follow-up issue filed).
    */
   autoPhaseFollowup?: boolean;
+  /**
+   * Issue #179 phase 3: when `true`, the workflow's Step 1 omits the
+   * comments fetch — body-only dispatch for closed-issue calibration runs.
+   */
+  issueBodyOnly?: boolean;
 }
 
 export interface RunIssueCoreResult {
@@ -141,6 +146,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       costTracker: input.costTracker,
       resumeContext: input.resumeContext,
       autoPhaseFollowup: input.autoPhaseFollowup,
+      issueBodyOnly: input.issueBodyOnly,
     });
 
     envelope = result.envelope;

@@ -46,6 +46,13 @@ export interface CodingAgentInput {
    * absent and no follow-up issue is filed.
    */
   autoPhaseFollowup?: boolean;
+  /**
+   * Issue #179 phase 3: when `true`, the workflow's Step 1 emits a
+   * body-only variant — no comment fetch, "Issue Analysis" rule
+   * explicitly suspended. Used by `vp-dev research curve-study` so
+   * closed-issue dispatches don't read the resolution-PR link.
+   */
+  issueBodyOnly?: boolean;
 }
 
 export interface CodingAgentResult {
@@ -112,6 +119,9 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
       // Phase 1 (#141) shipped the renderer; this is the call site that
       // actually flips the switch.
       autoPhaseFollowup: input.autoPhaseFollowup,
+      // Issue #179 phase 3: forward the calibration-study flag so the
+      // workflow renders Step 1 without the comments fetch.
+      issueBodyOnly: input.issueBodyOnly,
     },
     targetRepoPath: input.targetRepoPath,
     resumeContext: input.resumeContext,

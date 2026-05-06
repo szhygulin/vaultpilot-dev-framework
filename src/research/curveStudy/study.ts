@@ -31,6 +31,10 @@ export interface StudyInput {
   targetRepo: string;
   parallelism?: number;
   dryRun?: boolean;
+  /** Forward to spawn — required when issues include closed-completed picks. */
+  allowClosedIssue?: boolean;
+  /** Forward to spawn — required for closed-issue dispatches to avoid leaking the resolution PR. */
+  issueBodyOnly?: boolean;
   logsDir: string;
   outputPath: string;
   cwd: string;
@@ -80,6 +84,8 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
     targetRepo: input.targetRepo,
     parallelism: input.parallelism ?? 4,
     dryRun: input.dryRun ?? true,
+    allowClosedIssue: input.allowClosedIssue,
+    issueBodyOnly: input.issueBodyOnly,
     logsDir: input.logsDir,
     logPrefix,
     cwd: input.cwd,

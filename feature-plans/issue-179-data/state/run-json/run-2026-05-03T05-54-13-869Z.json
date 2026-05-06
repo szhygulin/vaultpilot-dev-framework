@@ -1,0 +1,86 @@
+{
+  "runId": "run-2026-05-03T05-54-13-869Z",
+  "targetRepo": "szhygulin/vaultpilot-development-agents",
+  "issueRange": {
+    "kind": "all-open"
+  },
+  "parallelism": 8,
+  "agents": [
+    {
+      "agentId": "agent-72c6",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-e287",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-08c4",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-aa26",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-e22f",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-6100",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-75a0",
+      "status": "idle"
+    }
+  ],
+  "issues": {
+    "33": {
+      "status": "failed",
+      "agentId": "agent-6100",
+      "outcome": "error",
+      "error": "No JSON envelope found in final assistant message."
+    },
+    "34": {
+      "status": "failed",
+      "agentId": "agent-e287",
+      "outcome": "error",
+      "error": "No JSON envelope found in final assistant message."
+    },
+    "54": {
+      "status": "done",
+      "agentId": "agent-72c6",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/69"
+    },
+    "55": {
+      "status": "done",
+      "agentId": "agent-aa26",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-development-agents/issues/55#issuecomment-4365507122"
+    },
+    "62": {
+      "status": "failed",
+      "agentId": "agent-08c4",
+      "outcome": "error",
+      "error": "No JSON envelope found in final assistant message. | orphan branch: https://github.com/szhygulin/vaultpilot-development-agents/tree/vp-dev%2Fagent-08c4%2Fissue-62"
+    },
+    "63": {
+      "status": "done",
+      "agentId": "agent-75a0",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/68"
+    },
+    "64": {
+      "status": "done",
+      "agentId": "agent-e22f",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/66"
+    }
+  },
+  "tickCount": 7,
+  "lastTickAt": "2026-05-03T06:03:07.269Z",
+  "startedAt": "2026-05-03T05:54:13.869Z",
+  "dryRun": false
+}

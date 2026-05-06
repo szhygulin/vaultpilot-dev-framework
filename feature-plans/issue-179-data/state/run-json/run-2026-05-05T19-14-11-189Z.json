@@ -1,0 +1,278 @@
+{
+  "runId": "run-2026-05-05T19-14-11-189Z",
+  "targetRepo": "szhygulin/vaultpilot-mcp",
+  "issueRange": {
+    "kind": "all-open"
+  },
+  "parallelism": 20,
+  "agents": [
+    {
+      "agentId": "agent-916a",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-92ff",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-fe90",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-2a3d",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-5acc",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-98b3",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-41bd",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-9a77",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-956b",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-b7b8",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-219e",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-02ce",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-5421",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-d0eb",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-de1b",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-6337",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-a642",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-da91",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-5ade",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-ef41",
+      "status": "idle"
+    }
+  ],
+  "issues": {
+    "156": {
+      "status": "done",
+      "agentId": "agent-2a3d",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/156#issuecomment-4382266296"
+    },
+    "558": {
+      "status": "done",
+      "agentId": "agent-de1b",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/558#issuecomment-4382268667"
+    },
+    "559": {
+      "status": "done",
+      "agentId": "agent-b7b8",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/559#issuecomment-4382282034"
+    },
+    "560": {
+      "status": "done",
+      "agentId": "agent-219e",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/560#issuecomment-4382269288"
+    },
+    "561": {
+      "status": "done",
+      "agentId": "agent-956b",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/561#issuecomment-4382269896"
+    },
+    "562": {
+      "status": "done",
+      "agentId": "agent-5421",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/562#issuecomment-4382273079"
+    },
+    "563": {
+      "status": "done",
+      "agentId": "agent-fe90",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/563#issuecomment-4382288193"
+    },
+    "565": {
+      "status": "done",
+      "agentId": "agent-02ce",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/565#issuecomment-4382273114"
+    },
+    "566": {
+      "status": "done",
+      "agentId": "agent-5acc",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/566#issuecomment-4382276358"
+    },
+    "567": {
+      "status": "done",
+      "agentId": "agent-41bd",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/567#issuecomment-4382272116"
+    },
+    "568": {
+      "status": "done",
+      "agentId": "agent-9a77",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/568#issuecomment-4382267186"
+    },
+    "569": {
+      "status": "done",
+      "agentId": "agent-98b3",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-mcp/pull/657"
+    },
+    "573": {
+      "status": "done",
+      "agentId": "agent-d0eb",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-mcp/pull/658"
+    },
+    "574": {
+      "status": "done",
+      "agentId": "agent-41bd",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/574#issuecomment-4382291309"
+    },
+    "575": {
+      "status": "done",
+      "agentId": "agent-ef41",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/575#issuecomment-4382267465"
+    },
+    "576": {
+      "status": "done",
+      "agentId": "agent-fe90",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/576#issuecomment-4382265462"
+    },
+    "577": {
+      "status": "done",
+      "agentId": "agent-5ade",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-mcp/pull/660"
+    },
+    "578": {
+      "status": "done",
+      "agentId": "agent-da91",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/578#issuecomment-4382283144"
+    },
+    "579": {
+      "status": "done",
+      "agentId": "agent-9a77",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/579#issuecomment-4382283210"
+    },
+    "580": {
+      "status": "done",
+      "agentId": "agent-5acc",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/580#issuecomment-4382305868"
+    },
+    "581": {
+      "status": "done",
+      "agentId": "agent-916a",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/581#issuecomment-4382292940"
+    },
+    "582": {
+      "status": "done",
+      "agentId": "agent-2a3d",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/582#issuecomment-4382284265"
+    },
+    "583": {
+      "status": "done",
+      "agentId": "agent-916a",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/583#issuecomment-4382264290"
+    },
+    "584": {
+      "status": "done",
+      "agentId": "agent-6337",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/584#issuecomment-4382267602"
+    },
+    "585": {
+      "status": "done",
+      "agentId": "agent-916a",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/585#issuecomment-4382279349"
+    },
+    "586": {
+      "status": "done",
+      "agentId": "agent-b7b8",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/586#issuecomment-4382264265"
+    },
+    "649": {
+      "status": "done",
+      "agentId": "agent-916a",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/649#issuecomment-4382324288"
+    },
+    "650": {
+      "status": "done",
+      "agentId": "agent-92ff",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-mcp/pull/661"
+    },
+    "651": {
+      "status": "done",
+      "agentId": "agent-916a",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-mcp/pull/662"
+    },
+    "652": {
+      "status": "done",
+      "agentId": "agent-a642",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-mcp/pull/659"
+    }
+  },
+  "tickCount": 29,
+  "lastTickAt": "2026-05-05T19:27:10.165Z",
+  "startedAt": "2026-05-05T19:14:11.189Z",
+  "dryRun": false,
+  "dedupCostUsd": 0.0250755,
+  "costAccumulatedUsd": 31.151714249999994
+}

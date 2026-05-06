@@ -1,0 +1,143 @@
+{
+  "runId": "run-2026-05-01T13-48-07-936Z",
+  "targetRepo": "szhygulin/vaultpilot-mcp",
+  "issueRange": {
+    "kind": "csv",
+    "ids": [
+      156,
+      162,
+      558,
+      559,
+      560,
+      561,
+      562,
+      563,
+      565,
+      566,
+      567,
+      568,
+      569,
+      573,
+      574
+    ]
+  },
+  "parallelism": 5,
+  "agents": [
+    {
+      "agentId": "agent-d396",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-90e4",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-51e5",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-08c4",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-e287",
+      "status": "idle"
+    }
+  ],
+  "issues": {
+    "156": {
+      "status": "done",
+      "agentId": "agent-08c4",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/156"
+    },
+    "162": {
+      "status": "done",
+      "agentId": "agent-d396",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/162#issuecomment-dry-run"
+    },
+    "558": {
+      "status": "done",
+      "agentId": "agent-90e4",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/558#dry-run"
+    },
+    "559": {
+      "status": "failed",
+      "agentId": "agent-51e5",
+      "outcome": "error",
+      "error": "worktree add failed: Preparing worktree (new branch 'vp-dev/agent-51e5/issue-559')\nfatal: a branch named 'vp-dev/agent-51e5/issue-559' already exists\n"
+    },
+    "560": {
+      "status": "done",
+      "agentId": "agent-e287",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/560"
+    },
+    "561": {
+      "status": "done",
+      "agentId": "agent-08c4",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/561"
+    },
+    "562": {
+      "status": "done",
+      "agentId": "agent-90e4",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/562"
+    },
+    "563": {
+      "status": "done",
+      "agentId": "agent-d396",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/563"
+    },
+    "565": {
+      "status": "done",
+      "agentId": "agent-90e4",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/565"
+    },
+    "566": {
+      "status": "done",
+      "agentId": "agent-e287",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/566"
+    },
+    "567": {
+      "status": "done",
+      "agentId": "agent-d396",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/567"
+    },
+    "568": {
+      "status": "done",
+      "agentId": "agent-d396",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/568"
+    },
+    "569": {
+      "status": "done",
+      "agentId": "agent-08c4",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/569"
+    },
+    "573": {
+      "status": "done",
+      "agentId": "agent-51e5",
+      "outcome": "implement",
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-573"
+    },
+    "574": {
+      "status": "done",
+      "agentId": "agent-e287",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/574"
+    }
+  },
+  "tickCount": 13,
+  "lastTickAt": "2026-05-01T13:58:19.453Z",
+  "startedAt": "2026-05-01T13:48:07.937Z",
+  "dryRun": true
+}

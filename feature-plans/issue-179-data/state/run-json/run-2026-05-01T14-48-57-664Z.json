@@ -1,0 +1,143 @@
+{
+  "runId": "run-2026-05-01T14-48-57-664Z",
+  "targetRepo": "szhygulin/vaultpilot-mcp",
+  "issueRange": {
+    "kind": "csv",
+    "ids": [
+      614,
+      612,
+      610,
+      608,
+      604,
+      600,
+      599,
+      598,
+      597,
+      596,
+      595,
+      594,
+      593,
+      592,
+      591
+    ]
+  },
+  "parallelism": 5,
+  "agents": [
+    {
+      "agentId": "agent-d396",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-90e4",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-08c4",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-51e5",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-e287",
+      "status": "idle"
+    }
+  ],
+  "issues": {
+    "591": {
+      "status": "done",
+      "agentId": "agent-e287",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/591"
+    },
+    "592": {
+      "status": "done",
+      "agentId": "agent-e287",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/592"
+    },
+    "593": {
+      "status": "done",
+      "agentId": "agent-90e4",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/593"
+    },
+    "594": {
+      "status": "done",
+      "agentId": "agent-51e5",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/594#issuecomment-dry-run"
+    },
+    "595": {
+      "status": "done",
+      "agentId": "agent-90e4",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/595#issuecomment-dry-run"
+    },
+    "596": {
+      "status": "done",
+      "agentId": "agent-90e4",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/596"
+    },
+    "597": {
+      "status": "done",
+      "agentId": "agent-90e4",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/597#dry-run"
+    },
+    "598": {
+      "status": "done",
+      "agentId": "agent-51e5",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/598"
+    },
+    "599": {
+      "status": "done",
+      "agentId": "agent-e287",
+      "outcome": "implement",
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-599"
+    },
+    "600": {
+      "status": "done",
+      "agentId": "agent-51e5",
+      "outcome": "pushback",
+      "commentUrl": "https://dry-run/issue-comment/szhygulin/vaultpilot-mcp/600"
+    },
+    "604": {
+      "status": "done",
+      "agentId": "agent-08c4",
+      "outcome": "implement",
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-604"
+    },
+    "608": {
+      "status": "failed",
+      "agentId": "agent-d396",
+      "outcome": "error",
+      "error": "worktree add failed: Preparing worktree (new branch 'vp-dev/agent-d396/issue-608')\nerror: could not lock config file .git/config: File exists\nerror: unable to write upstream branch configuration\nhint:\nhint: After fixing the error cause you may try to fix up\nhint: the remote tracking information by invoking:\nhint:   git branch --set-upstream-to=origin/refs/heads/main\n"
+    },
+    "610": {
+      "status": "done",
+      "agentId": "agent-d396",
+      "outcome": "implement",
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-610"
+    },
+    "612": {
+      "status": "done",
+      "agentId": "agent-d396",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-mcp/issues/612#issuecomment-dry-run"
+    },
+    "614": {
+      "status": "done",
+      "agentId": "agent-08c4",
+      "outcome": "implement",
+      "prUrl": "https://dry-run/pr/szhygulin/vaultpilot-mcp/issue-614"
+    }
+  },
+  "tickCount": 11,
+  "lastTickAt": "2026-05-01T15:00:24.768Z",
+  "startedAt": "2026-05-01T14:48:57.665Z",
+  "dryRun": true
+}

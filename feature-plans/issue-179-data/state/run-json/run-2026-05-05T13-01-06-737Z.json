@@ -1,0 +1,73 @@
+{
+  "runId": "run-2026-05-05T13-01-06-737Z",
+  "targetRepo": "szhygulin/vaultpilot-development-agents",
+  "issueRange": {
+    "kind": "all-open"
+  },
+  "parallelism": 10,
+  "agents": [
+    {
+      "agentId": "agent-e287",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-08c4",
+      "status": "idle"
+    }
+  ],
+  "issues": {
+    "115": {
+      "status": "done",
+      "agentId": "agent-e287",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/117"
+    },
+    "116": {
+      "status": "done",
+      "agentId": "agent-08c4",
+      "outcome": "pushback",
+      "commentUrl": "https://github.com/szhygulin/vaultpilot-development-agents/issues/116#issuecomment-4379503041"
+    }
+  },
+  "tickCount": 2,
+  "lastTickAt": "2026-05-05T13:04:46.003Z",
+  "startedAt": "2026-05-05T13:01:06.737Z",
+  "dryRun": false,
+  "unprunableStaleBranches": [
+    {
+      "branch": "vp-dev/agent-08c4/issue-86",
+      "agentId": "agent-08c4",
+      "issueId": 86,
+      "worktreePath": "/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/salvage-86",
+      "reason": "error: cannot delete branch 'vp-dev/agent-08c4/issue-86' used by worktree at '/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/salvage-86'\n"
+    },
+    {
+      "branch": "vp-dev/agent-916a/issue-102",
+      "agentId": "agent-916a",
+      "issueId": 102,
+      "worktreePath": "/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/rebase-pr-110",
+      "reason": "error: cannot delete branch 'vp-dev/agent-916a/issue-102' used by worktree at '/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/rebase-pr-110'\n"
+    },
+    {
+      "branch": "vp-dev/agent-92ff/issue-99",
+      "agentId": "agent-92ff",
+      "issueId": 99,
+      "worktreePath": "/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/salvage-99",
+      "reason": "error: cannot delete branch 'vp-dev/agent-92ff/issue-99' used by worktree at '/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/salvage-99'\n"
+    },
+    {
+      "branch": "vp-dev/agent-98b3/issue-95",
+      "agentId": "agent-98b3",
+      "issueId": 95,
+      "worktreePath": "/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/rebase-pr-104",
+      "reason": "error: cannot delete branch 'vp-dev/agent-98b3/issue-95' used by worktree at '/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/rebase-pr-104'\n"
+    },
+    {
+      "branch": "vp-dev/agent-e287/issue-84",
+      "agentId": "agent-e287",
+      "issueId": 84,
+      "worktreePath": "/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/salvage-84",
+      "reason": "error: cannot delete branch 'vp-dev/agent-e287/issue-84' used by worktree at '/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/salvage-84'\n"
+    }
+  ]
+}

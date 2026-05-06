@@ -1,0 +1,38 @@
+{
+  "runId": "run-2026-05-04T17-48-07-803Z",
+  "targetRepo": "szhygulin/vaultpilot-development-agents",
+  "issueRange": {
+    "kind": "csv",
+    "ids": [
+      34
+    ]
+  },
+  "parallelism": 1,
+  "agents": [
+    {
+      "agentId": "agent-72c6",
+      "status": "idle"
+    }
+  ],
+  "issues": {
+    "34": {
+      "status": "failed",
+      "agentId": "agent-72c6",
+      "outcome": "error",
+      "error": "No JSON envelope found in final assistant message."
+    }
+  },
+  "tickCount": 1,
+  "lastTickAt": "2026-05-04T17:48:22.288Z",
+  "startedAt": "2026-05-04T17:48:07.803Z",
+  "dryRun": false,
+  "unprunableStaleBranches": [
+    {
+      "branch": "vp-dev/agent-e287/issue-40",
+      "agentId": "agent-e287",
+      "issueId": 40,
+      "worktreePath": "/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/pr-43-conflict",
+      "reason": "error: cannot delete branch 'vp-dev/agent-e287/issue-40' used by worktree at '/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/pr-43-conflict'\n"
+    }
+  ]
+}

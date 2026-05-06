@@ -1,0 +1,8 @@
+{"ts":"2026-05-06T05:52:36.729Z","event":"spawn.started","runId":"spawn-2026-05-06T05-52-36-729Z-issue-51","agentId":"agent-9187","issueId":51,"targetRepo":"szhygulin/vaultpilot-mcp-smoke-test","targetRepoPath":"/tmp/study-clones/clone-8","dryRun":true,"skipSummary":true}
+{"ts":"2026-05-06T05:52:39.212Z","event":"worktree.stale_branch_pruned","branch":"vp-dev/agent-9187/issue-50","agentId":"agent-9187","issueId":50}
+{"ts":"2026-05-06T05:52:39.212Z","event":"worktree.stale_branches_swept","pruned":1,"kept":0,"unprunable":0}
+{"ts":"2026-05-06T05:52:41.022Z","event":"agent.spawned","agentId":"agent-9187","issueId":51,"worktree":"/tmp/study-clones/clone-8/.claude/worktrees/agent-9187-issue-51","branch":"vp-dev/agent-9187/issue-51"}
+{"ts":"2026-05-06T05:52:46.732Z","event":"agent.tool_use","agentId":"agent-9187","issueId":51,"tool":"Bash","input":"{\"command\":\"gh issue view 51 --repo szhygulin/vaultpilot-mcp-smoke-test --json number,title,body,labels,state\",\"description\":\"View issue #51 details\"}"}
+{"ts":"2026-05-06T05:52:46.744Z","event":"permission.evaluated","agentId":"agent-9187","issueId":51,"tool":"Bash","behavior":"allow"}
+{"ts":"2026-05-06T05:52:47.203Z","event":"agent.tool_use","agentId":"agent-9187","issueId":51,"tool":"Bash","input":"{\"command\":\"gh api repos/szhygulin/vaultpilot-mcp-smoke-test/issues/51/comments\",\"description\":\"View issue #51 comments\"}"}
+{"ts":"2026-05-06T05:52:47.225Z","event":"permission.evaluated","agentId":"agent-9187","issueId":51,"tool":"Bash","behavior":"allow"}

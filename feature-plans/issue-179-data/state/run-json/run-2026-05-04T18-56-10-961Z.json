@@ -1,0 +1,82 @@
+{
+  "runId": "run-2026-05-04T18-56-10-961Z",
+  "targetRepo": "szhygulin/vaultpilot-development-agents",
+  "issueRange": {
+    "kind": "csv",
+    "ids": [
+      84,
+      85,
+      87,
+      88,
+      89
+    ]
+  },
+  "parallelism": 10,
+  "agents": [
+    {
+      "agentId": "agent-72c6",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-e22f",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-aa26",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-e287",
+      "status": "idle"
+    },
+    {
+      "agentId": "agent-08c4",
+      "status": "idle"
+    }
+  ],
+  "issues": {
+    "84": {
+      "status": "failed",
+      "agentId": "agent-e287",
+      "outcome": "error",
+      "error": "No JSON envelope found in final assistant message."
+    },
+    "85": {
+      "status": "done",
+      "agentId": "agent-aa26",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/93"
+    },
+    "87": {
+      "status": "done",
+      "agentId": "agent-08c4",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/90"
+    },
+    "88": {
+      "status": "done",
+      "agentId": "agent-72c6",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/92"
+    },
+    "89": {
+      "status": "done",
+      "agentId": "agent-e22f",
+      "outcome": "implement",
+      "prUrl": "https://github.com/szhygulin/vaultpilot-development-agents/pull/91"
+    }
+  },
+  "tickCount": 5,
+  "lastTickAt": "2026-05-04T19:04:21.400Z",
+  "startedAt": "2026-05-04T18:56:10.961Z",
+  "dryRun": false,
+  "unprunableStaleBranches": [
+    {
+      "branch": "vp-dev/agent-e287/issue-40",
+      "agentId": "agent-e287",
+      "issueId": 40,
+      "worktreePath": "/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/pr-43-conflict",
+      "reason": "error: cannot delete branch 'vp-dev/agent-e287/issue-40' used by worktree at '/home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/pr-43-conflict'\n"
+    }
+  ]
+}

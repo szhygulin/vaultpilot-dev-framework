@@ -1,0 +1,9 @@
+{"ts":"2026-05-06T05:52:36.780Z","event":"spawn.started","runId":"spawn-2026-05-06T05-52-36-780Z-issue-51","agentId":"agent-9184","issueId":51,"targetRepo":"szhygulin/vaultpilot-mcp-smoke-test","targetRepoPath":"/tmp/study-clones/clone-5","dryRun":true,"skipSummary":true}
+{"ts":"2026-05-06T05:52:39.229Z","event":"warn.worktree.stale_branch_delete_failed","branch":"vp-dev/agent-9184/issue-48","agentId":"agent-9184","issueId":48,"worktreePath":"/tmp/study-clones/clone-5","err":"error: cannot delete branch 'vp-dev/agent-9184/issue-48' used by worktree at '/tmp/study-clones/clone-5'\n"}
+{"ts":"2026-05-06T05:52:39.676Z","event":"worktree.stale_branch_pruned","branch":"vp-dev/agent-9184/issue-50","agentId":"agent-9184","issueId":50}
+{"ts":"2026-05-06T05:52:39.676Z","event":"worktree.stale_branches_swept","pruned":1,"kept":1,"unprunable":1}
+{"ts":"2026-05-06T05:52:41.614Z","event":"agent.spawned","agentId":"agent-9184","issueId":51,"worktree":"/tmp/study-clones/clone-5/.claude/worktrees/agent-9184-issue-51","branch":"vp-dev/agent-9184/issue-51"}
+{"ts":"2026-05-06T05:52:46.783Z","event":"agent.tool_use","agentId":"agent-9184","issueId":51,"tool":"Bash","input":"{\"command\":\"gh issue view 51 --repo szhygulin/vaultpilot-mcp-smoke-test --json number,title,body,labels,state\",\"description\":\"View issue #51 details\"}"}
+{"ts":"2026-05-06T05:52:46.799Z","event":"permission.evaluated","agentId":"agent-9184","issueId":51,"tool":"Bash","behavior":"allow"}
+{"ts":"2026-05-06T05:52:47.203Z","event":"agent.tool_use","agentId":"agent-9184","issueId":51,"tool":"Bash","input":"{\"command\":\"gh api repos/szhygulin/vaultpilot-mcp-smoke-test/issues/51/comments\",\"description\":\"View issue #51 comments\"}"}
+{"ts":"2026-05-06T05:52:47.275Z","event":"permission.evaluated","agentId":"agent-9184","issueId":51,"tool":"Bash","behavior":"allow"}

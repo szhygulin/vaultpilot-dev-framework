@@ -1,0 +1,34 @@
+INFO: ANTHROPIC_API_KEY is not set; falling back to Claude Code OAuth credentials at ~/.claude/credentials.json.
+Run setup
+=========
+  Target repo:    szhygulin/vaultpilot-development-agents
+  Local path:     /home/szhygulin/dev/vaultpilot-development-agents
+  Issue range:    all-open
+  Open issues:    7
+  Authorized:     10 (--agents)
+  Planned:        7 (7 specialist, 0 general)
+  Dry run:        no
+  Resume:         no
+
+Agents to summon:
+  Rogue Oracle (agent-72c6)  rationale=specialist  tags=[advisory-layer,agent-merge,agent-prune,agent-roster,ci-workflow,cli-subcommand,cross-repo-scope,cross-repo-scope-split,deduplication,dispatcher,duplicate-issue,feedback-loop,gh-cli,jaccard-similarity,json-envelope-parser,jsonl,meta-issue,meta-issue-triage,model-shaped-failure,node-test,outcome-metrics,polling,pushback,registry-mutation,rogue-agent-only,rogue-agent-triage,rogue-mcp-threat-model,second-llm-cross-check,self-attestation,shared-helper,skill-coverage,skill-intent-layer,skill-mandate,smoke-tests,split-clusterer,summarizer,tracker-issue,tracking-issue,upstream-gated,upstream-tracking,zod-schema]  issuesHandled=11  score=0.124
+  Floyd (agent-e287)  rationale=specialist  tags=[address-poisoning,agent-behavior,agent-roster,archived-agents,build-freshness,c4-reframe,collude-attack,commander-options,cross-repo-scope-split,data-integrity,data-source-attestation,docstring-discipline,ens,enumerated-set,esm-bin-shim,general,intent-layer,non-signing-mutation,non-signing-tools,preflight,preflight-step-0,protocol-risk-score,provenance-footer,read-only-data-plane,revoke-readonly-invite,risk-score,rogue-mcp,rpc-catalog,self-attestation-antipattern,skill-side,skill-side-ground-truth,smoke-test-batch-04,smoke-test-batch-2,smoke-test-c3,smoke-test-c4-reframe,speculative-pick,stale-dist,tool-docstring,validator-set,vp-dev-cli]  issuesHandled=10  score=0.120
+  Safe Forensics (agent-e22f)  rationale=specialist  tags=[agent-registry,agent-split,api-kit,claude-agent-sdk,diagnostic-probe,display-names,env-var-override,error-enrichment,evm,linux-binary-resolution,musl-vs-glibc,name-pool,node-native-binary,opaque-bytes,opaque-calldata,opaque-errors,preflight-skill,preflight-step-0,prepare-custom-call,read-contract,safe,safe-multisig,safe-transaction-service,safe-tx-service,sdk-drift,sdk-error-shape,sdk-idl-drift,submit-safe-tx-signature]  issuesHandled=10  score=0.120
+  Keccak Guard (agent-aa26)  rationale=specialist  tags=[access-control,checks-performed,cli-gate,cost-surface,dependency-blocked,dependency-gating,executor-role,get-verification-artifact,invariant-4,keccak256,marginfi,setup-preview,smoke-test,smoke-test-finding,smoke-test-harness,tool-description,triage,triage-cost,ux-hardening,vp-dev-cli,vp-dev-run]  issuesHandled=10  score=0.120
+  Khwarizmi (agent-08c4)  rationale=specialist  tags=[address-poisoning,api-key-classification,config-schema,config-status,contacts-resolver,cross-repo-skill-split,diagnostics,general,gh-cli,git-state,idl,ledger-live,liveness-probe,marginfi,nft,oracle-setup,orchestrator,parse-error,peer-unreachable,preflight,read-only-half-feature,readonly-token,reconciliation,reservoir,rogue-mcp-threat-model,safe-api-key,safe-multisig,sdk-drift,session-liveness,session-status,setup-wizard,share-strategy,solana,status-integrity,tool-gap,tracking-issue,walletconnect]  issuesHandled=9  score=0.115
+  Finding Triage (agent-75a0)  rationale=specialist  tags=[agent-completed,defense-in-depth,diagnostics,error-surface,inv-12-5,inv-15,inv-1a,inv-7,logger-actionable,logging,parse-error,preflight,rpc-config,run-state,security-finding,security-finding-triage,session-liveness,session-state,smoke-test,smoke-test-batch-4,smoke-test-finding,stale-branch,tracker-issue,truncation,verification-artifact,worktree-sweep]  issuesHandled=8  score=0.110
+  Rogue Component Trust Isolation (agent-6100)  rationale=specialist  tags=[chain-data-integrity,chainlink,chainlink-oracle,circular-trust,cross-agent-isolation,cross-rpc-divergence,data-provenance,phased-rollout,prompt-injection,read-only-data-plane,readonly-link,rogue-agent-triage,rogue-mcp,rogue-mcp-threat-model,rogue-rpc,rpc-divergence-check,rpc-integrity,second-llm-check,shared-lessons-pool,summarizer-trust-boundary,trust-boundary,trust-domain-independence]  issuesHandled=7  score=0.104
+
+Overload warnings:
+  WARNING: agent-72c6 crossed split threshold — CLAUDE.md=32.3KB >= 30KB
+    Run `vp-dev agents split agent-72c6` to view a split proposal.
+
+Issues to address:
+  70, 67, 62, 56, 55, 34, 33
+
+Plan token 45cdec834e9811cd verified. Launching run.
+WARNING: 1 stale branch(es) attached to a worktree could not be pruned.
+  vp-dev/agent-e287/issue-40 — worktree at /home/szhygulin/dev/vaultpilot-development-agents/.claude/worktrees/pr-43-conflict
+  To clean up: review the worktree, then `git worktree remove --force <path>` and `git branch -D <branch>`.
+  Recorded under `unprunableStaleBranches` in the run-state JSON for later audit.
+Run run-2026-05-04T14-08-59-410Z log: logs/run-2026-05-04T14-08-59-410Z.jsonl

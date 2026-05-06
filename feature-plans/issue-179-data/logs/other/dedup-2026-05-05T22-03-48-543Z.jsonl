@@ -1,0 +1,2 @@
+{"ts":"2026-05-05T22:03:49.361Z","event":"dedup.cache_hit","contentHash":"sha256:32acf301adecf57cfcaab61bd2fcd79f","clusterCount":0,"costUsd":0.038002499999999995,"issueCount":3}
+{"ts":"2026-05-05T22:03:49.361Z","event":"dedup.completed","issueCount":3,"clusterCount":0,"costUsd":0.038002499999999995,"fromCache":true}

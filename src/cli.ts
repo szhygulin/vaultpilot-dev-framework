@@ -450,7 +450,24 @@ export function buildCli(): Command {
   program.addCommand(cleanupCmd);
 
   const researchCmd = new Command("research")
-    .description("Research tools (curve-study, etc.) — operator-input studies that update calibrated artifacts under src/util/")
+    .description("Research tools (curve-study, plan-trims) — operator-input studies that update calibrated artifacts under src/util/")
+    .addCommand(
+      new Command("plan-trims")
+        .description(
+          "Generate a random-sampled trim plan from a parent CLAUDE.md. For each target size, emits K replicates with different random subsets of sections — across replicates every section appears in some small trims and is absent from others, so the curve study's regression learns size's effect averaged over section identity. Writes one trimmed CLAUDE.md per (size, replicate) plus an agents-spec.json the operator feeds into curve-study after registering the dev-agents and creating per-agent clones.",
+        )
+        .requiredOption("--parent <agentId>", "Parent dev-agent whose agents/<id>/CLAUDE.md is the source")
+        .requiredOption("--sizes <list>", "Comma-separated target sizes in bytes (e.g. 6000,14000,22000,30000,42000,58000)")
+        .requiredOption("--replicates <n>", "K replicates per size (≥5 recommended for variance averaging)", parsePositive)
+        .requiredOption("--output-dir <path>", "Where to write trimmed CLAUDE.md files (one per replicate)")
+        .requiredOption("--output-spec <path>", "Where to write the agents-spec JSON for curve-study")
+        .option("--seed-base <n>", "RNG seed base for reproducibility", parsePositive, 42)
+        .option("--preserve <list>", "Comma-separated section slugs (id from heading) to keep in every trim. NOTE: any preserved section is a confounder; report it in the study writeup.", "")
+        .option("--clone-base <path>", "Per-agent dedicated clone path template, with {agentId} placeholder. Default: /tmp/study-clones/{agentId}")
+        .action(async (opts) => {
+          await cmdResearchPlanTrims(opts);
+        }),
+    )
     .addCommand(
       new Command("curve-study")
         .description(
@@ -3082,6 +3099,67 @@ function partitionOpenPrIssues(
     }
   }
   return { dispatchIssues, openPrSkipped };
+}
+
+interface ResearchPlanTrimsOpts {
+  parent: string;
+  sizes: string;
+  replicates: number;
+  outputDir: string;
+  outputSpec: string;
+  seedBase: number;
+  preserve: string;
+  cloneBase?: string;
+}
+
+async function cmdResearchPlanTrims(opts: ResearchPlanTrimsOpts): Promise<void> {
+  const { planRandomTrims } = await import("./research/curveStudy/randomTrim.js");
+  const parentPath = path.join("agents", opts.parent, "CLAUDE.md");
+  const parent = await fs.readFile(parentPath, "utf8");
+  const sizes = opts.sizes.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+  if (sizes.length === 0) throw new Error("--sizes: no valid sizes parsed");
+  const preserve = opts.preserve ? opts.preserve.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const cloneTemplate = opts.cloneBase ?? "/tmp/study-clones/{agentId}";
+
+  const plans = planRandomTrims({
+    parent,
+    preserve,
+    sizes,
+    replicates: opts.replicates,
+    seedBase: opts.seedBase,
+  });
+
+  await fs.mkdir(opts.outputDir, { recursive: true });
+  const spec: Array<{ devAgentId: string; sizeBytes: number; clonePath: string; targetBytes: number; seed: number; selectedIds: string[]; droppedIds: string[] }> = [];
+  for (const plan of plans) {
+    const devAgentId = `${opts.parent}-trim-${plan.size}-s${plan.seed}`;
+    const trimPath = path.join(opts.outputDir, `${devAgentId}-CLAUDE.md`);
+    await fs.writeFile(trimPath, plan.result.trimmed);
+    spec.push({
+      devAgentId,
+      sizeBytes: plan.result.actualBytes,
+      clonePath: cloneTemplate.replace("{agentId}", devAgentId),
+      targetBytes: plan.size,
+      seed: plan.seed,
+      selectedIds: plan.result.selectedIds,
+      droppedIds: plan.result.droppedIds,
+    });
+  }
+  await fs.writeFile(opts.outputSpec, JSON.stringify(spec, null, 2));
+
+  process.stdout.write(`\nPlan: ${plans.length} trims (${sizes.length} sizes × ${opts.replicates} replicates)\n`);
+  for (const s of spec) {
+    process.stdout.write(`  ${s.devAgentId}  target=${s.targetBytes}B  actual=${s.sizeBytes}B  kept=${s.selectedIds.length}/${s.selectedIds.length + s.droppedIds.length}\n`);
+  }
+  process.stdout.write(`\nTrimmed CLAUDE.md files → ${opts.outputDir}\n`);
+  process.stdout.write(`agents-spec → ${opts.outputSpec}\n`);
+  process.stdout.write(`\nNext steps:\n`);
+  process.stdout.write(`  1. Register each devAgentId in the registry with its CLAUDE.md.\n`);
+  process.stdout.write(`  2. Clone --target-repo into each clonePath.\n`);
+  process.stdout.write(`  3. vp-dev research curve-study --agents-spec ${opts.outputSpec} --target-repo ... --issues ...\n`);
+  if (preserve.length > 0) {
+    process.stdout.write(`\nWARNING: preserve list = [${preserve.join(", ")}]. Any preserved section is a confounder for the curve. Report it in the study writeup.\n`);
+  }
 }
 
 interface ResearchCurveStudyOpts {

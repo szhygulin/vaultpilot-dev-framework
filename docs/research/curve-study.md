@@ -33,9 +33,28 @@ Re-run when the orchestrator's primary model changes or when calibrating a diffe
    **Update mode**: merges fresh samples into the existing `ACCURACY_DEGRADATION_SAMPLES` and `TOKEN_COST_SAMPLES` (with collision policy), re-fits, writes proposal.
 8. Operator hand-merges both arrays into `src/util/contextCostCurve.ts`. The runtime regressions re-fit lazily on first call.
 
-## Why operator-input trims (not algorithmic)
+## Trim methodology — random sampling with K replicates per size
 
-A trim is a judgment about which CLAUDE.md sections still earn their bytes. Encoding that as an algorithm would either over-trim load-bearing rules or under-trim by being too cautious. The operator supplies N pre-trimmed CLAUDE.mds; this tool measures what those trims do.
+Operator-curated trims (drop sections by judged utility) confound size with which-sections-survive: any "factor changes with size" finding could be the section identity rather than the byte count. A 6KB trim that *always keeps the same 5 sections* tells you about those 5 sections' value, not about the byte budget.
+
+The recommended methodology — implemented by `vp-dev research plan-trims` — is **random sampling with K replicates per target size**. At each size, the planner generates K independent random subsets of the parent's sections that each fit the byte budget. Across the K replicates, every section appears in roughly K/2 trims and is absent from K/2; the regression averages over section identity and recovers the byte-budget effect cleanly.
+
+```
+vp-dev research plan-trims \
+  --parent agent-916a \
+  --sizes 6000,14000,22000,30000,42000,58000 \
+  --replicates 5 \
+  --output-dir study-trims/ \
+  --output-spec study-agents-spec.json
+```
+
+Outputs:
+- One trimmed `CLAUDE.md` per `(size, replicate)` in `--output-dir`.
+- An agents-spec JSON the operator feeds into `curve-study` after registering each generated dev-agent and cloning the target-repo per agent.
+
+`K ≥ 5` is recommended; below that, section-identity variance can swamp the size signal in a low-cell-count regression. With 7 sizes × 5 replicates = 35 dev-agents, plus 3-5 issues per dispatch, expect 100+ cells per study run.
+
+`--preserve <slug,slug>` accepts a list of section IDs that must stay in every trim (e.g. load-bearing safety rules). Any preserved section is a confounder for the size→factor relationship — report what was preserved in the study writeup.
 
 ## Modes
 

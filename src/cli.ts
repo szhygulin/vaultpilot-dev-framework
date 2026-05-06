@@ -249,6 +249,18 @@ export function buildCli(): Command {
     .option("--verbose", "Mirror a colorized event subset to stderr")
     .option("--skip-summary", "Skip summarizer + CLAUDE.md append")
     .option("--inspect-paths <csv>", "Comma-separated absolute paths the agent may inspect read-only (e.g. prior worktrees)")
+    .option(
+      "--allow-closed-issue",
+      "Allow dispatching against a closed issue. Default: spawn refuses with exit 2 when issue.state==='closed'. Used by the curve-study calibration flow with --issue-body-only to dispatch against closed-completed issues as ground-truth controls.",
+    )
+    .option(
+      "--issue-body-only",
+      "Workflow Step 1 fetches the issue body ONLY — no comments. Suspends the CLAUDE.md 'Issue Analysis' rule for this dispatch. Required for closed-issue calibration runs so the resolution-PR link in close comments doesn't contaminate measurements.",
+    )
+    .option(
+      "--no-target-claude-md",
+      "Suppress the live target-repo CLAUDE.md prepend in the agent's system prompt. Default: prepend on (every dispatch's effective context = target-repo CLAUDE.md + per-agent CLAUDE.md). Used by curve-study calibration to keep the effective context size equal to the per-agent CLAUDE.md size we're varying.",
+    )
     .action(async (opts) => {
       await cmdSpawn(opts);
     });
@@ -448,6 +460,85 @@ export function buildCli(): Command {
         }),
     );
   program.addCommand(cleanupCmd);
+
+  const researchCmd = new Command("research")
+    .description("Research tools (curve-study, plan-trims, register-trims) — operator-input studies that update calibrated artifacts under src/util/")
+    .addCommand(
+      new Command("register-trims")
+        .description(
+          "Register dev-agents named in an agents-spec JSON (output of plan-trims) into state/agents-registry.json and copy their CLAUDE.md files into agents/<devAgentId>/CLAUDE.md. Idempotent — re-running with the same spec is a no-op for already-registered IDs (CLAUDE.md is overwritten).",
+        )
+        .requiredOption("--agents-spec <path>", "agents-spec JSON produced by plan-trims")
+        .requiredOption("--trims-dir <path>", "Directory containing the trimmed CLAUDE.md files (the plan-trims --output-dir)")
+        .option("--tags-from <agentId>", "Copy the tag set from this parent agent so --prefer-agent matching works. Default: tags=['research-study'].")
+        .action(async (opts) => {
+          await cmdResearchRegisterTrims(opts);
+        }),
+    )
+    .addCommand(
+      new Command("plan-trims")
+        .description(
+          "Generate a random-sampled trim plan from a parent CLAUDE.md. For each target size, emits K replicates with different random subsets of sections — across replicates every section appears in some small trims and is absent from others, so the curve study's regression learns size's effect averaged over section identity. Writes one trimmed CLAUDE.md per (size, replicate) plus an agents-spec.json the operator feeds into curve-study after registering the dev-agents and creating per-agent clones.",
+        )
+        .requiredOption("--parent <agentId>", "Parent dev-agent whose agents/<id>/CLAUDE.md is the source")
+        .requiredOption("--sizes <list>", "Comma-separated target sizes in bytes (e.g. 6000,14000,22000,30000,42000,58000)")
+        .requiredOption("--replicates <n>", "K replicates per size (≥5 recommended for variance averaging)", parsePositive)
+        .requiredOption("--output-dir <path>", "Where to write trimmed CLAUDE.md files (one per replicate)")
+        .requiredOption("--output-spec <path>", "Where to write the agents-spec JSON for curve-study")
+        .option("--seed-base <n>", "RNG seed base for reproducibility", parsePositive, 42)
+        .option("--preserve <list>", "Comma-separated section slugs (id from heading) to keep in every trim. NOTE: any preserved section is a confounder; report it in the study writeup.", "")
+        .option("--clone-base <path>", "Per-agent dedicated clone path template. Tokens: {agentId}, {repo}. When {repo} appears, the spec emits one entry per (agent × repo) so curve-study can dispatch the same agent against multiple repos with isolated clones. Default: /tmp/study-clones/{agentId}")
+        .option("--repos <list>", "Comma-separated repo basenames substituted into the {repo} token of --clone-base. Required when {repo} is in --clone-base; ignored otherwise.")
+        .action(async (opts) => {
+          await cmdResearchPlanTrims(opts);
+        }),
+    )
+    .addCommand(
+      new Command("curve-study")
+        .description(
+          "Refit src/util/contextCostCurve.ts (CLAUDE.md size → accuracyDegradationFactor). Operator pre-trims the parent dev-agent into N forks at chosen byte budgets and registers them; this command dispatches all (devAgent × issue) cells with 4-way parallelism + per-dev-agent serialization, aggregates outcomes, scores quality per #179, fits an OLS polynomial regression, and writes a JSON proposal the operator hand-merges into CONTEXT_COST_SAMPLES.",
+        )
+        .requiredOption("--agents-spec <path>", "JSON file: array of {devAgentId, sizeBytes, clonePath}")
+        .requiredOption("--target-repo <owner/repo>", "GitHub target repo (e.g. szhygulin/vaultpilot-mcp-smoke-test)")
+        .requiredOption("--issues <list>", "Comma-separated issue numbers (e.g. 50,52,54)")
+        .option("--logs-dir <path>", "Where per-cell logs land", "logs")
+        .option("--output <path>", "Where to write the JSON curve proposal", "curve-study-output.json")
+        .option("--parallelism <n>", "Max concurrent research agents", parsePositive, 4)
+        .option("--rubrics <path>", "Optional JSON file: array of {agentId, issueId, pushbackAccuracy?, prCorrectness?}")
+        .option("--no-dry-run", "Disable --dry-run on spawn (default: dry-run on; intercepts push/PR side effects)")
+        .option(
+          "--allow-closed-issue",
+          "Forward --allow-closed-issue to each cell's spawn. Required when --issues includes closed-completed issue numbers (ground-truth controls).",
+        )
+        .option(
+          "--issue-body-only",
+          "Forward --issue-body-only to each cell's spawn. Step 1 fetches body only — no comments. Required for closed-issue dispatches so the resolution-PR link doesn't contaminate the measurement.",
+        )
+        .option(
+          "--no-target-claude-md",
+          "Forward --no-target-claude-md to each cell's spawn. Suppress the live target-repo CLAUDE.md prepend so effective context size matches the per-agent CLAUDE.md size we're varying.",
+        )
+        .option(
+          "--max-total-cost-usd <usd>",
+          "Cumulative cost cap (USD) across all cells. Dispatch aborts when reached and the partial results are aggregated. Defense in depth on top of per-cell --max-cost-usd.",
+          parsePositive,
+        )
+        .option(
+          "--mode <mode>",
+          "replace (proposal = freshly measured samples only) | update (proposal = existing CONTEXT_COST_SAMPLES merged with fresh samples, re-fitted)",
+          "replace",
+        )
+        .option(
+          "--collision-policy <policy>",
+          "When --mode update finds a fresh sample at the same xBytes as an existing one: replace-on-collision | average-on-collision | keep-both",
+          "replace-on-collision",
+        )
+        .option("--degree <n>", "OLS polynomial regression degree", parsePositive, 2)
+        .action(async (opts) => {
+          await cmdResearchCurveStudy(opts);
+        }),
+    );
+  program.addCommand(researchCmd);
 
   return program;
 }
@@ -2347,6 +2438,10 @@ interface SpawnOpts {
   verbose?: boolean;
   skipSummary?: boolean;
   inspectPaths?: string;
+  allowClosedIssue?: boolean;
+  issueBodyOnly?: boolean;
+  /** commander's --no-target-claude-md sets `targetClaudeMd: false`. */
+  targetClaudeMd?: boolean;
 }
 
 async function cmdSpawn(opts: SpawnOpts): Promise<void> {
@@ -2356,8 +2451,8 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
     process.stderr.write(`ERROR: issue #${opts.issue} not found in ${opts.targetRepo}.\n`);
     process.exit(2);
   }
-  if (issue.state === "closed") {
-    process.stderr.write(`ERROR: issue #${opts.issue} is closed.\n`);
+  if (issue.state === "closed" && !opts.allowClosedIssue) {
+    process.stderr.write(`ERROR: issue #${opts.issue} is closed. Pass --allow-closed-issue to dispatch against it (used by the curve-study calibration flow with --issue-body-only).\n`);
     process.exit(2);
   }
 
@@ -2405,6 +2500,8 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       logger,
       skipSummary: !!opts.skipSummary,
       inspectPaths,
+      issueBodyOnly: !!opts.issueBodyOnly,
+      suppressTargetClaudeMd: opts.targetClaudeMd === false,
     });
 
     const out = {
@@ -3050,4 +3147,247 @@ function partitionOpenPrIssues(
     }
   }
   return { dispatchIssues, openPrSkipped };
+}
+
+interface ResearchRegisterTrimsOpts {
+  agentsSpec: string;
+  trimsDir: string;
+  tagsFrom?: string;
+}
+
+async function cmdResearchRegisterTrims(opts: ResearchRegisterTrimsOpts): Promise<void> {
+  const specRaw = JSON.parse(await fs.readFile(opts.agentsSpec, "utf8")) as Array<{ devAgentId: string }>;
+  const uniqueIds = [...new Set(specRaw.map((s) => s.devAgentId))];
+  const registry = await loadRegistry();
+  const parentTags = opts.tagsFrom
+    ? registry.agents.find((a) => a.agentId === opts.tagsFrom)?.tags ?? null
+    : null;
+  if (opts.tagsFrom && !parentTags) {
+    throw new Error(`--tags-from agent '${opts.tagsFrom}' not found in registry`);
+  }
+  let registered = 0;
+  let already = 0;
+  await mutateRegistry(async (reg) => {
+    for (const id of uniqueIds) {
+      const existed = reg.agents.some((a) => a.agentId === id);
+      const rec = createAgent(reg); // mints new id we discard
+      // Replace minted record with the requested specific id
+      reg.agents = reg.agents.filter((a) => a.agentId !== rec.agentId);
+      const explicit: typeof rec = {
+        ...rec,
+        agentId: id,
+        tags: parentTags ?? ["research-study"],
+      };
+      if (existed) {
+        const i = reg.agents.findIndex((a) => a.agentId === id);
+        if (i >= 0) {
+          reg.agents[i].tags = parentTags ?? reg.agents[i].tags;
+        }
+        already += 1;
+      } else {
+        reg.agents.push(explicit);
+        registered += 1;
+      }
+    }
+  });
+  for (const id of uniqueIds) {
+    const src = path.join(opts.trimsDir, `${id}-CLAUDE.md`);
+    const dstDir = path.join("agents", id);
+    const dst = path.join(dstDir, "CLAUDE.md");
+    await fs.mkdir(dstDir, { recursive: true });
+    await fs.copyFile(src, dst);
+  }
+  process.stdout.write(`Registered ${registered} new agents (+${already} already present), copied ${uniqueIds.length} CLAUDE.md files into agents/<devAgentId>/.\n`);
+  if (parentTags) {
+    process.stdout.write(`Tags copied from ${opts.tagsFrom}: ${parentTags.length} tags.\n`);
+  }
+}
+
+interface ResearchPlanTrimsOpts {
+  parent: string;
+  sizes: string;
+  replicates: number;
+  outputDir: string;
+  outputSpec: string;
+  seedBase: number;
+  preserve: string;
+  cloneBase?: string;
+  repos?: string;
+}
+
+async function cmdResearchPlanTrims(opts: ResearchPlanTrimsOpts): Promise<void> {
+  const { planRandomTrims } = await import("./research/curveStudy/randomTrim.js");
+  const parentPath = path.join("agents", opts.parent, "CLAUDE.md");
+  const parent = await fs.readFile(parentPath, "utf8");
+  const sizes = opts.sizes.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+  if (sizes.length === 0) throw new Error("--sizes: no valid sizes parsed");
+  const preserve = opts.preserve ? opts.preserve.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const cloneTemplate = opts.cloneBase ?? "/tmp/study-clones/{agentId}";
+  const wantsRepoToken = cloneTemplate.includes("{repo}");
+  const repos = opts.repos
+    ? opts.repos.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  if (wantsRepoToken && repos.length === 0) {
+    throw new Error("--clone-base contains {repo} token but --repos is empty. Pass --repos repo1,repo2 to template the spec.");
+  }
+  if (!wantsRepoToken && repos.length > 0) {
+    process.stderr.write("WARNING: --repos provided but --clone-base has no {repo} token; --repos will be ignored.\n");
+  }
+
+  const plans = planRandomTrims({
+    parent,
+    preserve,
+    sizes,
+    replicates: opts.replicates,
+    seedBase: opts.seedBase,
+  });
+
+  await fs.mkdir(opts.outputDir, { recursive: true });
+  const spec: Array<{ devAgentId: string; sizeBytes: number; clonePath: string; targetBytes: number; seed: number; selectedIds: string[]; droppedIds: string[]; repo?: string }> = [];
+  for (const plan of plans) {
+    const devAgentId = `${opts.parent}-trim-${plan.size}-s${plan.seed}`;
+    const trimPath = path.join(opts.outputDir, `${devAgentId}-CLAUDE.md`);
+    await fs.writeFile(trimPath, plan.result.trimmed);
+    if (wantsRepoToken) {
+      for (const repo of repos) {
+        spec.push({
+          devAgentId,
+          sizeBytes: plan.result.actualBytes,
+          clonePath: cloneTemplate.replace("{agentId}", devAgentId).replace("{repo}", repo),
+          targetBytes: plan.size,
+          seed: plan.seed,
+          selectedIds: plan.result.selectedIds,
+          droppedIds: plan.result.droppedIds,
+          repo,
+        });
+      }
+    } else {
+      spec.push({
+        devAgentId,
+        sizeBytes: plan.result.actualBytes,
+        clonePath: cloneTemplate.replace("{agentId}", devAgentId),
+        targetBytes: plan.size,
+        seed: plan.seed,
+        selectedIds: plan.result.selectedIds,
+        droppedIds: plan.result.droppedIds,
+      });
+    }
+  }
+  await fs.writeFile(opts.outputSpec, JSON.stringify(spec, null, 2));
+
+  process.stdout.write(`\nPlan: ${plans.length} trims (${sizes.length} sizes × ${opts.replicates} replicates)\n`);
+  for (const s of spec) {
+    process.stdout.write(`  ${s.devAgentId}  target=${s.targetBytes}B  actual=${s.sizeBytes}B  kept=${s.selectedIds.length}/${s.selectedIds.length + s.droppedIds.length}\n`);
+  }
+  process.stdout.write(`\nTrimmed CLAUDE.md files → ${opts.outputDir}\n`);
+  process.stdout.write(`agents-spec → ${opts.outputSpec}\n`);
+  process.stdout.write(`\nNext steps:\n`);
+  process.stdout.write(`  1. Register each devAgentId in the registry with its CLAUDE.md.\n`);
+  process.stdout.write(`  2. Clone --target-repo into each clonePath.\n`);
+  process.stdout.write(`  3. vp-dev research curve-study --agents-spec ${opts.outputSpec} --target-repo ... --issues ...\n`);
+  if (preserve.length > 0) {
+    process.stdout.write(`\nWARNING: preserve list = [${preserve.join(", ")}]. Any preserved section is a confounder for the curve. Report it in the study writeup.\n`);
+  }
+}
+
+interface ResearchCurveStudyOpts {
+  agentsSpec: string;
+  targetRepo: string;
+  issues: string;
+  logsDir: string;
+  output: string;
+  parallelism: number;
+  rubrics?: string;
+  dryRun: boolean;
+  allowClosedIssue?: boolean;
+  issueBodyOnly?: boolean;
+  /** commander's --no-target-claude-md sets `targetClaudeMd: false`. */
+  targetClaudeMd?: boolean;
+  maxTotalCostUsd?: number;
+  mode: string;
+  collisionPolicy: string;
+  degree: number;
+}
+
+async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void> {
+  const { runCurveStudy } = await import("./research/curveStudy/study.js");
+  if (opts.mode !== "replace" && opts.mode !== "update") {
+    throw new Error(`--mode must be 'replace' or 'update', got '${opts.mode}'`);
+  }
+  if (
+    opts.collisionPolicy !== "replace-on-collision" &&
+    opts.collisionPolicy !== "average-on-collision" &&
+    opts.collisionPolicy !== "keep-both"
+  ) {
+    throw new Error(`--collision-policy must be replace-on-collision|average-on-collision|keep-both, got '${opts.collisionPolicy}'`);
+  }
+  const agents = JSON.parse(await fs.readFile(opts.agentsSpec, "utf8")) as ReadonlyArray<{
+    devAgentId: string;
+    sizeBytes: number;
+    clonePath: string;
+  }>;
+  const issues = opts.issues.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  const rubrics = opts.rubrics ? JSON.parse(await fs.readFile(opts.rubrics, "utf8")) : undefined;
+
+  let existingAccuracySamples: ReadonlyArray<{ xBytes: number; factor: number }> | undefined;
+  let existingTokenCostSamples: ReadonlyArray<{ xBytes: number; factor: number }> | undefined;
+  if (opts.mode === "update") {
+    const mod = await import("./util/contextCostCurve.js");
+    existingAccuracySamples = mod.ACCURACY_DEGRADATION_SAMPLES;
+    existingTokenCostSamples = mod.TOKEN_COST_SAMPLES;
+  }
+
+  const result = await runCurveStudy({
+    agents,
+    issues,
+    targetRepo: opts.targetRepo,
+    parallelism: opts.parallelism,
+    dryRun: opts.dryRun,
+    allowClosedIssue: !!opts.allowClosedIssue,
+    issueBodyOnly: !!opts.issueBodyOnly,
+    suppressTargetClaudeMd: opts.targetClaudeMd === false,
+    maxTotalCostUsd: opts.maxTotalCostUsd,
+    logsDir: opts.logsDir,
+    outputPath: opts.output,
+    cwd: process.cwd(),
+    rubrics,
+    mode: opts.mode,
+    collisionPolicy: opts.collisionPolicy,
+    regressionDegree: opts.degree,
+    existingAccuracySamples,
+    existingTokenCostSamples,
+  });
+  process.stdout.write(`\nDone. ${result.cells.length} cells, $${result.totalCostUsd.toFixed(2)}, ${(result.wallMs / 60000).toFixed(1)}min.\n`);
+  process.stdout.write(`Mode: ${result.mode}. Proposal written to ${opts.output}.\n`);
+  printCurveSummary("ACCURACY_DEGRADATION_SAMPLES", result.accuracy, opts.degree);
+  printCurveSummary("TOKEN_COST_SAMPLES", result.tokenCost, opts.degree);
+}
+
+function printCurveSummary(
+  label: string,
+  curve: { samples: ReadonlyArray<{ xBytes: number; factor: number }>; regression: { degree: number; n: number; rss: number; tss: number; rSquared: number; rSquaredAdjusted: number; significance: { fStatistic: number; fDfRegression: number; fDfResidual: number; fPValue: number } } | null },
+  degree: number,
+): void {
+  process.stdout.write(`\n=== ${label} ===\n`);
+  if (!curve.regression) {
+    process.stdout.write(`No regression fitted (need >${degree} samples; got ${curve.samples.length}).\n`);
+    return;
+  }
+  const r = curve.regression;
+  const sig = r.significance;
+  const adj = Number.isFinite(r.rSquaredAdjusted) ? r.rSquaredAdjusted.toFixed(3) : "n/a";
+  const fp = Number.isFinite(sig.fPValue) ? sig.fPValue.toExponential(2) : "n/a";
+  const fStat = Number.isFinite(sig.fStatistic) ? sig.fStatistic.toFixed(2) : "n/a";
+  process.stdout.write(
+    `Regression (degree=${r.degree}, n=${r.n}, R²=${r.rSquared.toFixed(3)}, adj-R²=${adj}, F(${sig.fDfRegression},${sig.fDfResidual})=${fStat}, p=${fp})\n`,
+  );
+  if (Number.isFinite(sig.fPValue) && sig.fPValue > 0.05) {
+    process.stdout.write(
+      `WARNING: overall F-test p-value > 0.05 — fit is not statistically significant.\n`,
+    );
+  }
+  process.stdout.write(`Samples to hand-merge into ${label} (src/util/contextCostCurve.ts):\n`);
+  for (const s of curve.samples) {
+    process.stdout.write(`  { xBytes: ${s.xBytes}, factor: ${s.factor.toFixed(3)} },\n`);
+  }
 }

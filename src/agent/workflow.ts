@@ -36,6 +36,19 @@ export interface WorkflowVars {
    * → CodingAgentInput → WorkflowVars` so the section actually fires.
    */
   autoPhaseFollowup?: boolean;
+  /**
+   * Issue #179 phase 3 (research): when `true`, render Step 1 with the
+   * issue body fetch ONLY — drop the comments fetch (`gh api .../comments`)
+   * and the "fold every comment into analysis" instruction. Used for the
+   * curve-study dispatch against closed-completed issues, where the
+   * resolution PR is linked from a `gh-actions` close comment and would
+   * leak the answer.
+   *
+   * The CLAUDE.md "Issue Analysis" rule still appears in the per-agent
+   * memory; the workflow surface explicitly overrides it for this
+   * dispatch. Default: `false`.
+   */
+  issueBodyOnly?: boolean;
 }
 
 export function renderWorkflow(v: WorkflowVars): string {
@@ -56,12 +69,18 @@ ${v.inspectPaths.map((p) => `- \`${p}\``).join("\n")}
 You are an autonomous coding agent working on a single GitHub issue in ${v.targetRepo}.
 Your worktree is ${v.worktreePath} on branch ${v.branchName}. Your shell already starts in this directory for every Bash invocation — the cwd is preset. **Never prefix Bash commands with \`cd ${v.worktreePath} && …\`**: the leading word becomes \`cd\` (not on the gate's allowlist) and the call is denied. Run commands directly: \`npm run build\`, \`git status\`, \`git diff\`. **For text search, use the \`Grep\` tool (any path, any pattern) — bash \`grep\` is not allowlisted and will be denied.** Stay inside the worktree. Never push to main. **Never write to \`agents/.shared/\`** — that path holds curated cross-agent lessons maintained by the orchestrator via \`vp-dev lessons review\`. Read-only from your perspective; if a "Shared lessons (...)" section appears in your seed, treat it as reference material like the target-repo CLAUDE.md.${dryNote}${inspectNote}
 
-## Step 1 — Read the issue and ALL comments
+${v.issueBodyOnly
+  ? `## Step 1 — Read the issue body (BODY ONLY for this dispatch)
+Run:
+  gh issue view ${v.issueId} --repo ${v.targetRepo} --json number,title,body,labels,state
+
+**Do NOT fetch comments. Do NOT call \`gh api .../comments\`.** This dispatch is part of a calibration study that requires the agent to act on the issue body alone — comments may include reviewer pushback, scope adjustments, or links to a resolution PR that would contaminate the measurement. The CLAUDE.md "Issue Analysis" rule that says to fold comments into the analysis is **suspended for this dispatch only**.`
+  : `## Step 1 — Read the issue and ALL comments
 Run BOTH:
   gh issue view ${v.issueId} --repo ${v.targetRepo} --json number,title,body,labels,state
   gh api repos/${v.targetRepo}/issues/${v.issueId}/comments
 
-Per CLAUDE.md "Issue Analysis": comments are where reviewers add follow-up scope or push back on the original framing. Fold every comment into the analysis.
+Per CLAUDE.md "Issue Analysis": comments are where reviewers add follow-up scope or push back on the original framing. Fold every comment into the analysis.`}
 
 If a \`# Plan for issue #${v.issueId} (from feature-plans/...)\` section appears above this workflow in your seed, that plan was prepared in advance — treat it as authoritative design guidance, read it before Step 2, and prefer its file-by-file layout over reinventing one. If no such section is present, either the issue body's \`## Plan\` is "Not needed — coding agent can start directly from the issue body" or the convention path was empty; in either case proceed from the issue body alone.
 

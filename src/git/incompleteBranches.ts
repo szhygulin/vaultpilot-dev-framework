@@ -40,7 +40,7 @@ const INCOMPLETE_BRANCH_PATTERN = "vp-dev/agent-*/issue-*-incomplete-*";
 // generator (lowercase alphanumerics). The runId capture is `.+` because
 // `safeRunId` may contain `-` from the canonical `run-<iso>` form.
 const INCOMPLETE_BRANCH_RE =
-  /^vp-dev\/(agent-[a-z0-9]+)\/issue-(\d+)-incomplete-(.+)$/;
+  /^vp-dev\/(agent-[a-z0-9-]+)\/issue-(\d+)-incomplete-(.+)$/;
 
 export const DEFAULT_INCOMPLETE_RETENTION_DAYS = 14;
 

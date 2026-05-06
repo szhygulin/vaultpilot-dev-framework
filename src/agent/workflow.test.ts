@@ -108,3 +108,33 @@ test("renderWorkflow: autoPhaseFollowup off vs on differ ONLY by the new section
   assert.ok(on.includes('"nextPhaseIssueUrl":'));
   assert.ok(!off.includes("nextPhaseIssueUrl"));
 });
+
+test("renderWorkflow: default Step 1 fetches issue body AND comments", () => {
+  const out = renderWorkflow(baseVars);
+  assert.ok(out.includes("Step 1 — Read the issue and ALL comments"));
+  assert.ok(out.includes("gh api repos/owner/repo/issues/99/comments"));
+  assert.ok(out.includes("Per CLAUDE.md \"Issue Analysis\""));
+  assert.ok(!out.includes("BODY ONLY"));
+});
+
+test("renderWorkflow: issueBodyOnly emits Step 1 without the comments fetch + suspends Issue Analysis", () => {
+  const out = renderWorkflow({ ...baseVars, issueBodyOnly: true });
+  assert.ok(out.includes("Step 1 — Read the issue body (BODY ONLY for this dispatch)"));
+  assert.ok(out.includes("Do NOT fetch comments"));
+  assert.ok(out.includes("suspended for this dispatch only"));
+  // Defense in depth: the actual fetch command must not appear. The
+  // override prose ("Do NOT call `gh api .../comments`") is allowed —
+  // it's an explicit instruction TO the agent, not a fetch step.
+  assert.ok(!out.includes("gh api repos/owner/repo/issues/99/comments"), "comments fetch must not appear");
+  assert.ok(!out.includes("Fold every comment"));
+});
+
+test("renderWorkflow: issueBodyOnly preserves Step 2+ unchanged (only Step 1 differs)", () => {
+  const on = renderWorkflow({ ...baseVars, issueBodyOnly: true });
+  const off = renderWorkflow(baseVars);
+  // The judgment-rules block (Step 2) is identical in both
+  assert.ok(on.includes("Push-Back Discipline"));
+  assert.ok(off.includes("Push-Back Discipline"));
+  assert.ok(on.includes("Cross-Repo Scope Splits"));
+  assert.ok(off.includes("Cross-Repo Scope Splits"));
+});

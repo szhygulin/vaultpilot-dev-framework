@@ -6,3 +6,7 @@ dist/
 /state/
 /agents/
 /logs/
+
+# Curve-study research outputs — local-only. Methodology writeups
+# (feature-plans/issue-179-*.md outside this dir) are tracked.
+/feature-plans/issue-179-data/

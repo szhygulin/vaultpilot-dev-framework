@@ -8,7 +8,7 @@ const execFile = promisify(execFileCb);
 // Captures (agentId, issueId) so callers can render which agent's PR is
 // blocking dispatch — useful diagnostic when the same issue has more than
 // one historical vp-dev attempt.
-const VP_DEV_BRANCH_RE = /^vp-dev\/(agent-[a-z0-9]+)\/issue-(\d+)$/;
+const VP_DEV_BRANCH_RE = /^vp-dev\/(agent-[a-z0-9-]+)\/issue-(\d+)$/;
 
 export interface OpenVpDevPr {
   issueId: number;

@@ -18,11 +18,22 @@ export async function buildAgentSystemPrompt(opts: {
    * rather than re-deriving the file layout from scratch.
    */
   resumeContext?: ResumeContext;
+  /**
+   * Issue #179 phase 3: when `true`, suppress the live target-repo
+   * CLAUDE.md prepend. Used for the curve-study calibration so the
+   * effective context size matches the per-agent CLAUDE.md size we're
+   * varying (without this flag the live target-repo CLAUDE.md adds ~14 KB
+   * of project rules to every dispatch, distorting the size axis).
+   * The dedupe pass becomes a no-op when liveProjectClaudeMd is empty,
+   * so the per-agent CLAUDE.md is emitted verbatim.
+   */
+  suppressTargetClaudeMd?: boolean;
 }): Promise<string> {
-  const [perAgentClaudeMd, liveProjectClaudeMd] = await Promise.all([
+  const [perAgentClaudeMd, liveProjectClaudeMdRaw] = await Promise.all([
     readAgentClaudeMd(opts.agent.agentId, opts.targetRepoPath),
     readSeedClaudeMd(opts.targetRepoPath),
   ]);
+  const liveProjectClaudeMd = opts.suppressTargetClaudeMd ? "" : liveProjectClaudeMdRaw;
   const dedupedPerAgent = stripOverlappingSections(perAgentClaudeMd, liveProjectClaudeMd);
 
   const workflow = renderWorkflow(opts.workflow);
@@ -51,18 +62,23 @@ export async function buildAgentSystemPrompt(opts: {
     readSharedLessonsForDomains("target", opts.agent.tags),
   ]);
 
-  const sections: string[] = [
-    "# Project rules (live target-repo CLAUDE.md — current as of this dispatch)",
-    "",
-    liveProjectClaudeMd.trim(),
-    "",
-    "---",
-    "",
-    `# Per-agent CLAUDE.md (${label} — evolving specialization, sections overlapping live rules removed)`,
+  const sections: string[] = [];
+  if (!opts.suppressTargetClaudeMd) {
+    sections.push(
+      "# Project rules (live target-repo CLAUDE.md — current as of this dispatch)",
+      "",
+      liveProjectClaudeMd.trim(),
+      "",
+      "---",
+      "",
+    );
+  }
+  sections.push(
+    `# Per-agent CLAUDE.md (${label} — evolving specialization${opts.suppressTargetClaudeMd ? "" : ", sections overlapping live rules removed"})`,
     "",
     dedupedPerAgent.trim() || "(no agent-specific sections beyond live project rules)",
     "",
-  ];
+  );
 
   for (const pool of globalLessons) {
     sections.push(

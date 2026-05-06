@@ -449,6 +449,27 @@ export function buildCli(): Command {
     );
   program.addCommand(cleanupCmd);
 
+  const researchCmd = new Command("research")
+    .description("Research tools (curve-study, etc.) — operator-input studies that update calibrated artifacts under src/util/")
+    .addCommand(
+      new Command("curve-study")
+        .description(
+          "Run a study to refit src/util/contextCostCurve.ts (CLAUDE.md size → accuracyDegradationFactor). Operator pre-trims the parent dev-agent into N forks at chosen byte budgets and registers them; this command dispatches all (devAgent × issue) cells with 4-way parallelism + per-dev-agent serialization, aggregates outcomes, scores quality per #179, fits a piecewise-quadratic curve, and writes a JSON proposal the operator hand-merges into the source file.",
+        )
+        .requiredOption("--agents-spec <path>", "JSON file: array of {devAgentId, sizeBytes, clonePath}")
+        .requiredOption("--target-repo <owner/repo>", "GitHub target repo (e.g. szhygulin/vaultpilot-mcp-smoke-test)")
+        .requiredOption("--issues <list>", "Comma-separated issue numbers (e.g. 50,52,54)")
+        .option("--logs-dir <path>", "Where per-cell logs land", "logs")
+        .option("--output <path>", "Where to write the JSON curve proposal", "curve-study-output.json")
+        .option("--parallelism <n>", "Max concurrent research agents", parsePositive, 4)
+        .option("--rubrics <path>", "Optional JSON file: array of {agentId, issueId, pushbackAccuracy?, prCorrectness?}")
+        .option("--no-dry-run", "Disable --dry-run on spawn (default: dry-run on; intercepts push/PR side effects)")
+        .action(async (opts) => {
+          await cmdResearchCurveStudy(opts);
+        }),
+    );
+  program.addCommand(researchCmd);
+
   return program;
 }
 
@@ -3050,4 +3071,47 @@ function partitionOpenPrIssues(
     }
   }
   return { dispatchIssues, openPrSkipped };
+}
+
+interface ResearchCurveStudyOpts {
+  agentsSpec: string;
+  targetRepo: string;
+  issues: string;
+  logsDir: string;
+  output: string;
+  parallelism: number;
+  rubrics?: string;
+  dryRun: boolean;
+}
+
+async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void> {
+  const { runCurveStudy } = await import("./research/curveStudy/study.js");
+  const agents = JSON.parse(await fs.readFile(opts.agentsSpec, "utf8")) as ReadonlyArray<{
+    devAgentId: string;
+    sizeBytes: number;
+    clonePath: string;
+  }>;
+  const issues = opts.issues.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  const rubrics = opts.rubrics ? JSON.parse(await fs.readFile(opts.rubrics, "utf8")) : undefined;
+  const result = await runCurveStudy({
+    agents,
+    issues,
+    targetRepo: opts.targetRepo,
+    parallelism: opts.parallelism,
+    dryRun: opts.dryRun,
+    logsDir: opts.logsDir,
+    outputPath: opts.output,
+    cwd: process.cwd(),
+    rubrics,
+  });
+  process.stdout.write(`\nDone. ${result.cells.length} cells, $${result.totalCostUsd.toFixed(2)}, ${(result.wallMs / 60000).toFixed(1)}min.\n`);
+  process.stdout.write(`Proposal written to ${opts.output}.\n`);
+  if (result.breakpoints.length) {
+    process.stdout.write(`Breakpoints (hand-merge into src/util/contextCostCurve.ts):\n`);
+    for (const bp of result.breakpoints) {
+      process.stdout.write(`  { xBytes: ${bp.xBytes}, factor: ${bp.factor.toFixed(3)} },\n`);
+    }
+  } else {
+    process.stdout.write(`Not enough scoreable agents (<3) — no curve fitted.\n`);
+  }
 }

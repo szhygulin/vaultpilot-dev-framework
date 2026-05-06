@@ -1,5 +1,7 @@
 # Issue #179 — accuracyDegradationFactor curve study
 
+> **Tool**: see `docs/research/curve-study.md` and `vp-dev research curve-study --help`. The methodology below seeded that command; this file is the historical writeup of the inaugural pilot.
+
 Operator-led research, run by Claude Code. Pilot scope (3 sizes × 5 issues) chosen by user 2026-05-06 to bound study cost before any commitment to the full 7-size design in the issue body.
 
 ## Pilot scope (vs. issue-body design)

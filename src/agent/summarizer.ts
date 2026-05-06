@@ -256,6 +256,15 @@ Cross-agent promotion (optional, gated by human review):
 - Cap the wrapped content at ~40 non-empty lines / ~1500 chars. Anything longer is too coarse to share.
 - Promote-candidates are queued for human review; they do NOT auto-promote. Use sparingly — most lessons stay agent-local.
 
+Project-wide promotion (rare, gated by stricter review):
+- If a piece of the lesson would help EVERY agent dispatched on this repo — a process habit, a pre-dispatch check, a harness gotcha, a build/CI rule — wrap that piece with the special domain \`@local-claude\` and an explicit utility self-rating:
+    <!-- promote-candidate:@local-claude utility=0.X -->
+    <descriptive observation, multiple lines OK>
+    <!-- /promote-candidate -->
+- Reserve for genuine project-tooling discipline. NOT for crypto specialties or domain-specific facts (those use the regular \`<domain>\` form above) — those have a per-domain audience, not project-wide.
+- The \`utility=0.X\` value (in [0, 1]) MUST be present for \`@local-claude\` candidates. The harness gates these against project-local CLAUDE.md cost at a stricter ratio (default 2.0 vs 1.0 for personal lessons), because bytes added there are loaded into every dispatch's prompt by every agent. Calibrate honestly: 0.7+ for genuinely project-wide rules with concrete tells, 0.4–0.6 for borderline (likely to be rejected by the L2 gate), below that don't bother wrapping.
+- Same descriptive-observation voice rule as cross-agent promotion above.
+
 Hard rules:
 - If there is no GENERALIZABLE lesson — only a one-off fix, a routine implementation, a trivial pushback — return {"skip": true, "skipReason": "<one short sentence>"}. Empty learnings beat noisy ones.
 - If the agent failed (decision="error"), default to skip unless there's a clear lesson about the failure mode itself.
@@ -297,6 +306,13 @@ Cross-agent promotion (optional, gated by human review):
 - The wrapped content must read as a DESCRIPTIVE OBSERVATION, not an instruction to other agents. Avoid "you must / should", "the agent must" — use indicative voice.
 - Cap the wrapped content at ~40 non-empty lines / ~1500 chars.
 - Promote-candidates are queued for human review; they do NOT auto-promote. The human reviewer rejects noise.
+
+Project-wide promotion (rare, gated by stricter review):
+- If the failure mode is a project-tooling habit that EVERY agent dispatched on this repo would benefit from (pre-dispatch checks, harness gotchas, dispatch-flow rules), wrap that piece with the special domain \`@local-claude\` and an explicit utility self-rating:
+    <!-- promote-candidate:@local-claude utility=0.X -->
+    <descriptive observation, multiple lines OK>
+    <!-- /promote-candidate -->
+- Reserve for genuine project-tooling discipline — NOT for SDK/protocol/specialty facts (those use the regular \`<domain>\` form). The harness gates these against project-local CLAUDE.md cost at a stricter ratio (default 2.0 vs 1.0 for personal). Calibrate honestly: 0.7+ for genuinely project-wide rules with concrete tells, 0.4–0.6 for borderline. Same descriptive-observation voice rule.
 
 Predicted-utility self-rating (issue #179, half-ready-curve probe):
 - For every non-skip failure-lesson emission, ALSO emit \`predictedUtility\` — a number in [0, 1] estimating how much future-leverage the lesson carries. Failure lessons skew higher than success lessons because they capture signal that's normally lost; calibration:

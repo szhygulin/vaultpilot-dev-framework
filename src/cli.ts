@@ -117,6 +117,15 @@ import {
   type LessonTier,
 } from "./agent/sharedLessons.js";
 import {
+  evaluateLocalClaudeUtilityGate,
+  type LocalClaudeUtilityGateResult,
+} from "./agent/localClaudeQueue.js";
+import {
+  openLocalClaudePr,
+  type OpenLocalClaudePrOutcome,
+} from "./agent/localClaudePr.js";
+import { isLocalClaudeCandidate } from "./util/promotionMarkers.js";
+import {
   applyTrimProposal,
   formatTrimProposal,
   proposeTrim,
@@ -432,6 +441,10 @@ export function buildCli(): Command {
         .option("--json", "Print machine-readable JSON listing of pending candidates and exit (no mutation)")
         .option("--yes", "Auto-accept every candidate that passes validation (non-interactive use only)")
         .option("--global", "Append accepted entries to the global pool (~/.vaultpilot/shared-lessons/) instead of the per-target pool")
+        .option(
+          "--pr",
+          "For `@local-claude` candidates: open a chore PR appending the lesson to project-local CLAUDE.md instead of staging to the queue file. With --yes, autonomous: gate=let-through → PR; gate=skip → queue. PR failures fall back to the queue so data isn't lost. Operator-invoked CLI flow — exempt from the in-run write-side-effect rule.",
+        )
         .action(async (opts) => {
           await cmdLessonsReview(opts);
         }),
@@ -2851,6 +2864,7 @@ interface LessonsReviewOpts {
   json?: boolean;
   yes?: boolean;
   global?: boolean;
+  pr?: boolean;
 }
 
 async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
@@ -2894,7 +2908,7 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
   );
 
   if (opts.yes) {
-    await runAutoAcceptLoop(pending, tier);
+    await runAutoAcceptLoop(pending, tier, !!opts.pr);
     return;
   }
 
@@ -2905,10 +2919,58 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
     process.exit(2);
   }
 
-  await runInteractiveReview(pending, tier);
+  await runInteractiveReview(pending, tier, !!opts.pr);
 }
 
-async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier): Promise<void> {
+/**
+ * Read the project-local CLAUDE.md size (cwd-relative) and run the L2 gate
+ * for an `@local-claude` candidate. Returns `null` for non-local domains so
+ * the caller skips this branch cleanly.
+ */
+async function computeLocalClaudeGate(
+  p: PendingCandidate,
+): Promise<LocalClaudeUtilityGateResult | null> {
+  if (!isLocalClaudeCandidate(p.candidate.domain)) return null;
+  let currentBytes = 0;
+  try {
+    const content = await fs.readFile("CLAUDE.md", "utf-8");
+    currentBytes = Buffer.byteLength(content, "utf-8");
+  } catch {
+    // No project CLAUDE.md → treat as zero-cost; gate will let through.
+  }
+  const candidateBytes = Buffer.byteLength(p.candidate.body, "utf-8");
+  return evaluateLocalClaudeUtilityGate({
+    utility: p.candidate.utility,
+    currentLocalClaudeMdBytes: currentBytes,
+    candidateBytes,
+  });
+}
+
+/**
+ * Try to open a PR for an accepted @local-claude candidate. On any failure,
+ * caller falls back to the queue path so the lesson isn't lost. Returns the
+ * outcome (with PR URL on success) or null when the path doesn't apply.
+ */
+async function tryOpenLocalClaudePr(
+  p: PendingCandidate,
+  ts: string,
+  gate: LocalClaudeUtilityGateResult | null,
+): Promise<OpenLocalClaudePrOutcome | null> {
+  if (!isLocalClaudeCandidate(p.candidate.domain)) return null;
+  return openLocalClaudePr({
+    sourceAgentId: p.agentId,
+    ts,
+    utility: p.candidate.utility,
+    gate: gate ?? undefined,
+    body: p.candidate.body,
+  });
+}
+
+async function runAutoAcceptLoop(
+  pending: PendingCandidate[],
+  tier: LessonTier,
+  usePr: boolean,
+): Promise<void> {
   let acceptedCount = 0;
   let rejectedCount = 0;
   let skippedCount = 0;
@@ -2920,15 +2982,63 @@ async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier):
       rejectedCount += 1;
       continue;
     }
-    const result = await acceptCandidate({ pending: p, tier });
-    if (result.appendOutcome.kind === "appended") {
+    const localGate = await computeLocalClaudeGate(p);
+    if (localGate && localGate.decision === "skip") {
+      // Auto-accept: respect the L2 gate and skip — the operator can re-run
+      // interactively to override.
       process.stdout.write(
-        `accepted [${tier}] ${p.agentId} -> ${p.candidate.domain} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines)\n`,
+        `skipped (local-gate: utility=${p.candidate.utility ?? "n/a"} < threshold=${localGate.threshold.toFixed(3)}) ${p.agentId} -> ${p.candidate.domain}\n`,
+      );
+      skippedCount += 1;
+      continue;
+    }
+    // Autonomous PR path (#196 Phase 2): when --pr is set AND the local
+    // gate is let-through, open a chore PR directly. Failure falls back to
+    // the queue path so the lesson isn't lost.
+    if (usePr && localGate && localGate.decision === "let-through") {
+      const ts = new Date().toISOString();
+      const prOutcome = await tryOpenLocalClaudePr(p, ts, localGate);
+      if (prOutcome && prOutcome.kind === "pr-opened") {
+        // Rewrite the source marker so the candidate doesn't resurface.
+        await rejectCandidate({
+          pending: p,
+          reason: `promoted-local via PR ${prOutcome.prUrl}`,
+          ts,
+        }).catch(() => {});
+        process.stdout.write(
+          `accepted [@local-claude] ${p.agentId} -> PR ${prOutcome.prUrl} (branch ${prOutcome.branchName})\n`,
+        );
+        acceptedCount += 1;
+        continue;
+      }
+      if (prOutcome && prOutcome.kind === "pr-failed") {
+        process.stdout.write(
+          `PR-creation failed (${prOutcome.reason}); falling back to queue.\n`,
+        );
+      }
+      // fall through to queue
+    }
+    const result = await acceptCandidate({
+      pending: p,
+      tier,
+      localGate: localGate ?? undefined,
+    });
+    if (result.localQueueOutcome) {
+      process.stdout.write(
+        `accepted [@local-claude] ${p.agentId} -> queued at ${result.localQueueOutcome.filePath} (${result.localQueueOutcome.totalBytes} bytes total)\n`,
       );
       acceptedCount += 1;
-    } else if (result.appendOutcome.kind === "rejected-pool-full") {
+      continue;
+    }
+    const ao = result.appendOutcome;
+    if (ao && ao.kind === "appended") {
       process.stdout.write(
-        `skipped (pool full) [${tier}] ${p.agentId} -> ${p.candidate.domain}: ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool by hand and re-run review.\n`,
+        `accepted [${tier}] ${p.agentId} -> ${p.candidate.domain} (${ao.totalLines}/${MAX_POOL_LINES} lines)\n`,
+      );
+      acceptedCount += 1;
+    } else if (ao && ao.kind === "rejected-pool-full") {
+      process.stdout.write(
+        `skipped (pool full) [${tier}] ${p.agentId} -> ${p.candidate.domain}: ${ao.totalLines}/${MAX_POOL_LINES} lines. Trim the pool by hand and re-run review.\n`,
       );
       skippedCount += 1;
     } else {
@@ -2943,7 +3053,11 @@ async function runAutoAcceptLoop(pending: PendingCandidate[], tier: LessonTier):
   );
 }
 
-async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTier): Promise<void> {
+async function runInteractiveReview(
+  pending: PendingCandidate[],
+  tier: LessonTier,
+  usePr: boolean,
+): Promise<void> {
   const { createInterface } = await import("node:readline/promises");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let acceptedCount = 0;
@@ -2957,6 +3071,18 @@ async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTie
       process.stdout.write(`source:  ${sourceLabel}\n`);
       process.stdout.write(`domain:  ${p.candidate.domain}\n`);
       process.stdout.write(`source CLAUDE.md lines ${p.candidate.startLine + 1}..${p.candidate.endLine + 1}\n`);
+      const localGate = await computeLocalClaudeGate(p);
+      if (localGate) {
+        const utility = p.candidate.utility ?? undefined;
+        process.stdout.write(
+          `local-gate: utility=${utility ?? "n/a"} costScore=${localGate.costScore.toFixed(3)} threshold=${localGate.threshold.toFixed(3)} ratio=${localGate.ratio} decision=${localGate.decision}\n`,
+        );
+        if (localGate.decision === "skip") {
+          process.stdout.write(
+            `WARNING: utility below threshold — accept anyway only if the lesson is genuinely project-wide.\n`,
+          );
+        }
+      }
       if (p.validation.errors.length > 0) {
         process.stdout.write(`errors:  ${p.validation.errors.join("; ")}\n`);
       }
@@ -2976,19 +3102,60 @@ async function runInteractiveReview(pending: PendingCandidate[], tier: LessonTie
           skippedCount += 1;
           continue;
         }
-        const result = await acceptCandidate({ pending: p, tier });
-        if (result.appendOutcome.kind === "appended") {
+        // Interactive --pr: try to open a PR for an accepted @local-claude
+        // candidate (operator's accept overrides the L2 gate). On PR
+        // failure, fall back to the queue path.
+        if (usePr && isLocalClaudeCandidate(p.candidate.domain)) {
+          const ts = new Date().toISOString();
+          const prOutcome = await tryOpenLocalClaudePr(p, ts, localGate);
+          if (prOutcome && prOutcome.kind === "pr-opened") {
+            await rejectCandidate({
+              pending: p,
+              reason: `promoted-local via PR ${prOutcome.prUrl}`,
+              ts,
+            }).catch(() => {});
+            process.stdout.write(
+              `Accepted [@local-claude]: opened PR ${prOutcome.prUrl} (branch ${prOutcome.branchName}).\n`,
+            );
+            acceptedCount += 1;
+            continue;
+          }
+          if (prOutcome && prOutcome.kind === "pr-failed") {
+            process.stdout.write(
+              `PR-creation failed (${prOutcome.reason}); falling back to queue.\n`,
+            );
+          }
+          // fall through to queue
+        }
+        const result = await acceptCandidate({
+          pending: p,
+          tier,
+          localGate: localGate ?? undefined,
+        });
+        if (result.localQueueOutcome) {
           process.stdout.write(
-            `Accepted [${tier}]: appended to ${result.appendOutcome.filePath} (${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines).\n`,
+            `Accepted [@local-claude]: queued to ${result.localQueueOutcome.filePath} (${result.localQueueOutcome.totalBytes} bytes total).\n` +
+              `Read the queue and open a chore PR appending the section(s) to project-local CLAUDE.md.\n`,
           );
           acceptedCount += 1;
-        } else if (result.appendOutcome.kind === "rejected-pool-full") {
+          continue;
+        }
+        const ao = result.appendOutcome;
+        if (ao && ao.kind === "appended") {
           process.stdout.write(
-            `POOL FULL: ${result.appendOutcome.filePath} reached ${result.appendOutcome.totalLines}/${MAX_POOL_LINES} lines. Trim the pool file by hand and re-run review for this candidate. (Marker left in source CLAUDE.md.)\n`,
+            `Accepted [${tier}]: appended to ${ao.filePath} (${ao.totalLines}/${MAX_POOL_LINES} lines).\n`,
+          );
+          acceptedCount += 1;
+        } else if (ao && ao.kind === "rejected-pool-full") {
+          process.stdout.write(
+            `POOL FULL: ${ao.filePath} reached ${ao.totalLines}/${MAX_POOL_LINES} lines. Trim the pool file by hand and re-run review for this candidate. (Marker left in source CLAUDE.md.)\n`,
           );
           skippedCount += 1;
+        } else if (ao) {
+          process.stdout.write(`Append refused (validation): ${ao.validation.errors.join("; ")}\n`);
+          skippedCount += 1;
         } else {
-          process.stdout.write(`Append refused (validation): ${result.appendOutcome.validation.errors.join("; ")}\n`);
+          process.stdout.write(`Append refused: no outcome returned (unexpected).\n`);
           skippedCount += 1;
         }
         continue;

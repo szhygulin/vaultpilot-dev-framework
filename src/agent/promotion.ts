@@ -11,12 +11,18 @@ import {
   type AppendLessonOutcome,
   type LessonTier,
 } from "./sharedLessons.js";
+import {
+  appendToLocalClaudeQueue,
+  type AppendLocalClaudeQueueOutcome,
+  type LocalClaudeUtilityGateResult,
+} from "./localClaudeQueue.js";
 import { agentClaudeMdPath } from "./specialization.js";
 import { withFileLock } from "../state/locks.js";
 import {
   findPromoteCandidates,
   formatNotPromotedSentinel,
   formatPromotedSentinel,
+  isLocalClaudeCandidate,
   rewriteCandidateWrapping,
   validateEntry,
   type PromoteCandidate,
@@ -61,9 +67,12 @@ export async function collectPendingCandidates(
 }
 
 export interface AcceptResult {
-  appendOutcome: AppendLessonOutcome;
+  /** Set when domain is a regular shared-pool target (existing path). */
+  appendOutcome?: AppendLessonOutcome;
+  /** Set when domain is `@local-claude` (queue-file path; new in #194 follow-up). */
+  localQueueOutcome?: AppendLocalClaudeQueueOutcome;
   /** True only when the source CLAUDE.md was rewritten — i.e. the entry was
-   * appended successfully AND the marker was rewritten. */
+   * appended/queued successfully AND the marker was rewritten. */
   rewroteSource: boolean;
 }
 
@@ -76,6 +85,12 @@ export interface AcceptResult {
  * acceptable: humans resolve duplicates by editing the pool by hand). The
  * inverse failure (rewrite without append) is impossible because we only
  * touch the source after the pool append commits.
+ *
+ * For `@local-claude` domain (#179 Phase 2 follow-up to PR #190 + #193): the
+ * write goes to `state/local-claude-md-pending.md` (queue file) instead of
+ * the shared-pool. Operator reads the queue, opens a chore PR appending
+ * selected sections to project-local CLAUDE.md by hand. `tier` is ignored
+ * for this branch.
  */
 export async function acceptCandidate(input: {
   pending: PendingCandidate;
@@ -83,18 +98,38 @@ export async function acceptCandidate(input: {
    * Destination tier for the accepted entry. "target" appends to
    * `agents/.shared/lessons/<domain>.md`; "global" appends to the
    * cross-target-repo pool under `~/.vaultpilot/shared-lessons/<domain>.md`.
-   * The source-CLAUDE.md sentinel rewrite is the same for both — only the
-   * write target differs (#101).
+   * Ignored when `pending.candidate.domain === "@local-claude"` — that path
+   * routes to the local-CLAUDE.md queue file regardless of tier (#101).
    */
   tier: LessonTier;
   ts?: string;
   issueId?: number;
+  /** Optional L2 gate result captured at accept time, recorded in the queue header. */
+  localGate?: LocalClaudeUtilityGateResult;
 }): Promise<AcceptResult> {
   const ts = input.ts ?? new Date().toISOString();
+  const candidate = input.pending.candidate;
+
+  if (isLocalClaudeCandidate(candidate.domain)) {
+    const localQueueOutcome = await appendToLocalClaudeQueue({
+      sourceAgentId: input.pending.agentId,
+      ts,
+      utility: candidate.utility,
+      gate: input.localGate,
+      body: candidate.body,
+    });
+    await rewriteSourceMarker({
+      agentId: input.pending.agentId,
+      candidate,
+      replacement: formatPromotedSentinel(candidate.domain, ts),
+    });
+    return { localQueueOutcome, rewroteSource: true };
+  }
+
   const appendOutcome = await appendLessonToPool({
     tier: input.tier,
-    domain: input.pending.candidate.domain,
-    body: input.pending.candidate.body,
+    domain: candidate.domain,
+    body: candidate.body,
     sourceAgentId: input.pending.agentId,
     issueId: input.issueId ?? 0,
     ts,
@@ -104,8 +139,8 @@ export async function acceptCandidate(input: {
   }
   await rewriteSourceMarker({
     agentId: input.pending.agentId,
-    candidate: input.pending.candidate,
-    replacement: formatPromotedSentinel(input.pending.candidate.domain, ts),
+    candidate,
+    replacement: formatPromotedSentinel(candidate.domain, ts),
   });
   return { appendOutcome, rewroteSource: true };
 }

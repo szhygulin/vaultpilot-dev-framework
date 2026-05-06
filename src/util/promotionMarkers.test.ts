@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  LOCAL_CLAUDE_DOMAIN,
   MAX_ENTRY_CHARS,
   MAX_ENTRY_LINES,
   findPromoteCandidates,
   formatNotPromotedSentinel,
   formatPromotedSentinel,
+  isLocalClaudeCandidate,
   isValidDomain,
   rewriteCandidateWrapping,
   validateEntry,
@@ -206,4 +208,99 @@ test("formatPromotedSentinel and formatNotPromotedSentinel produce stable shapes
     formatNotPromotedSentinel("imperative phrasing", "2026-05-04T00:00:00.000Z"),
     "<!-- not-promoted:imperative phrasing:2026-05-04T00:00:00.000Z -->",
   );
+});
+
+// ---------------------------------------------------------------------
+// #179 Phase 2 follow-up: @local-claude domain + utility=N.M parsing
+// ---------------------------------------------------------------------
+
+test("LOCAL_CLAUDE_DOMAIN is the literal @local-claude string", () => {
+  assert.equal(LOCAL_CLAUDE_DOMAIN, "@local-claude");
+});
+
+test("isValidDomain: accepts @local-claude", () => {
+  assert.equal(isValidDomain("@local-claude"), true);
+});
+
+test("isValidDomain: rejects other @-prefixed domains", () => {
+  assert.equal(isValidDomain("@solana"), false);
+  assert.equal(isValidDomain("@local"), false);
+  assert.equal(isValidDomain("@"), false);
+});
+
+test("isLocalClaudeCandidate: matches only @local-claude", () => {
+  assert.equal(isLocalClaudeCandidate("@local-claude"), true);
+  assert.equal(isLocalClaudeCandidate("solana"), false);
+  assert.equal(isLocalClaudeCandidate("@solana"), false);
+});
+
+test("findPromoteCandidates: parses @local-claude with utility=0.85", () => {
+  const md = [
+    "<!-- promote-candidate:@local-claude utility=0.85 -->",
+    "Project-wide rule body.",
+    "<!-- /promote-candidate -->",
+  ].join("\n");
+  const found = findPromoteCandidates(md);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].domain, "@local-claude");
+  assert.equal(found[0].utility, 0.85);
+});
+
+test("findPromoteCandidates: @local-claude without utility parses with utility undefined", () => {
+  const md = [
+    "<!-- promote-candidate:@local-claude -->",
+    "body",
+    "<!-- /promote-candidate -->",
+  ].join("\n");
+  const found = findPromoteCandidates(md);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].domain, "@local-claude");
+  assert.equal(found[0].utility, undefined);
+});
+
+test("findPromoteCandidates: utility=0 and utility=1 are accepted boundary values", () => {
+  const md = [
+    "<!-- promote-candidate:@local-claude utility=0 -->",
+    "low-utility body",
+    "<!-- /promote-candidate -->",
+    "intermezzo",
+    "<!-- promote-candidate:@local-claude utility=1 -->",
+    "high-utility body",
+    "<!-- /promote-candidate -->",
+  ].join("\n");
+  const found = findPromoteCandidates(md);
+  assert.equal(found.length, 2);
+  assert.equal(found[0].utility, 0);
+  assert.equal(found[1].utility, 1);
+});
+
+test("findPromoteCandidates: regular domain with utility= is also parsed (back-compat)", () => {
+  // The marker grammar allows utility on any domain; the L2 gate only
+  // applies it for @local-claude. Regular domains carrying utility just
+  // ignore the field. Accept-and-ignore is more forgiving than reject.
+  const md = [
+    "<!-- promote-candidate:solana utility=0.5 -->",
+    "body",
+    "<!-- /promote-candidate -->",
+  ].join("\n");
+  const found = findPromoteCandidates(md);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].domain, "solana");
+  assert.equal(found[0].utility, 0.5);
+});
+
+test("rewriteCandidateWrapping: still works for @local-claude", () => {
+  const md = [
+    "<!-- promote-candidate:@local-claude utility=0.7 -->",
+    "rule body",
+    "<!-- /promote-candidate -->",
+  ].join("\n");
+  const [c] = findPromoteCandidates(md);
+  const rewritten = rewriteCandidateWrapping(
+    md,
+    c,
+    formatPromotedSentinel("@local-claude", "T"),
+  );
+  assert.match(rewritten, /<!-- promoted:@local-claude:T -->/);
+  assert.deepEqual(findPromoteCandidates(rewritten), []);
 });

@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { parseJsonEnvelope } from "./parseJsonEnvelope.js";
+import {
+  parseJsonEnvelope,
+  stripBareApostropheEscapes,
+} from "./parseJsonEnvelope.js";
 
 const EnvelopeSchema = z.object({
   decision: z.enum(["implement", "pushback", "error"]),
@@ -108,4 +111,93 @@ test("z.unknown() with prose-wrapped JSON still extracts", () => {
   const r = parseJsonEnvelope(msg, z.unknown());
   assert.equal(r.ok, true);
   assert.deepEqual(r.value, { skip: false, heading: "H", body: "B" });
+});
+
+// -----------------------------------------------------------------------
+// Apostrophe-escape salvage (PR #194 follow-up).
+//
+// LLMs frequently emit `\'` inside JSON strings — adapting from JS/Python
+// habits — and the resulting payload is rejected by JSON.parse even though
+// the intent is clear. The parser tries the original raw first, then
+// falls back to a sanitized version with `\'` → `'`. The success path for
+// already-valid JSON is unchanged.
+// -----------------------------------------------------------------------
+
+test("stripBareApostropheEscapes: bare \\' becomes '", () => {
+  const raw = String.raw`{"reason": "predecessor\'s output"}`;
+  const out = stripBareApostropheEscapes(raw);
+  assert.equal(out, `{"reason": "predecessor's output"}`);
+});
+
+test("stripBareApostropheEscapes: leaves \\\\' alone (literal backslash + apostrophe)", () => {
+  // \\' in source = two-char run of backslashes followed by apostrophe.
+  // The backslashes form an escape PAIR (\\ = one literal \ in JSON);
+  // the apostrophe is a bare character. Salvage must not touch this.
+  const raw = String.raw`{"path": "C:\\'temp"}`;
+  const out = stripBareApostropheEscapes(raw);
+  assert.equal(out, raw);
+});
+
+test("stripBareApostropheEscapes: leaves valid escapes untouched", () => {
+  const raw = String.raw`{"a": "line\nbreak", "b": "tab\there", "c": "quote\""}`;
+  const out = stripBareApostropheEscapes(raw);
+  assert.equal(out, raw);
+});
+
+test("stripBareApostropheEscapes: handles multiple bare apostrophes in one string", () => {
+  const raw = String.raw`{"reason": "agent\'s pushback on operator\'s decision"}`;
+  const out = stripBareApostropheEscapes(raw);
+  assert.equal(out, `{"reason": "agent's pushback on operator's decision"}`);
+});
+
+test("stripBareApostropheEscapes: empty input is a no-op", () => {
+  assert.equal(stripBareApostropheEscapes(""), "");
+});
+
+test("stripBareApostropheEscapes: trailing backslash without apostrophe is preserved", () => {
+  const raw = String.raw`{"a": "trailing\\"}`;
+  const out = stripBareApostropheEscapes(raw);
+  assert.equal(out, raw);
+});
+
+test("parseJsonEnvelope: salvages \\' in summarizer-shaped output", () => {
+  const Schema = z.object({
+    skip: z.boolean(),
+    heading: z.string(),
+    body: z.string(),
+  });
+  // Mirror the real summarizer payload from the 2026-05-06 dry-run that
+  // emitted predecessor\'s and tripped JSON.parse.
+  const raw = String.raw`{"skip": false, "heading": "Phase-B deferral", "body": "predecessor\'s corpus"}`;
+  const r = parseJsonEnvelope(raw, Schema);
+  assert.equal(r.ok, true);
+  assert.equal(r.value?.body, "predecessor's corpus");
+});
+
+test("parseJsonEnvelope: still reports parse error when salvage doesn't help", () => {
+  const Schema = z.object({ a: z.string() });
+  // Genuinely broken JSON, no apostrophe to salvage.
+  const r = parseJsonEnvelope(`{"a": unquoted}`, Schema);
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /JSON parse failed/);
+});
+
+test("parseJsonEnvelope: doesn't double-process already-valid JSON (no salvage path)", () => {
+  // If the original parses cleanly, the salvage branch must NOT run.
+  // Smoke this by giving valid JSON that contains a literal backslash
+  // sequence the salvager would otherwise mangle in the wrong context.
+  const Schema = z.object({ msg: z.string() });
+  const r = parseJsonEnvelope(`{"msg": "hello"}`, Schema);
+  assert.equal(r.ok, true);
+  assert.equal(r.value?.msg, "hello");
+});
+
+test("parseJsonEnvelope: salvage produces sanitized raw in the outcome", () => {
+  const Schema = z.object({ body: z.string() });
+  const raw = String.raw`{"body": "a\'b"}`;
+  const r = parseJsonEnvelope(raw, Schema);
+  assert.equal(r.ok, true);
+  // The outcome's `raw` field should reflect the sanitized text we parsed,
+  // so consumers logging it see the salvaged form rather than the broken one.
+  assert.equal(r.raw, `{"body": "a'b"}`);
 });

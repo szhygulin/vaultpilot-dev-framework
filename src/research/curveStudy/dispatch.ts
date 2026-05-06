@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { extractEnvelope } from "./aggregate.js";
 
 /**
  * Per-cell dispatch input. The (devAgentId, issueId) tuple becomes one
@@ -37,8 +38,20 @@ export interface DispatchOptions {
    * resolution-PR link doesn't leak.
    */
   issueBodyOnly?: boolean;
+  /**
+   * Pass --no-target-claude-md to vp-dev spawn — suppress the live
+   * target-repo CLAUDE.md prepend so the effective context size matches
+   * the per-agent CLAUDE.md size we're varying.
+   */
+  suppressTargetClaudeMd?: boolean;
   /** Optional progress callback fired on each cell start/done. */
   onEvent?: (e: DispatchEvent) => void;
+  /**
+   * Optional cumulative cost cap (USD) across all cells in the dispatch.
+   * When the rolling cost exceeds this cap, no further cells are spawned
+   * and dispatchCells resolves with the partial result list.
+   */
+  maxTotalCostUsd?: number;
 }
 
 export type DispatchEvent =
@@ -49,6 +62,8 @@ export interface DispatchResult {
   cell: CellSpec;
   rc: number;
   logPath: string;
+  /** Parsed costUsd from the spawn log envelope, when present. */
+  costUsd?: number;
 }
 
 /**
@@ -75,9 +90,15 @@ export async function dispatchCells(opts: DispatchOptions): Promise<DispatchResu
   const queue: CellSpec[] = [...opts.cells];
   const inFlightAgents = new Set<string>();
   let active = 0;
+  let cumulativeCostUsd = 0;
+  let costCapHit = false;
 
   return new Promise<DispatchResult[]>((resolve, reject) => {
     const tryDispatch = (): void => {
+      if (costCapHit) {
+        if (active === 0) resolve(results);
+        return;
+      }
       while (active < parallelism && queue.length > 0) {
         const idx = queue.findIndex((c) => !inFlightAgents.has(c.devAgentId));
         if (idx < 0) return;
@@ -87,8 +108,20 @@ export async function dispatchCells(opts: DispatchOptions): Promise<DispatchResu
         runCell(cell, opts).then(
           (res) => {
             results.push(res);
+            cumulativeCostUsd += res.costUsd ?? 0;
             inFlightAgents.delete(cell.devAgentId);
             active -= 1;
+            if (
+              opts.maxTotalCostUsd !== undefined &&
+              cumulativeCostUsd >= opts.maxTotalCostUsd &&
+              !costCapHit
+            ) {
+              costCapHit = true;
+              process.stderr.write(
+                `\nABORT: cumulative cost $${cumulativeCostUsd.toFixed(2)} reached cap $${opts.maxTotalCostUsd.toFixed(2)} after ${results.length}/${opts.cells.length} cells. ${queue.length} remaining cells dropped.\n`,
+              );
+              queue.length = 0;
+            }
             if (queue.length === 0 && active === 0) {
               resolve(results);
             } else {
@@ -124,6 +157,7 @@ async function runCell(cell: CellSpec, opts: DispatchOptions): Promise<DispatchR
   if (opts.dryRun) args.push("--dry-run");
   if (opts.allowClosedIssue) args.push("--allow-closed-issue");
   if (opts.issueBodyOnly) args.push("--issue-body-only");
+  if (opts.suppressTargetClaudeMd) args.push("--no-target-claude-md");
 
   const out = await fs.open(logPath, "w");
   const rc = await new Promise<number>((res, rej) => {
@@ -135,6 +169,17 @@ async function runCell(cell: CellSpec, opts: DispatchOptions): Promise<DispatchR
     child.on("exit", (code) => res(code ?? 1));
   });
   await out.close();
+  // Read the just-written log and pull costUsd from the envelope so the
+  // cumulative-cost cap can decide whether to admit the next cell.
+  let costUsd: number | undefined;
+  try {
+    const text = await fs.readFile(logPath, "utf8");
+    const env = extractEnvelope(text) as { costUsd?: number } | null;
+    if (env && typeof env.costUsd === "number") costUsd = env.costUsd;
+  } catch {
+    // Spawn-stub failures or unwritten logs leave costUsd undefined; the
+    // cumulative-cost tracker treats undefined as zero contribution.
+  }
   opts.onEvent?.({ kind: "done", cell, t: new Date(), rc, logPath });
-  return { cell, rc, logPath };
+  return { cell, rc, logPath, costUsd };
 }

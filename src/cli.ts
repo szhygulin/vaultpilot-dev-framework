@@ -257,6 +257,10 @@ export function buildCli(): Command {
       "--issue-body-only",
       "Workflow Step 1 fetches the issue body ONLY — no comments. Suspends the CLAUDE.md 'Issue Analysis' rule for this dispatch. Required for closed-issue calibration runs so the resolution-PR link in close comments doesn't contaminate measurements.",
     )
+    .option(
+      "--no-target-claude-md",
+      "Suppress the live target-repo CLAUDE.md prepend in the agent's system prompt. Default: prepend on (every dispatch's effective context = target-repo CLAUDE.md + per-agent CLAUDE.md). Used by curve-study calibration to keep the effective context size equal to the per-agent CLAUDE.md size we're varying.",
+    )
     .action(async (opts) => {
       await cmdSpawn(opts);
     });
@@ -458,7 +462,19 @@ export function buildCli(): Command {
   program.addCommand(cleanupCmd);
 
   const researchCmd = new Command("research")
-    .description("Research tools (curve-study, plan-trims) — operator-input studies that update calibrated artifacts under src/util/")
+    .description("Research tools (curve-study, plan-trims, register-trims) — operator-input studies that update calibrated artifacts under src/util/")
+    .addCommand(
+      new Command("register-trims")
+        .description(
+          "Register dev-agents named in an agents-spec JSON (output of plan-trims) into state/agents-registry.json and copy their CLAUDE.md files into agents/<devAgentId>/CLAUDE.md. Idempotent — re-running with the same spec is a no-op for already-registered IDs (CLAUDE.md is overwritten).",
+        )
+        .requiredOption("--agents-spec <path>", "agents-spec JSON produced by plan-trims")
+        .requiredOption("--trims-dir <path>", "Directory containing the trimmed CLAUDE.md files (the plan-trims --output-dir)")
+        .option("--tags-from <agentId>", "Copy the tag set from this parent agent so --prefer-agent matching works. Default: tags=['research-study'].")
+        .action(async (opts) => {
+          await cmdResearchRegisterTrims(opts);
+        }),
+    )
     .addCommand(
       new Command("plan-trims")
         .description(
@@ -471,7 +487,8 @@ export function buildCli(): Command {
         .requiredOption("--output-spec <path>", "Where to write the agents-spec JSON for curve-study")
         .option("--seed-base <n>", "RNG seed base for reproducibility", parsePositive, 42)
         .option("--preserve <list>", "Comma-separated section slugs (id from heading) to keep in every trim. NOTE: any preserved section is a confounder; report it in the study writeup.", "")
-        .option("--clone-base <path>", "Per-agent dedicated clone path template, with {agentId} placeholder. Default: /tmp/study-clones/{agentId}")
+        .option("--clone-base <path>", "Per-agent dedicated clone path template. Tokens: {agentId}, {repo}. When {repo} appears, the spec emits one entry per (agent × repo) so curve-study can dispatch the same agent against multiple repos with isolated clones. Default: /tmp/study-clones/{agentId}")
+        .option("--repos <list>", "Comma-separated repo basenames substituted into the {repo} token of --clone-base. Required when {repo} is in --clone-base; ignored otherwise.")
         .action(async (opts) => {
           await cmdResearchPlanTrims(opts);
         }),
@@ -496,6 +513,15 @@ export function buildCli(): Command {
         .option(
           "--issue-body-only",
           "Forward --issue-body-only to each cell's spawn. Step 1 fetches body only — no comments. Required for closed-issue dispatches so the resolution-PR link doesn't contaminate the measurement.",
+        )
+        .option(
+          "--no-target-claude-md",
+          "Forward --no-target-claude-md to each cell's spawn. Suppress the live target-repo CLAUDE.md prepend so effective context size matches the per-agent CLAUDE.md size we're varying.",
+        )
+        .option(
+          "--max-total-cost-usd <usd>",
+          "Cumulative cost cap (USD) across all cells. Dispatch aborts when reached and the partial results are aggregated. Defense in depth on top of per-cell --max-cost-usd.",
+          parsePositive,
         )
         .option(
           "--mode <mode>",
@@ -2414,6 +2440,8 @@ interface SpawnOpts {
   inspectPaths?: string;
   allowClosedIssue?: boolean;
   issueBodyOnly?: boolean;
+  /** commander's --no-target-claude-md sets `targetClaudeMd: false`. */
+  targetClaudeMd?: boolean;
 }
 
 async function cmdSpawn(opts: SpawnOpts): Promise<void> {
@@ -2473,6 +2501,7 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       skipSummary: !!opts.skipSummary,
       inspectPaths,
       issueBodyOnly: !!opts.issueBodyOnly,
+      suppressTargetClaudeMd: opts.targetClaudeMd === false,
     });
 
     const out = {
@@ -3120,6 +3149,60 @@ function partitionOpenPrIssues(
   return { dispatchIssues, openPrSkipped };
 }
 
+interface ResearchRegisterTrimsOpts {
+  agentsSpec: string;
+  trimsDir: string;
+  tagsFrom?: string;
+}
+
+async function cmdResearchRegisterTrims(opts: ResearchRegisterTrimsOpts): Promise<void> {
+  const specRaw = JSON.parse(await fs.readFile(opts.agentsSpec, "utf8")) as Array<{ devAgentId: string }>;
+  const uniqueIds = [...new Set(specRaw.map((s) => s.devAgentId))];
+  const registry = await loadRegistry();
+  const parentTags = opts.tagsFrom
+    ? registry.agents.find((a) => a.agentId === opts.tagsFrom)?.tags ?? null
+    : null;
+  if (opts.tagsFrom && !parentTags) {
+    throw new Error(`--tags-from agent '${opts.tagsFrom}' not found in registry`);
+  }
+  let registered = 0;
+  let already = 0;
+  await mutateRegistry(async (reg) => {
+    for (const id of uniqueIds) {
+      const existed = reg.agents.some((a) => a.agentId === id);
+      const rec = createAgent(reg); // mints new id we discard
+      // Replace minted record with the requested specific id
+      reg.agents = reg.agents.filter((a) => a.agentId !== rec.agentId);
+      const explicit: typeof rec = {
+        ...rec,
+        agentId: id,
+        tags: parentTags ?? ["research-study"],
+      };
+      if (existed) {
+        const i = reg.agents.findIndex((a) => a.agentId === id);
+        if (i >= 0) {
+          reg.agents[i].tags = parentTags ?? reg.agents[i].tags;
+        }
+        already += 1;
+      } else {
+        reg.agents.push(explicit);
+        registered += 1;
+      }
+    }
+  });
+  for (const id of uniqueIds) {
+    const src = path.join(opts.trimsDir, `${id}-CLAUDE.md`);
+    const dstDir = path.join("agents", id);
+    const dst = path.join(dstDir, "CLAUDE.md");
+    await fs.mkdir(dstDir, { recursive: true });
+    await fs.copyFile(src, dst);
+  }
+  process.stdout.write(`Registered ${registered} new agents (+${already} already present), copied ${uniqueIds.length} CLAUDE.md files into agents/<devAgentId>/.\n`);
+  if (parentTags) {
+    process.stdout.write(`Tags copied from ${opts.tagsFrom}: ${parentTags.length} tags.\n`);
+  }
+}
+
 interface ResearchPlanTrimsOpts {
   parent: string;
   sizes: string;
@@ -3129,6 +3212,7 @@ interface ResearchPlanTrimsOpts {
   seedBase: number;
   preserve: string;
   cloneBase?: string;
+  repos?: string;
 }
 
 async function cmdResearchPlanTrims(opts: ResearchPlanTrimsOpts): Promise<void> {
@@ -3139,6 +3223,16 @@ async function cmdResearchPlanTrims(opts: ResearchPlanTrimsOpts): Promise<void> 
   if (sizes.length === 0) throw new Error("--sizes: no valid sizes parsed");
   const preserve = opts.preserve ? opts.preserve.split(",").map((s) => s.trim()).filter(Boolean) : [];
   const cloneTemplate = opts.cloneBase ?? "/tmp/study-clones/{agentId}";
+  const wantsRepoToken = cloneTemplate.includes("{repo}");
+  const repos = opts.repos
+    ? opts.repos.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  if (wantsRepoToken && repos.length === 0) {
+    throw new Error("--clone-base contains {repo} token but --repos is empty. Pass --repos repo1,repo2 to template the spec.");
+  }
+  if (!wantsRepoToken && repos.length > 0) {
+    process.stderr.write("WARNING: --repos provided but --clone-base has no {repo} token; --repos will be ignored.\n");
+  }
 
   const plans = planRandomTrims({
     parent,
@@ -3149,20 +3243,35 @@ async function cmdResearchPlanTrims(opts: ResearchPlanTrimsOpts): Promise<void> 
   });
 
   await fs.mkdir(opts.outputDir, { recursive: true });
-  const spec: Array<{ devAgentId: string; sizeBytes: number; clonePath: string; targetBytes: number; seed: number; selectedIds: string[]; droppedIds: string[] }> = [];
+  const spec: Array<{ devAgentId: string; sizeBytes: number; clonePath: string; targetBytes: number; seed: number; selectedIds: string[]; droppedIds: string[]; repo?: string }> = [];
   for (const plan of plans) {
     const devAgentId = `${opts.parent}-trim-${plan.size}-s${plan.seed}`;
     const trimPath = path.join(opts.outputDir, `${devAgentId}-CLAUDE.md`);
     await fs.writeFile(trimPath, plan.result.trimmed);
-    spec.push({
-      devAgentId,
-      sizeBytes: plan.result.actualBytes,
-      clonePath: cloneTemplate.replace("{agentId}", devAgentId),
-      targetBytes: plan.size,
-      seed: plan.seed,
-      selectedIds: plan.result.selectedIds,
-      droppedIds: plan.result.droppedIds,
-    });
+    if (wantsRepoToken) {
+      for (const repo of repos) {
+        spec.push({
+          devAgentId,
+          sizeBytes: plan.result.actualBytes,
+          clonePath: cloneTemplate.replace("{agentId}", devAgentId).replace("{repo}", repo),
+          targetBytes: plan.size,
+          seed: plan.seed,
+          selectedIds: plan.result.selectedIds,
+          droppedIds: plan.result.droppedIds,
+          repo,
+        });
+      }
+    } else {
+      spec.push({
+        devAgentId,
+        sizeBytes: plan.result.actualBytes,
+        clonePath: cloneTemplate.replace("{agentId}", devAgentId),
+        targetBytes: plan.size,
+        seed: plan.seed,
+        selectedIds: plan.result.selectedIds,
+        droppedIds: plan.result.droppedIds,
+      });
+    }
   }
   await fs.writeFile(opts.outputSpec, JSON.stringify(spec, null, 2));
 
@@ -3192,6 +3301,9 @@ interface ResearchCurveStudyOpts {
   dryRun: boolean;
   allowClosedIssue?: boolean;
   issueBodyOnly?: boolean;
+  /** commander's --no-target-claude-md sets `targetClaudeMd: false`. */
+  targetClaudeMd?: boolean;
+  maxTotalCostUsd?: number;
   mode: string;
   collisionPolicy: string;
   degree: number;
@@ -3233,6 +3345,8 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
     dryRun: opts.dryRun,
     allowClosedIssue: !!opts.allowClosedIssue,
     issueBodyOnly: !!opts.issueBodyOnly,
+    suppressTargetClaudeMd: opts.targetClaudeMd === false,
+    maxTotalCostUsd: opts.maxTotalCostUsd,
     logsDir: opts.logsDir,
     outputPath: opts.output,
     cwd: process.cwd(),

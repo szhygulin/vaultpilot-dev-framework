@@ -53,6 +53,12 @@ export interface CodingAgentInput {
    * closed-issue dispatches don't read the resolution-PR link.
    */
   issueBodyOnly?: boolean;
+  /**
+   * Issue #179 phase 3: suppress the live target-repo CLAUDE.md prepend
+   * in the system prompt. Forwarded to buildAgentSystemPrompt — keeps
+   * effective context size equal to the per-agent CLAUDE.md size.
+   */
+  suppressTargetClaudeMd?: boolean;
 }
 
 export interface CodingAgentResult {
@@ -125,6 +131,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     },
     targetRepoPath: input.targetRepoPath,
     resumeContext: input.resumeContext,
+    suppressTargetClaudeMd: input.suppressTargetClaudeMd,
   });
 
   const userPrompt = `Work on issue #${input.issueId} in ${input.targetRepo} per the workflow above. Emit the JSON envelope as your final message.`;
@@ -136,6 +143,7 @@ export async function runCodingAgent(input: CodingAgentInput): Promise<CodingAge
     issueId: input.issueId,
     logger: input.logger,
     agentId: input.agent.agentId,
+    issueBodyOnly: input.issueBodyOnly,
   });
 
   const disallowedTools = [
@@ -596,6 +604,13 @@ interface CanUseOpts {
   issueId: number;
   logger: Logger;
   agentId: string;
+  /**
+   * Issue #179 phase 3: when set, the gate refuses any Bash that fetches
+   * issue comments (`gh api .../comments`, `gh issue view ... --comments`).
+   * Defense in depth on top of the workflow-prompt instruction — if the
+   * agent ignores Step 1's guidance, the gate still blocks the leak.
+   */
+  issueBodyOnly?: boolean;
 }
 
 function makeCanUseTool(opts: CanUseOpts): CanUseTool {
@@ -641,6 +656,16 @@ function evaluate(
     return { behavior: "deny", message: "Refusing: --no-verify / --no-gpg-sign bypass not allowed." };
   }
 
+  // Issue #179 phase 3: when issueBodyOnly is set, refuse comment fetches.
+  // Defense in depth on top of the workflow-prompt instruction.
+  if (opts.issueBodyOnly && ISSUE_COMMENTS_FETCH_RE.test(cmd)) {
+    return {
+      behavior: "deny",
+      message:
+        "Refusing: --issue-body-only is set; do not fetch issue comments. Read the issue body via `gh issue view <N> --json body` only.",
+    };
+  }
+
   if (opts.dryRun) {
     const compoundDeny = denyCompoundDryRun(cmd);
     if (compoundDeny) return compoundDeny;
@@ -660,6 +685,14 @@ function evaluate(
 const PUSH_TO_MAIN_RE = /\bgit\s+push\b[\s\S]*?\bmain\b/;
 const PLAIN_FORCE_PUSH_RE = /\bgit\s+push\b[\s\S]*?--force(?!\s*-with-lease)/;
 const NO_VERIFY_RE = /(--no-verify\b|--no-gpg-sign\b)/;
+// Two ways to land at issue comments:
+//   gh api repos/<owner>/<repo>/issues/<n>/comments
+//   gh issue view <n> ... --json ... comments ... or --comments
+//
+// Exported for unit testing. The gate uses this regex when issueBodyOnly
+// is set, so any change here needs to keep both fetch shapes denied.
+export const ISSUE_COMMENTS_FETCH_RE =
+  /\bgh\s+(?:api[\s\S]*?\/issues\/\d+\/comments\b|issue\s+view\b[\s\S]*?(?:--comments\b|comments\b))/;
 
 // Dry-run-sensitive subcommands. We anchor the canonical intercept regexes
 // at start-of-line in dryRunIntercept (so the rewrite-to-echo replaces

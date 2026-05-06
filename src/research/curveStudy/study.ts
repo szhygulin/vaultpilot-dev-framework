@@ -35,6 +35,10 @@ export interface StudyInput {
   allowClosedIssue?: boolean;
   /** Forward to spawn — required for closed-issue dispatches to avoid leaking the resolution PR. */
   issueBodyOnly?: boolean;
+  /** Forward to spawn — keep effective context size equal to per-agent CLAUDE.md size. */
+  suppressTargetClaudeMd?: boolean;
+  /** Cumulative cost cap (USD) across all cells. Aborts dispatch when reached. */
+  maxTotalCostUsd?: number;
   logsDir: string;
   outputPath: string;
   cwd: string;
@@ -86,6 +90,8 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
     dryRun: input.dryRun ?? true,
     allowClosedIssue: input.allowClosedIssue,
     issueBodyOnly: input.issueBodyOnly,
+    suppressTargetClaudeMd: input.suppressTargetClaudeMd,
+    maxTotalCostUsd: input.maxTotalCostUsd,
     logsDir: input.logsDir,
     logPrefix,
     cwd: input.cwd,

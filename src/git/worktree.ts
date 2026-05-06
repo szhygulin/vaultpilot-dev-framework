@@ -16,8 +16,14 @@ export interface WorktreeHandle {
 // below (line "vp-dev/${opts.agentId}/issue-${opts.issueId}"). Keep these in
 // sync — pruneStaleAgentBranches uses this to decode an `agent-<id>+issue-<N>`
 // pair from a branch name.
+//
+// Hyphens allowed in the agent-id segment so research-study agent IDs like
+// `agent-916a-trim-50000-s50100` (from `vp-dev research plan-trims`) match.
+// The regex is anchored on `vp-dev/` and `/issue-<digits>$`, so the only
+// ambiguity is "where does the agentId end" — the trailing `/issue-<digits>$`
+// pin makes that unambiguous.
 const VP_DEV_BRANCH_PATTERN = "vp-dev/agent-*/issue-*";
-const VP_DEV_BRANCH_RE = /^vp-dev\/(agent-[a-z0-9]+)\/issue-(\d+)$/;
+const VP_DEV_BRANCH_RE = /^vp-dev\/(agent-[a-z0-9-]+)\/issue-(\d+)$/;
 
 // Per-target-repo serialization for `git worktree add`.
 //

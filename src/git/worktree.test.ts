@@ -32,12 +32,12 @@ test("sanitizes runId chars that aren't alphanumeric or '-'", () => {
 
 test("does not match the stale-branch sweep regex (anchored vp-dev pattern)", () => {
   // Defensive check: the existing prune sweep uses
-  //   /^vp-dev\/(agent-[a-z0-9]+)\/issue-(\d+)$/
+  //   /^vp-dev\/(agent-[a-z0-9-]+)\/issue-(\d+)$/
   // The trailing `$` plus the `-incomplete-<runId>` suffix means our
   // labeled refs are NOT auto-cleaned by the sweep. Encoded here so a
   // future regex tweak in worktree.ts doesn't silently start eating the
   // salvage branches.
-  const sweepRegex = /^vp-dev\/(agent-[a-z0-9]+)\/issue-(\d+)$/;
+  const sweepRegex = /^vp-dev\/(agent-[a-z0-9-]+)\/issue-(\d+)$/;
   const incomplete = buildIncompleteBranchName(
     "vp-dev/agent-72c6/issue-88",
     "run-2026-05-04T16-53-06-188Z",

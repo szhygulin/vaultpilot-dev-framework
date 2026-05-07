@@ -3,6 +3,7 @@ import path from "node:path";
 import { dispatchCells, type CellSpec } from "./dispatch.js";
 import { aggregateLogsDir } from "./aggregate.js";
 import { scoreAllAgents } from "./score.js";
+import { loadCellScores, samplesFromCellScores } from "./cellScores.js";
 import { mergeSamples, samplesFromCost, samplesFromScores } from "./fit.js";
 import {
   fitPolynomialRegression,
@@ -57,6 +58,16 @@ export interface StudyInput {
   /** Existing token-cost samples (mode="update" reads from contextCostCurve.ts). */
   existingTokenCostSamples?: ReadonlyArray<CurveSample>;
   collisionPolicy?: CollisionPolicy;
+  /**
+   * Curve-redo Phase 1d: when set, the accuracy curve is computed from
+   * per-cell A (reasoning judge) + B (hidden-test pass rate) JSONs in this
+   * directory instead of the envelope-label-derived QualityScore. Each cell
+   * must have `<cellKey>-tests.json` and `<cellKey>-judge.json` files
+   * (cellKey = `<agentId>-<issueId>`); cells missing one or both score 0.
+   * The token-cost curve is unchanged. When undefined, behavior is the
+   * pre-curve-redo path (samplesFromScores via the weighted composite).
+   */
+  cellScoresDir?: string;
 }
 
 export interface FittedCurve {
@@ -124,8 +135,13 @@ export async function runCurveStudy(input: StudyInput): Promise<StudyOutput> {
   const scores = scoreAllAgents(allCells, input.rubrics);
   const totalCostUsd = allCells.reduce((s, c) => s + c.costUsd, 0);
 
-  // Accuracy curve: from per-agent quality scores
-  const freshAccuracy = samplesFromScores(scores);
+  // Accuracy curve: Phase 1d adds an alternate path when --cell-scores-dir
+  // is supplied — A (reasoning judge) + B (hidden-test pass rate) per cell
+  // → mean per agent → factor anchored at qmax. The pre-curve-redo path
+  // (samplesFromScores via weighted composite) stays the default.
+  const freshAccuracy = input.cellScoresDir
+    ? samplesFromCellScores(allCells, await loadCellScores(input.cellScoresDir))
+    : samplesFromScores(scores);
   const finalAccuracy =
     mode === "update"
       ? mergeSamples(input.existingAccuracySamples ?? [], freshAccuracy, input.collisionPolicy)

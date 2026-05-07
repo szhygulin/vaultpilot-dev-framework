@@ -676,6 +676,10 @@ export function buildCli(): Command {
           "Regression form: linear-log (y ~ a + b·log(x)) | linear-raw (y ~ a + b·x) | poly2-log (y ~ a + b·log(x) + c·log(x)²) | poly2-raw (y ~ a + b·x + c·x²). Default linear-log per #179 leg-1 finding (linear-log beat poly2-raw on accuracy p=0.097 vs 0.111 and token-cost p=0.176 vs 0.404 at n=18).",
           "linear-log",
         )
+        .option(
+          "--cell-scores-dir <path>",
+          "Curve-redo Phase 1d: read per-cell A (reasoning judge) + B (hidden-test pass rate) JSONs from this directory and use the 0–200 quality formula instead of the envelope-label-derived QualityScore. Each cell needs `<agentId>-<issueId>-tests.json` and `-judge.json` files written by `vp-dev research run-tests` and `vp-dev research grade-reasoning`. Cells missing either side score 0.",
+        )
         .action(async (opts) => {
           await cmdResearchCurveStudy(opts);
         }),
@@ -4222,6 +4226,8 @@ interface ResearchCurveStudyOpts {
   mode: string;
   collisionPolicy: string;
   curveForm: string;
+  /** Curve-redo Phase 1d: per-cell A/B JSON dir; opts into the new 0–200 quality formula. */
+  cellScoresDir?: string;
 }
 
 type CurveForm = "linear-log" | "linear-raw" | "poly2-log" | "poly2-raw";
@@ -4292,6 +4298,7 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
     regressionXTransform: xTransform,
     existingAccuracySamples,
     existingTokenCostSamples,
+    cellScoresDir: opts.cellScoresDir,
   });
   process.stdout.write(`\nDone. ${result.cells.length} cells, $${result.totalCostUsd.toFixed(2)}, ${(result.wallMs / 60000).toFixed(1)}min.\n`);
   process.stdout.write(`Mode: ${result.mode}. Curve form: ${opts.curveForm}. Proposal written to ${opts.output}.\n`);

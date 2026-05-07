@@ -36,6 +36,8 @@ function basePreview(overrides: Partial<SetupPreview> = {}): SetupPreview {
     budgetExceededSkipped: [],
     incompleteBranchesAvailable: [],
     duplicateClusters: [],
+    dependencyDeferred: [],
+    dependencyForceIncluded: [],
     ...overrides,
   };
 }
@@ -204,4 +206,80 @@ test("formatSetupPreview: cluster set + dedup cost are bound into the rendered t
   const c = formatSetupPreview(basePreview({ dedupCostUsd: undefined }));
   const d = formatSetupPreview(basePreview({ dedupCostUsd: 0.01 }));
   assert.notEqual(c, d, "dedup cost drift must change rendered preview text");
+});
+
+// Issue #185: pre-dispatch dependency check renders. Same render-bound-into-
+// previewHash story as the dedup block — drift between --plan and --confirm
+// must change the rendered text.
+
+test("formatSetupPreview: empty dependencyDeferred renders no skip block", () => {
+  const text = formatSetupPreview(basePreview({ dependencyDeferred: [] }));
+  assert.doesNotMatch(text, /declared prerequisite/);
+  assert.doesNotMatch(text, /Override with --include-blocked/);
+});
+
+test("formatSetupPreview: non-empty dependencyDeferred renders the skip block + override hint", () => {
+  const deferred = [
+    {
+      issue: { id: 180, title: "Phase 3 advisory", state: "open" as const, labels: [] },
+      blockingVerdicts: [
+        { ref: { issueId: 178 }, state: "open" as const },
+      ],
+      reason: "depends on open #178 — re-dispatch after #178 lands",
+    },
+  ];
+  const text = formatSetupPreview(basePreview({ dependencyDeferred: deferred }));
+  assert.match(text, /1 issue\(s\) deferred — declared prerequisite\(s\) not satisfied/);
+  assert.match(text, /#180\s+depends on open #178 — re-dispatch after #178 lands/);
+  assert.match(text, /Override with --include-blocked/);
+});
+
+test("formatSetupPreview: dependencyForceIncluded renders WARNING block (not deferred block)", () => {
+  const forceIncluded = [
+    {
+      issue: { id: 180, title: "Phase 3 advisory", state: "open" as const, labels: [] },
+      blockingVerdicts: [
+        { ref: { issueId: 178 }, state: "open" as const },
+      ],
+      reason: "depends on open #178 — re-dispatch after #178 lands",
+    },
+  ];
+  const text = formatSetupPreview(
+    basePreview({ dependencyForceIncluded: forceIncluded, dependencyDeferred: [] }),
+  );
+  assert.match(text, /WARNING: 1 issue\(s\) with unsatisfied prerequisites force-included via --include-blocked/);
+  assert.match(text, /#180\s+depends on open #178/);
+  // Override hint is NOT rendered in force-included mode (the operator
+  // already passed the override).
+  assert.doesNotMatch(text, /Override with --include-blocked/);
+});
+
+test("formatSetupPreview: dependency block drift changes the rendered text (previewHash coverage)", () => {
+  const a = formatSetupPreview(basePreview({ dependencyDeferred: [] }));
+  const b = formatSetupPreview(
+    basePreview({
+      dependencyDeferred: [
+        {
+          issue: { id: 50, title: "x", state: "open", labels: [] },
+          blockingVerdicts: [{ ref: { issueId: 40 }, state: "open" }],
+          reason: "depends on open #40 — re-dispatch after #40 lands",
+        },
+      ],
+    }),
+  );
+  assert.notEqual(a, b, "dependency-deferred drift must change rendered preview text");
+
+  const c = formatSetupPreview(basePreview({ dependencyForceIncluded: [] }));
+  const d = formatSetupPreview(
+    basePreview({
+      dependencyForceIncluded: [
+        {
+          issue: { id: 50, title: "x", state: "open", labels: [] },
+          blockingVerdicts: [{ ref: { issueId: 40 }, state: "open" }],
+          reason: "depends on open #40 — re-dispatch after #40 lands",
+        },
+      ],
+    }),
+  );
+  assert.notEqual(c, d, "force-included drift must change rendered preview text");
 });

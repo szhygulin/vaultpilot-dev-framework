@@ -24,6 +24,10 @@ import {
 import { pickAgents, runOrchestrator } from "./orchestrator/orchestrator.js";
 import { detectDuplicates } from "./orchestrator/dedup.js";
 import {
+  checkDependencies,
+  type DeferredByDependency,
+} from "./orchestrator/dependencies.js";
+import {
   approveSetup,
   buildSetupPreview,
   formatSetupPreview,
@@ -210,6 +214,10 @@ export function buildCli(): Command {
     .option(
       "--skip-dedup",
       "Phase 2b of #133 (#148): bypass the pre-dispatch dedup pass entirely (no Opus call, no `dedupCostUsd` line in the gate, no clusters surfaced). Useful for cost-sensitive runs against issue sets known to have no overlap. Mutually exclusive with --apply-dedup.",
+    )
+    .option(
+      "--include-blocked",
+      "Issue #185: force-dispatch issues whose body declares an open / unknown / closed-not-planned prerequisite. The dependency check still runs and surfaces the would-be-deferred set as a WARNING block in the gate, but the orchestrator dispatches anyway. Useful when the operator plans to merge a prerequisite mid-run, when the dependency is soft (mention rather than hard prerequisite), or when the dep is on a sibling repo we can't query reliably. Bound into the --plan/--confirm previewHash so a token written without the flag cannot be confirmed with it.",
     )
     .option(
       "--no-report",
@@ -682,6 +690,13 @@ interface RunOpts {
   // model call, no cost line, no clusters surfaced). Mutually exclusive
   // with `applyDedup`.
   skipDedup?: boolean;
+  // Issue #185: pre-dispatch dependency check override. When set, the
+  // dep check still runs and the would-be-deferred candidates render
+  // in a WARNING block in the gate, but they dispatch anyway. Bound
+  // into the --plan/--confirm previewHash via the rendered preview
+  // text — a token written without the flag cannot be confirmed with
+  // it.
+  includeBlocked?: boolean;
   // Commander `--no-report` auto-generates `report: boolean` on opts: true
   // by default, false when `--no-report` is passed. Issue #136.
   report?: boolean;
@@ -767,6 +782,12 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     // operator authorized at plan time.
     opts.applyDedup = p.applyDedup;
     opts.skipDedup = p.skipDedup;
+    // #185: same plan→confirm carry for the dependency-check override.
+    // The previewHash already binds the deferred / force-included
+    // sections rendered in the gate, but the flag itself must persist so
+    // the confirm-side launch dispatches the same set the operator
+    // authorized at plan time.
+    opts.includeBlocked = p.includeBlocked;
   }
 
   if (opts.agents === undefined || !opts.targetRepo) {
@@ -868,6 +889,66 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   if (dispatchIssues.length === 0) {
     console.error(
       `ERROR: all ${open.length} open issue(s) filtered by triage as not-ready. Re-run with --include-non-ready to dispatch them anyway.`,
+    );
+    process.exit(2);
+  }
+
+  // Issue #185: pre-dispatch dependency check. After triage but BEFORE
+  // dedup (so dedup operates on the post-deferral set; deferred issues
+  // don't waste an Opus call). Fetches the body of each triage-passed
+  // candidate, parses any `## Dependencies` (or alias) section / inline
+  // `Dependencies:` line, and checks each referenced issue's GitHub
+  // state. Candidates with at least one open / unknown / closed-not-
+  // planned dep are deferred unless `--include-blocked` is set, in
+  // which case they dispatch but render in a WARNING block in the gate.
+  // Same-batch deps short-circuit the gh round-trip — we can't wait for
+  // them to land mid-run anyway.
+  const depsLogger = new Logger({
+    runId: `deps-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+    verbose: !!opts.verbose,
+  });
+  await depsLogger.open();
+  let dependencyDeferred: DeferredByDependency[] = [];
+  let dependencyForceIncluded: DeferredByDependency[] = [];
+  try {
+    const targetRepo = opts.targetRepo;
+    const detailResults = await Promise.all(
+      dispatchIssues.map((i) => getIssueDetail(targetRepo, i.id)),
+    );
+    const candidates = dispatchIssues.map((i, idx) => {
+      const detail = detailResults[idx];
+      return {
+        summary: i,
+        // Empty string when fetch failed (404, network) — parseDependencyRefs
+        // returns [] for that, so the issue dispatches normally. The dep
+        // check is best-effort: a transient gh failure must never block
+        // the run by side-effect.
+        body: detail?.body ?? "",
+      };
+    });
+    const depResult = await checkDependencies({
+      repo: targetRepo,
+      candidates,
+      includeBlocked: !!opts.includeBlocked,
+      logger: depsLogger,
+    });
+    dispatchIssues = depResult.dispatchIssues;
+    dependencyDeferred = depResult.deferred;
+    dependencyForceIncluded = depResult.forceIncluded;
+    depsLogger.info("deps.batch_completed", {
+      total: candidates.length,
+      dispatched: dispatchIssues.length,
+      deferred: dependencyDeferred.length,
+      forceIncluded: dependencyForceIncluded.length,
+      includeBlocked: !!opts.includeBlocked,
+    });
+  } finally {
+    await depsLogger.close();
+  }
+
+  if (dispatchIssues.length === 0) {
+    console.error(
+      `ERROR: all ${dependencyDeferred.length} candidate issue(s) deferred by the pre-dispatch dependency check. Land the prerequisite(s) first or re-run with --include-blocked.`,
     );
     process.exit(2);
   }
@@ -1095,6 +1176,8 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     incompleteBranchesAvailable,
     duplicateClusters,
     dedupCostUsd,
+    dependencyDeferred,
+    dependencyForceIncluded,
   });
 
   if (opts.plan) {
@@ -1136,6 +1219,11 @@ async function cmdRun(opts: RunOpts): Promise<void> {
         // preview, so the same hash protection holds.
         applyDedup: opts.applyDedup,
         skipDedup: opts.skipDedup,
+        // #185: persist the dependency-check override. When the flag is
+        // active, the deferred set renders as a WARNING force-included
+        // block instead of a deferred block — the preview text differs
+        // either way, and the previewHash binds that difference.
+        includeBlocked: opts.includeBlocked,
       },
     });
     process.stdout.write("Plan saved. No agents launched.\n");

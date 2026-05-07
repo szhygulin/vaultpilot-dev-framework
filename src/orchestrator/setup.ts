@@ -8,6 +8,7 @@ import {
   type OverloadVerdict,
 } from "../agent/split.js";
 import type { BudgetExceededSkipped } from "./costEstimator.js";
+import type { DeferredByDependency } from "./dependencies.js";
 
 export interface TriageSkipped {
   issue: IssueSummary;
@@ -132,6 +133,24 @@ export interface SetupPreview {
    * "no triage" vs "free triage" distinction from #55.
    */
   dedupCostUsd?: number;
+  /**
+   * Issue #185: candidates withheld because at least one referenced
+   * prerequisite is OPEN, UNKNOWN, or CLOSED-NOT-PLANNED. Surfaced as a
+   * skip block in the gate so the operator sees what's being deferred
+   * before y/N. Always an array — empty when no candidate body declared
+   * a dependency or every dep was satisfied. Bound into the rendered
+   * preview, so the previewHash drift protection (#149) automatically
+   * extends to dep-state changes between `--plan` and `--confirm`.
+   */
+  dependencyDeferred: DeferredByDependency[];
+  /**
+   * Issue #185: issues that would have been deferred by the dependency
+   * check but were force-included because the operator passed
+   * `--include-blocked`. Rendered as a WARNING block in the gate so the
+   * surface stays visible — silent override would defeat the whole point
+   * of the check.
+   */
+  dependencyForceIncluded: DeferredByDependency[];
 }
 
 export interface BuildPreviewInput {
@@ -171,6 +190,14 @@ export interface BuildPreviewInput {
    *  when the pass was bypassed; the renderer skips the line entirely
    *  in that case rather than showing $0.0000. */
   dedupCostUsd?: number;
+  /** Issue #185: caller-provided list of issues deferred by the
+   *  dependency check (open / unknown / closed-not-planned dep). Empty
+   *  array (or omitted) renders no skip block. */
+  dependencyDeferred?: DeferredByDependency[];
+  /** Issue #185: caller-provided list of issues that would have been
+   *  deferred but were force-included via `--include-blocked`. Empty
+   *  array (or omitted) renders no warning block. */
+  dependencyForceIncluded?: DeferredByDependency[];
 }
 
 export async function buildSetupPreview(input: BuildPreviewInput): Promise<SetupPreview> {
@@ -215,6 +242,8 @@ export async function buildSetupPreview(input: BuildPreviewInput): Promise<Setup
     incompleteBranchesAvailable: input.incompleteBranchesAvailable ?? [],
     duplicateClusters: input.duplicateClusters ?? [],
     dedupCostUsd: input.dedupCostUsd,
+    dependencyDeferred: input.dependencyDeferred ?? [],
+    dependencyForceIncluded: input.dependencyForceIncluded ?? [],
   };
 }
 
@@ -322,6 +351,35 @@ export function formatSetupPreview(p: SetupPreview): string {
     lines.push(
       "  The PR from the prior run is the in-flight work. Let it land (or close it) before re-dispatching.",
     );
+    lines.push("");
+  }
+
+  // Issue #185: pre-dispatch dependency check. Issues whose body declares
+  // a `## Dependencies` (or alias) section / inline `Dependencies:` line
+  // referencing an OPEN, UNKNOWN, or CLOSED-NOT-PLANNED issue are
+  // deferred so they don't waste agent time on inevitable pushbacks
+  // (motivating incident: #180 dispatched alongside its open prerequisite
+  // #178, ~$1.50 burned on a foreordained pushback). The deferred set
+  // renders here so the operator sees what's being held back before y/N.
+  // Force-includes via --include-blocked render as a WARNING block — the
+  // surface must stay visible because silent override defeats the check.
+  if (p.dependencyDeferred.length > 0) {
+    lines.push(
+      `${p.dependencyDeferred.length} issue(s) deferred — declared prerequisite(s) not satisfied:`,
+    );
+    for (const d of p.dependencyDeferred) {
+      lines.push(`  #${d.issue.id}  ${d.reason}`);
+    }
+    lines.push("  Override with --include-blocked to dispatch anyway.");
+    lines.push("");
+  }
+  if (p.dependencyForceIncluded.length > 0) {
+    lines.push(
+      `WARNING: ${p.dependencyForceIncluded.length} issue(s) with unsatisfied prerequisites force-included via --include-blocked:`,
+    );
+    for (const d of p.dependencyForceIncluded) {
+      lines.push(`  #${d.issue.id}  ${d.reason}`);
+    }
     lines.push("");
   }
 

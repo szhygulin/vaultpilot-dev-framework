@@ -107,6 +107,16 @@ xargs -a /tmp/leg2-clone-paths.txt -P 8 -I{} git clone --no-local "$LEG2_SRC" {}
 
 Each leg's machine only needs to clone its own target repo — leg 1 doesn't need leg 2's clones and vice versa.
 
+### Step 2.5 — leg 1 only: install deps once per source clone
+
+Leg 1's target uses `vitest`. Vitest's CLI loads its own config-time imports (`vitest/config`) from the cwd's `node_modules`. Per-cell clones are throwaway, so install deps once on each source clone and have Step 4's score loop symlink `node_modules/` from the source into the per-cell clone (~10 s × 18 clones, or ~1 min in parallel).
+
+```bash
+# Leg 1 only — leg 2 (node-test) has no install-time deps.
+xargs -a /tmp/leg1-clone-paths.txt -P 8 -I{} \
+  bash -c 'cd "$1" && npm ci --silent --no-audit --no-fund --no-progress' _ {}
+```
+
 ### Step 3 — leg-specific: dispatch with replay-mode + capture-diff + Sonnet model
 
 Hidden tests are committed in `feature-plans/curve-redo-bundle/curve-redo-tests/<issueId>/`. Per-cell diffs land in `feature-plans/curve-redo-data/diffs-leg<N>/<cellId>.diff`. Cell logs land in `feature-plans/curve-redo-data/logs-leg<N>/`.
@@ -176,10 +186,15 @@ for diff in feature-plans/curve-redo-data/diffs-leg${LEG}/*.diff; do
   testsDestRelDir=$(jq -r --arg id "$issueId" '.issues[] | select(.issueId == ($id | tonumber)) | .testsDestRelDir // ""' \
     feature-plans/curve-redo-bundle/corpus.json)
 
-  # Fresh clone at baseSha (or origin/main if open issue)
+  # Fresh clone at baseSha (or origin/main if open issue). Symlink the
+  # source clone's `node_modules/` so vitest can find its config-time
+  # imports (`vitest/config`) without re-running `npm ci` per cell. The
+  # source clones must have been `npm ci`'d once (Step 2.5 below).
   cellClone="/tmp/curve-redo-runtest-${cellId}"
   rm -rf "$cellClone"
-  git clone --no-local "/tmp/curve-redo-clones-leg${LEG}/${agentId}-vaultpilot-mcp" "$cellClone"
+  srcClone="/tmp/curve-redo-clones-leg${LEG}/${agentId}-vaultpilot-mcp"
+  git clone --no-local "$srcClone" "$cellClone"
+  ln -s "$srcClone/node_modules" "$cellClone/node_modules"
   [ -n "$baseSha" ] && (cd "$cellClone" && git reset --hard "$baseSha")
 
   # Test pass rate (B). When the corpus pins testsDestRelDir, the hidden

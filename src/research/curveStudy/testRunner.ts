@@ -35,7 +35,12 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 // has the repo's own *.test.ts files). The ${testsGlob} / ${testsDir}
 // substitutions are kept for backward-compat with custom --test-cmd users.
 const DEFAULT_NODE_TEST_TEMPLATE = "npx --yes tsx --test ${testFiles}";
-const DEFAULT_VITEST_TEMPLATE = "npx --yes vitest run ${testFiles}";
+// Vitest defaults to its project config (typically scopes `include` to the
+// project's `test/**`), which excludes our hidden tests. Pass an explicit
+// `--config` pointing at a generated minimal override that includes only
+// the hidden-tests dest dir.
+const VITEST_OVERRIDE_CONFIG_NAME = "vitest.curve-redo.config.mjs";
+const DEFAULT_VITEST_TEMPLATE = `npx --yes vitest run --config ${VITEST_OVERRIDE_CONFIG_NAME} \${testFiles}`;
 
 export interface RunHiddenTestsInput {
   /**
@@ -115,9 +120,15 @@ export async function runHiddenTests(input: RunHiddenTestsInput): Promise<RunHid
   let applyError: string | undefined;
   if (!input.baselineOnly && input.diffPath) {
     try {
-      const stat = await fs.stat(input.diffPath);
+      // Resolve to absolute against the process cwd before handing to git.
+      // `git -C cloneDir apply <relative>` resolves the path relative to
+      // cloneDir (post-cd), not the process cwd, so a relative diffPath
+      // passed in from a caller working in the repo root would silently
+      // fail with "can't open patch".
+      const absDiffPath = path.resolve(input.diffPath);
+      const stat = await fs.stat(absDiffPath);
       if (stat.size > 0) {
-        await execFile("git", ["-C", input.cloneDir, "apply", input.diffPath]);
+        await execFile("git", ["-C", input.cloneDir, "apply", absDiffPath]);
       }
       // Empty diff (clean worktree) is still a successful apply.
     } catch (err) {
@@ -178,6 +189,25 @@ export async function runHiddenTests(input: RunHiddenTestsInput): Promise<RunHid
       runtimeMs: Date.now() - start,
       errorReason: `tests-copy failed: ${(err as Error).message}`,
     };
+  }
+
+  // Step 2.5: write a minimal vitest config override into the clone root so
+  // the default template's `--config` flag points at an include glob that
+  // matches our hidden tests. The project's own vitest.config (if any)
+  // typically scopes `include` to the project test dir and would silently
+  // exclude the hidden tests we just copied. Custom --test-cmd callers are
+  // responsible for their own discovery glob.
+  if (input.framework === "vitest" && !input.testCmd) {
+    const overridePath = path.join(input.cloneDir, VITEST_OVERRIDE_CONFIG_NAME);
+    const includeGlob = `${destRelDir}/**/*.test.ts`;
+    await fs.writeFile(
+      overridePath,
+      `import { defineConfig } from "vitest/config";\n` +
+        `export default defineConfig({\n` +
+        `  test: { include: [${JSON.stringify(includeGlob)}] },\n` +
+        `});\n`,
+      "utf8",
+    );
   }
 
   // Step 3: run the framework command.

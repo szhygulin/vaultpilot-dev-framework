@@ -71,6 +71,15 @@ export interface RunConfirmParams {
   // mode cannot be confirmed under the other. Optional for back-compat
   // with tokens written before #148.
   skipDedup?: boolean;
+  // Issue #185: persisted intent flag for the pre-dispatch dependency
+  // check override. When `true`, the dependency check still runs and
+  // surfaces the would-be-deferred set as a WARNING block, but the
+  // candidates are dispatched anyway. Bound into the previewHash via the
+  // rendered preview text — a token written under `--include-blocked`
+  // cannot be confirmed without it (and vice versa) without forcing a
+  // fresh `--plan`. Optional for back-compat with tokens written
+  // before #185.
+  includeBlocked?: boolean;
 }
 
 export interface RunConfirmToken {

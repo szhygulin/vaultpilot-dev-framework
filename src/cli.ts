@@ -424,6 +424,29 @@ export function buildCli(): Command {
         }),
     )
     .addCommand(
+      new Command("prune-tags")
+        .description(
+          "Drop registry tags not backed by any CLAUDE.md section + LLM-generalize survivors into broader categories (#219). Phase 1 (orphan drop) is deterministic; Phase 2 (generalization) is an opt-out LLM call. With --apply: mint a confirm token (15-min TTL); with --confirm <token>: mutate the registry under the per-file lock. Two-step pattern mirrors compact-claude-md / prune-lessons.",
+        )
+        .argument("<agentId>", "Agent to inspect (e.g. agent-92ff)")
+        .option("--json", "Print machine-readable JSON")
+        .option(
+          "--no-generalize",
+          "Phase 1 only: drop orphan tags, skip the LLM-clustering step. Deterministic, no LLM cost.",
+        )
+        .option(
+          "--apply",
+          "Compute the proposal AND mint a confirm token under state/prune-tags-confirm-<token>.json (15-min TTL). Re-invoke with --confirm <token> to mutate the registry.",
+        )
+        .option(
+          "--confirm <token>",
+          "Apply the proposal recorded in the named token, after re-validating against the live registry + CLAUDE.md content.",
+        )
+        .action(async (agentId, opts) => {
+          await cmdAgentsPruneTags(agentId, opts);
+        }),
+    )
+    .addCommand(
       new Command("audit-lessons")
         .description(
           "Score every section of an agent's CLAUDE.md by intrinsic quality (in vacuum — no run history, no comparison across sections). Per-section sonnet calls rate each lesson on the same 0-1 scale as write-time predictedUtility. Advisory only (Phase 1); destructive --apply / --confirm deferred. Combine with `vp-dev agents prune-lessons` for the historical-reinforcement signal.",
@@ -2707,6 +2730,131 @@ async function cmdAgentsPruneLessons(
   process.stdout.write(
     `\nConfirm token: ${token} (15-min TTL, written to state/lesson-prune-confirm-${token}.json)\n` +
       `Apply with:    vp-dev agents prune-lessons ${agentId} --confirm ${token}\n`,
+  );
+}
+
+interface AgentsPruneTagsOpts {
+  json?: boolean;
+  generalize?: boolean; // Commander stores --no-generalize as generalize:false
+  apply?: boolean;
+  confirm?: string;
+}
+
+async function cmdAgentsPruneTags(
+  agentId: string,
+  opts: AgentsPruneTagsOpts,
+): Promise<void> {
+  const {
+    proposePruneTags,
+    formatPruneTagsProposal,
+    computePruneTagsProposalHash,
+    applyPruneTags,
+  } = await import("./agent/pruneTags.js");
+  const {
+    mintToken,
+    writePruneTagsConfirmToken,
+    readPruneTagsConfirmToken,
+    deletePruneTagsConfirmToken,
+  } = await import("./state/pruneTagsConfirm.js");
+  const { agentClaudeMdPath } = await import("./agent/specialization.js");
+
+  if (opts.confirm) {
+    const tokenResult = await readPruneTagsConfirmToken(opts.confirm);
+    if (!tokenResult.ok) {
+      process.stderr.write(`ERROR: ${tokenResult.message}\n`);
+      process.exit(2);
+    }
+    const { record } = tokenResult;
+    if (record.agentId !== agentId) {
+      process.stderr.write(
+        `ERROR: token ${opts.confirm} is bound to ${record.agentId}, not ${agentId}.\n`,
+      );
+      process.exit(2);
+    }
+    const result = await applyPruneTags({
+      agentId,
+      proposal: record.proposal,
+      expectedProposalHash: record.proposalHash,
+    });
+    if (result.kind === "drift-rejected") {
+      process.stderr.write(`ERROR: ${result.details}\n`);
+      process.exit(2);
+    }
+    await deletePruneTagsConfirmToken(opts.confirm);
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, token: opts.confirm, result }, null, 2) + "\n",
+      );
+      return;
+    }
+    process.stdout.write(
+      `Pruned ${agentId} tags\n` +
+        `  ${result.tagsBefore.length} -> ${result.tagsAfter.length} ` +
+        `(${result.droppedCount} dropped, ${result.generalizedCount} generalization cluster(s))\n` +
+        `  final: ${result.tagsAfter.join(", ")}\n`,
+    );
+    return;
+  }
+
+  const reg = await loadRegistry();
+  const agent = reg.agents.find((a) => a.agentId === agentId);
+  if (!agent) {
+    process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+    process.exit(2);
+  }
+  if (agent.archived) {
+    process.stderr.write(
+      `ERROR: agent '${agentId}' is archived; pruning is for active agents.\n`,
+    );
+    process.exit(2);
+  }
+
+  // Read CLAUDE.md (missing file is fine — proposal handles empty-result path).
+  let claudeMd = "";
+  try {
+    claudeMd = await fs.readFile(agentClaudeMdPath(agentId), "utf-8");
+  } catch {
+    // empty string flows through proposePruneTags' zero-section branch
+  }
+
+  // Commander wires --no-generalize to `generalize: false` (default true).
+  const noGeneralize = opts.generalize === false;
+
+  const proposal = await proposePruneTags({
+    agent,
+    claudeMd,
+    noGeneralize,
+  });
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(proposal, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write(formatPruneTagsProposal(proposal) + "\n");
+
+  if (!opts.apply) return;
+
+  // No-op proposals don't mint a token. The "no attributable sections" path
+  // returns finalTags === registryTagsBefore; otherwise compare for any change.
+  const before = [...proposal.registryTagsBefore].sort().join(",");
+  const after = [...proposal.finalTags].sort().join(",");
+  if (before === after) {
+    process.stdout.write("\nNothing to prune; no token minted.\n");
+    return;
+  }
+
+  const proposalHash = computePruneTagsProposalHash(proposal, agent.tags, claudeMd);
+  const token = mintToken();
+  await writePruneTagsConfirmToken({
+    token,
+    agentId,
+    proposal,
+    proposalHash,
+  });
+  process.stdout.write(
+    `\nConfirm token: ${token} (15-min TTL, written to state/prune-tags-confirm-${token}.json)\n` +
+      `Apply with:    vp-dev agents prune-tags ${agentId} --confirm ${token}\n`,
   );
 }
 

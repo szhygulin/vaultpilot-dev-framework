@@ -71,6 +71,16 @@ After every successful issue-resolution run, a separate sonnet summarizer rewrit
 ## CI is a hard gate
 `.github/workflows/ci.yml` runs `npm ci && npm run typecheck && npm run build` on every push and PR. All three must pass. CI failures block merges; reproduce locally with the same three commands before pushing if a PR is failing for unclear reasons.
 
+## Agent overload remediation: pick the right axis
+- **`split`, `compact-claude-md`, and `prune-tags` (#219) address distinct overload axes.** Picking the wrong tool wastes a round trip; an agent flagged for "tags=72 >= 50" doesn't need its CLAUDE.md compacted, and an agent with a 50KB CLAUDE.md doesn't need its tags pruned.
+- **Decision matrix** when an agent trips an overload threshold:
+  - `CLAUDE.md ≥ 30KB` AND `attributableSections ≥ 4` → `agents split` (carve into 2-3 sub-specialists).
+  - `CLAUDE.md ≥ 30KB` AND `attributableSections ≥ 3 per cluster` (but < 4 total) → `agents compact-claude-md` (merge near-duplicate sections in place).
+  - `tags ≥ 50` AND `attributableSections < 4` (split-blocked) → `agents prune-tags` (drop registry tags not backed by any section, optionally LLM-generalize survivors). Most relevant when `tag-to-section ratio > 5:1` — the registry has accumulated breadth from `memoryUpdate.addTags` envelopes that didn't land kept lessons.
+  - `issuesHandled ≥ 20` alone with all three `CLAUDE.md`/`tags`/`sections` axes healthy: informational only — no remediation, the agent is producing focused work at scale.
+- **Composition order**: when ≥2 axes trip, prune-tags first (cheapest, deterministic Phase 1), then re-evaluate. Pruning may bring the agent under the split threshold and unblock a cleaner subsequent split.
+- Past incident 2026-05-07: agent-92ff (Alonzo) tripped `tags=72` and `issuesHandled=20` but had 2 attributable sections — unsplittable AND uncompactable. Existing tooling no-op'd; #219 fills the gap by addressing tag breadth as its own axis. 72 → 9 deterministic, then ~9 → ~4 via Phase 2 LLM clustering.
+
 ## CLI tools: smoke-test the empty-result path before merging
 - **Before merging a new `vp-dev agents <subcommand>` (or any `vp-dev <verb>`), smoke-test it against a fixture that produces an EMPTY result, not just a populated one.** Empty-result paths often take distinct code (default values, no-op shortcuts, fallback expressions, `Math.min(...[]) === Infinity`) that the populated-result tests don't exercise.
 - **How to apply**: build a synthetic fixture with zero eligible items (empty `state/lesson-utility-<id>.json`, empty registry, no PRs, etc.), invoke the CLI in advisory mode, and read the output. If the rendered text contains nonsense (`Infinity`, `undefined`, `NaN`, empty `[]` where a default should have been substituted), that's a real bug regardless of whether unit tests pass.

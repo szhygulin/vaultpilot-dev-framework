@@ -804,6 +804,10 @@ export function buildCli(): Command {
           "Override the framework's command template. Substitutions: ${testsGlob}, ${testsDir}.",
         )
         .option("--baseline-only", "Skip diff application — count baseline pass rate.")
+        .option(
+          "--tests-dest-rel-dir <path>",
+          "Clone-relative directory to copy hidden tests into before running. Default `curve-redo-hidden-tests`. Set per-issue (e.g. `src/agent`) when generated tests use sibling imports (`./<x>.js`) that match the codebase's source-tree colocation pattern.",
+        )
         .action(async (opts) => {
           await cmdResearchRunTests(opts);
         }),
@@ -4604,6 +4608,7 @@ interface ResearchRunTestsOpts {
   timeoutMs: number;
   testCmd?: string;
   baselineOnly?: boolean;
+  testsDestRelDir?: string;
 }
 
 async function cmdResearchRunTests(opts: ResearchRunTestsOpts): Promise<void> {
@@ -4628,6 +4633,7 @@ async function cmdResearchRunTests(opts: ResearchRunTestsOpts): Promise<void> {
     timeoutMs: opts.timeoutMs,
     testCmd: opts.testCmd,
     baselineOnly: !!opts.baselineOnly,
+    testsDestRelDir: opts.testsDestRelDir,
   });
   await fs.mkdir(path.dirname(opts.out), { recursive: true });
   await fs.writeFile(opts.out, JSON.stringify(result, null, 2) + "\n");

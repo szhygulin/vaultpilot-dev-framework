@@ -184,6 +184,51 @@ test("runHiddenTests: copies hidden tests into clone and runs the framework comm
   }
 });
 
+test("runHiddenTests: testsDestRelDir override copies tests into the named source dir without wiping it", async () => {
+  const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
+  const { testsDir, cleanup: cleanTests } = await makeTestsDir(3);
+  try {
+    // Pre-populate src/agent/ with an impl file the tests import as a sibling.
+    await fs.mkdir(path.join(cloneDir, "src/agent"), { recursive: true });
+    await fs.writeFile(
+      path.join(cloneDir, "src/agent/impl.ts"),
+      "export const impl = 1;\n",
+    );
+    let capturedCmd = "";
+    const exec: ExecTestCommand = async ({ cmd }) => {
+      capturedCmd = cmd;
+      return { stdout: "# pass 3\n# fail 0\n", stderr: "" };
+    };
+    const r = await runHiddenTests({
+      testsDir,
+      cloneDir,
+      framework: "node-test",
+      baselineOnly: true,
+      testsDestRelDir: "src/agent",
+      execTestCommand: exec,
+    });
+    assert.equal(r.passed, 3);
+    assert.equal(r.applyCleanly, true);
+    // Default template uses ${testFiles}: each hidden test is named explicitly,
+    // so a sibling *.test.ts (e.g. an existing src/agent/repo.test.ts) wouldn't
+    // be picked up even when destRelDir collides with a populated source dir.
+    assert.match(capturedCmd, /tsx --test src\/agent\/gen-0\.test\.ts/);
+    assert.match(capturedCmd, /src\/agent\/gen-1\.test\.ts/);
+    assert.match(capturedCmd, /src\/agent\/gen-2\.test\.ts/);
+    // Pre-existing impl.ts must survive the copy (no wipe-then-mkdir for non-default dest).
+    const entries = await fs.readdir(path.join(cloneDir, "src/agent"));
+    assert.ok(entries.includes("impl.ts"), "impl.ts was wiped");
+    assert.equal(
+      entries.filter((e) => e.endsWith(".test.ts")).length,
+      3,
+      "expected 3 hidden tests copied alongside impl.ts",
+    );
+  } finally {
+    await cleanClone();
+    await cleanTests();
+  }
+});
+
 test("runHiddenTests: returns errorReason when stdout is unparseable", async () => {
   const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
   const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);

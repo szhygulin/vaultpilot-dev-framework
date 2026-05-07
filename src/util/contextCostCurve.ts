@@ -255,3 +255,59 @@ export function getAccuracyDegradationRegression(): PolynomialRegression {
 export function getTokenCostRegression(): PolynomialRegression {
   return getTokenCost();
 }
+
+/**
+ * Soft-warning byte threshold for per-agent CLAUDE.md size (#200, option 1
+ * scope after Markov's pushback). Returns the 95th-percentile of the
+ * calibration sample's xBytes — a deliberately model-free statistic, not
+ * an "elbow." The validated K=13 fit is linear-log (degree 1, x→log(x)),
+ * which is monotone and carries no inflection point; picking any single
+ * x-value off it as a knot would be arbitrary.
+ *
+ * Properties:
+ *   - Model-free: drawn from the ordered sample bytes via R-7 linear
+ *     interpolation (matches Excel/numpy default), so the threshold moves
+ *     with the calibration data without depending on the regression form.
+ *   - Above the typical sample density: by construction p95 sits in the
+ *     upper tail of the existing measurements, so warnings fire only at
+ *     empirically-attested-as-large sizes.
+ *   - Below {@link SOFT_CAP_BYTES} (64 KiB): the existing hard cap still
+ *     blocks the append; this warning surfaces approach-to-cap.
+ *
+ * Used by `runIssueCore.maybeAppendSummary` to emit a
+ * `specialization.budget_warning` log event after a successful append when
+ * the post-append byte count meets/exceeds the threshold. No enforcement
+ * and no victim-eviction here — both deferred per #200's bake-window note
+ * (needs a validated utility-signal study to drive forced eviction).
+ */
+export function byteBudgetWarningThreshold(): number {
+  const xs = ACCURACY_DEGRADATION_SAMPLES.map((s) => s.xBytes).sort(
+    (a, b) => a - b,
+  );
+  return Math.round(percentile(xs, 0.95));
+}
+
+/**
+ * Memoized value of {@link byteBudgetWarningThreshold} for hot-path callers.
+ * The samples are immutable at module load, so a single computation suffices.
+ * Exported separately from the function so diagnostics tooling can inline
+ * the constant while tests retain a recomputation seam.
+ */
+export const BYTE_BUDGET_WARNING_THRESHOLD: number = byteBudgetWarningThreshold();
+
+/**
+ * R-7 percentile (numpy / Excel default): linear interpolation between
+ * adjacent order statistics. `sorted` MUST already be ascending. `p` in [0, 1].
+ * Returns 0 on empty input (caller-facing helpers don't pass empty arrays;
+ * the guard is defensive).
+ */
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  if (sorted.length === 1) return sorted[0];
+  const rank = p * (sorted.length - 1);
+  const lo = Math.floor(rank);
+  const hi = Math.ceil(rank);
+  if (lo === hi) return sorted[lo];
+  const frac = rank - lo;
+  return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
+}

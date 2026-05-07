@@ -102,6 +102,52 @@ test("captureWorktreeDiff: writes an empty file when worktree is clean", async (
   }
 });
 
+test("captureWorktreeDiff: with baseSha, captures committed work the agent made on its branch", async () => {
+  const { repoRoot, seedSha, cleanup } = await makeFixtureRepo();
+  try {
+    // Simulate the production flow: agent edits files, runs `git commit` on
+    // its branch (worktree clean afterwards), then capture runs.
+    await execFile("git", ["-C", repoRoot, "checkout", "-q", "-b", "agent-branch"]);
+    await fs.writeFile(path.join(repoRoot, "seed.txt"), "agent-edited\n");
+    await fs.writeFile(path.join(repoRoot, "feature.txt"), "new feature file\n");
+    await execFile("git", ["-C", repoRoot, "add", "-A"]);
+    await execFile("git", ["-C", repoRoot, "commit", "-q", "-m", "agent work"]);
+
+    const outPath = path.join(repoRoot, "out", "post-commit.diff");
+    await captureWorktreeDiff({ worktreePath: repoRoot, outPath, baseSha: seedSha });
+
+    const diff = await fs.readFile(outPath, "utf-8");
+    assert.match(diff, /diff --git a\/seed\.txt b\/seed\.txt/);
+    assert.match(diff, /\+agent-edited/);
+    assert.match(diff, /diff --git a\/feature\.txt b\/feature\.txt/);
+    assert.match(diff, /\+new feature file/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("captureWorktreeDiff: with baseSha, captures committed + uncommitted edits in one diff", async () => {
+  const { repoRoot, seedSha, cleanup } = await makeFixtureRepo();
+  try {
+    await execFile("git", ["-C", repoRoot, "checkout", "-q", "-b", "agent-branch"]);
+    await fs.writeFile(path.join(repoRoot, "seed.txt"), "first edit\n");
+    await execFile("git", ["-C", repoRoot, "add", "-A"]);
+    await execFile("git", ["-C", repoRoot, "commit", "-q", "-m", "first"]);
+    // Leftover uncommitted edit (the agent ran out of turns before committing)
+    await fs.writeFile(path.join(repoRoot, "leftover.txt"), "uncommitted\n");
+
+    const outPath = path.join(repoRoot, "out", "mixed.diff");
+    await captureWorktreeDiff({ worktreePath: repoRoot, outPath, baseSha: seedSha });
+
+    const diff = await fs.readFile(outPath, "utf-8");
+    assert.match(diff, /\+first edit/);
+    assert.match(diff, /diff --git a\/leftover\.txt b\/leftover\.txt/);
+    assert.match(diff, /\+uncommitted/);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("captureWorktreeDiff: creates parent directory of outPath if missing", async () => {
   const { repoRoot, cleanup } = await makeFixtureRepo();
   try {

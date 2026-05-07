@@ -6,7 +6,7 @@
 // scores, variance). Phase 1d's job:
 //
 //   1. Load both files for each cell.
-//   2. Compute the per-cell quality (0..200 scale):
+//   2. Compute the per-cell quality (0..100 scale; A and B each ∈ 0..50):
 //        quality = A + B            if decision == "implement" AND test apply succeeded
 //                = 2 × A             if decision == "pushback"
 //                = 0                 if decision == "error" / test apply failed / parse failure
@@ -120,19 +120,25 @@ export async function loadCellScores(scoresDir: string): Promise<Map<string, Cel
 }
 
 /**
- * The 0..200 quality formula:
- *   - implement: A + B (full range when test+judge both succeeded)
- *   - pushback:  2 × A (no diff to test; double the judge score so the
- *     range is comparable to implement)
+ * The 0..100 quality formula:
+ *   - implement: A + B (range 0..100, with A and B each ∈ 0..50)
+ *   - pushback:  2 × A (range 0..100; no diff to test, so double the judge
+ *     score to keep parity with implement's A + B max)
  *   - error / missing data / dirty test apply: 0
  *
  * Inputs:
  *   decision    — from Cell.decision (envelope-reported)
- *   judge       — from CellScores.judge (Phase 1c reasoningJudge output)
+ *   judge       — from CellScores.judge; median ∈ 0..50 (reasoningJudge prompt
+ *                 instructs Opus to use the 0-50 scale; schema rejects > 50)
  *   test        — from CellScores.test (Phase 1c testRunner output)
  *
  * `applyCleanly: false` zeroes the cell even when the judge ran cleanly,
  * because the test signal is structurally untrustworthy.
+ *
+ * Equal-weight rationale: A and B both contribute up to 50 each, so the
+ * judge's qualitative read carries the same maximum signal as the hidden
+ * test pass rate. A high-quality diff with all tests passing scores
+ * 50 + 50 = 100; a confidently-correct pushback scores 2 × 50 = 100.
  */
 export function qualityFromAB(args: {
   decision: Decision | null;
@@ -142,7 +148,7 @@ export function qualityFromAB(args: {
   if (args.decision === "error" || args.decision === "error_max_turns" || args.decision == null) {
     return 0;
   }
-  const A = args.judge && !args.judge.isError ? clamp(args.judge.median, 0, 100) : null;
+  const A = args.judge && !args.judge.isError ? clamp(args.judge.median, 0, 50) : null;
   if (args.decision === "pushback") {
     if (A == null) return 0;
     return 2 * A;
@@ -151,10 +157,10 @@ export function qualityFromAB(args: {
   if (A == null) return 0;
   if (!args.test || !args.test.applyCleanly || args.test.errorReason) return 0;
   if (args.test.total <= 0) return 0;
-  // B is reported as a count out of `total`; normalize to 0..100 even if
-  // total != 100 (the operator might have used a different cap during
-  // smoke runs).
-  const B = clamp((args.test.passed / args.test.total) * 100, 0, 100);
+  // B normalizes the pass count out of `total` onto the 0..50 scale so
+  // it's comparable to A. total != 100 is supported (operator might cap
+  // differently during smoke runs).
+  const B = clamp((args.test.passed / args.test.total) * 50, 0, 50);
   return A + B;
 }
 

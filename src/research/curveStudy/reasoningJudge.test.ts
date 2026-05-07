@@ -63,12 +63,12 @@ test("gradeReasoning: returns median + variance across K=3 samples", async () =>
     decision: "implement",
     diff: "diff --git a/foo.ts ...",
     k: 3,
-    llmCall: makeLlm([70, 80, 90]),
+    llmCall: makeLlm([35, 40, 45]),
   });
   assert.equal(r.isError, false);
-  assert.equal(r.median, 80);
-  assert.deepEqual(r.scores, [70, 80, 90]);
-  assert.equal(r.variance, 100); // sample variance of 70,80,90
+  assert.equal(r.median, 40);
+  assert.deepEqual(r.scores, [35, 40, 45]);
+  assert.equal(r.variance, 25); // sample variance of 35,40,45
   assert.equal(r.partialFailure, false);
   assert.equal(r.rationales.length, 3);
 });
@@ -81,12 +81,12 @@ test("gradeReasoning: K=3 with one failed sample reports partialFailure but stil
     decision: "implement",
     diff: "diff",
     k: 3,
-    llmCall: makeLlm([70, "error", 90]),
+    llmCall: makeLlm([35, "error", 45]),
   });
   assert.equal(r.isError, false);
   assert.equal(r.partialFailure, true);
-  assert.deepEqual(r.scores, [70, 90]);
-  assert.equal(r.median, 80);
+  assert.deepEqual(r.scores, [35, 45]);
+  assert.equal(r.median, 40);
 });
 
 test("gradeReasoning: returns isError=true when all samples fail", async () => {
@@ -125,7 +125,7 @@ test("gradeReasoning: refuses when decision='implement' without diff", async () 
     issueBody: "B",
     decision: "implement",
     k: 2,
-    llmCall: makeLlm([50, 50]),
+    llmCall: makeLlm([25, 25]),
   });
   assert.equal(r.isError, true);
   assert.match(r.errorReason ?? "", /no diff supplied/);
@@ -138,7 +138,7 @@ test("gradeReasoning: refuses when decision='pushback' without comment", async (
     issueBody: "B",
     decision: "pushback",
     k: 2,
-    llmCall: makeLlm([50, 50]),
+    llmCall: makeLlm([25, 25]),
   });
   assert.equal(r.isError, true);
   assert.match(r.errorReason ?? "", /no comment supplied/);
@@ -151,7 +151,7 @@ test("gradeReasoning: refuses when decision='error' (not gradable)", async () =>
     issueBody: "B",
     decision: "error",
     k: 2,
-    llmCall: makeLlm([50, 50]),
+    llmCall: makeLlm([25, 25]),
   });
   assert.equal(r.isError, true);
   assert.match(r.errorReason ?? "", /not gradable/);
@@ -165,17 +165,17 @@ test("gradeReasoning: median of even-sized survivors uses average of two middle 
     decision: "implement",
     diff: "d",
     k: 4,
-    llmCall: makeLlm([10, 20, 80, 90]),
+    llmCall: makeLlm([5, 10, 40, 45]),
   });
-  // Median of [10,20,80,90] = (20+80)/2 = 50
-  assert.equal(r.median, 50);
+  // Median of [5,10,40,45] = (10+40)/2 = 25
+  assert.equal(r.median, 25);
 });
 
 test("gradeReasoning: blinds the artifact before sending to the judge", async () => {
   let captured = "";
   const llm: LlmCall = async ({ userPrompt }) => {
     captured = userPrompt;
-    return { raw: JSON.stringify({ score: 50, rationale: "x" }), isError: false };
+    return { raw: JSON.stringify({ score: 25, rationale: "x" }), isError: false };
   };
   await gradeReasoning({
     issueId: 9,
@@ -190,9 +190,9 @@ test("gradeReasoning: blinds the artifact before sending to the judge", async ()
   assert.doesNotMatch(captured, /trim-50000/);
 });
 
-test("gradeReasoning: scores outside 0-100 are rejected by the schema", async () => {
+test("gradeReasoning: scores outside 0-50 are rejected by the schema", async () => {
   const llm: LlmCall = async () => ({
-    raw: JSON.stringify({ score: 150, rationale: "x" }),
+    raw: JSON.stringify({ score: 75, rationale: "x" }),
     isError: false,
   });
   const r = await gradeReasoning({

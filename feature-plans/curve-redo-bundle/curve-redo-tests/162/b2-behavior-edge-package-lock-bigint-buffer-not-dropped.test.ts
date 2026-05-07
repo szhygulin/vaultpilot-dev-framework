@@ -1,0 +1,36 @@
+import { test, expect } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+function* walk(dir: string): Generator<string> {
+  if (!fs.existsSync(dir)) return;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === "node_modules" || e.name === ".git") continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) yield* walk(full);
+    else yield full;
+  }
+}
+
+function docs(): string {
+  const root = process.cwd();
+  const out: string[] = [];
+  for (const f of fs.readdirSync(root)) {
+    if (f.endsWith(".md")) out.push(fs.readFileSync(path.join(root, f), "utf-8"));
+  }
+  for (const sub of ["docs", "claude-work"]) {
+    for (const f of walk(path.join(root, sub))) {
+      if (/\.md$/.test(f)) {
+        try { out.push(fs.readFileSync(f, "utf-8")); } catch {}
+      }
+    }
+  }
+  return out.join("\n\n");
+}
+
+test("the tracking doc references the fact that bigint-buffer is preserved transitively", () => {
+  // Doc must justify keeping the dep — references the cascade or transitive paths.
+  const text = docs();
+  expect(text).toMatch(/transitive|transitively|cascade|dep path|dependency path/i);
+  expect(text).toMatch(/bigint-buffer/i);
+});

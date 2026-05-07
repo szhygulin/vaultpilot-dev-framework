@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { ensureAgent, mutateRegistry } from "../state/registry.js";
 import { runCodingAgent } from "./codingAgent.js";
+import { applyReplayRollback, captureWorktreeDiff } from "./replay.js";
 import {
   agentClaudeMdPath,
   appendBlock,
@@ -84,6 +85,27 @@ export interface RunIssueCoreInput {
    * file's nominal size. Forwarded to runCodingAgent → buildAgentSystemPrompt.
    */
   suppressTargetClaudeMd?: boolean;
+  /**
+   * Coding-agent model override forwarded to runCodingAgent. Defaults to
+   * `claude-opus-4-7` when undefined. Curve-redo calibration passes
+   * `claude-sonnet-4-6` so every cell runs at a uniform tier.
+   */
+  model?: string;
+  /**
+   * Curve-redo calibration mode. When set:
+   *   - if `baseSha` is supplied, the worktree is `git reset --hard`'d to
+   *     that SHA after creation but before the coding agent runs (closed-
+   *     issue replay; open-issue cells omit baseSha and the worktree stays
+   *     at origin/main).
+   *   - after the coding agent finishes, the worktree's diff (modified +
+   *     newly-staged tracked files) is written to `captureDiffPath` so
+   *     downstream test-runner / reasoning-judge phases can score it.
+   * Undefined for normal callers — preserves pre-curve-redo behavior.
+   */
+  replayMode?: {
+    baseSha?: string;
+    captureDiffPath: string;
+  };
 }
 
 export interface RunIssueCoreResult {
@@ -141,6 +163,23 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       resumedRunId: input.resumeContext?.runId,
     });
 
+    // Curve-redo replay-mode rollback: when a baseSha is supplied (closed-
+    // issue replay), reset the worktree HEAD to that SHA before the agent
+    // runs so it encounters the pre-fix codebase state. Open-issue cells
+    // omit baseSha and the worktree stays at origin/main. Throws on bad
+    // SHA — orchestrator surfaces it via the per-cell error envelope.
+    if (input.replayMode?.baseSha) {
+      await applyReplayRollback({
+        worktreePath: worktree.path,
+        baseSha: input.replayMode.baseSha,
+      });
+      input.logger.info("agent.replay_rollback", {
+        agentId: input.agent.agentId,
+        issueId: input.issue.id,
+        baseSha: input.replayMode.baseSha,
+      });
+    }
+
     const result = await runCodingAgent({
       agent: input.agent,
       issueId: input.issue.id,
@@ -156,7 +195,32 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       autoPhaseFollowup: input.autoPhaseFollowup,
       issueBodyOnly: input.issueBodyOnly,
       suppressTargetClaudeMd: input.suppressTargetClaudeMd,
+      model: input.model,
     });
+
+    // Curve-redo replay-mode diff capture: persist the agent's worktree
+    // edits before any teardown. Best-effort — a capture failure must not
+    // mask a successful run, so we log + continue rather than throw.
+    if (input.replayMode?.captureDiffPath) {
+      try {
+        await captureWorktreeDiff({
+          worktreePath: worktree.path,
+          outPath: input.replayMode.captureDiffPath,
+        });
+        input.logger.info("agent.replay_diff_captured", {
+          agentId: input.agent.agentId,
+          issueId: input.issue.id,
+          path: input.replayMode.captureDiffPath,
+        });
+      } catch (err) {
+        input.logger.warn("agent.replay_diff_capture_failed", {
+          agentId: input.agent.agentId,
+          issueId: input.issue.id,
+          path: input.replayMode.captureDiffPath,
+          err: (err as Error).message,
+        });
+      }
+    }
 
     envelope = result.envelope;
     let appendOutcome: AppendOutcome | undefined;

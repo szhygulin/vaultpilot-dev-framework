@@ -59,6 +59,15 @@ export interface CodingAgentInput {
    * effective context size equal to the per-agent CLAUDE.md size.
    */
   suppressTargetClaudeMd?: boolean;
+  /**
+   * Coding-agent model override. When undefined the SDK runs on the
+   * default `claude-opus-4-7`. Curve-redo calibration passes
+   * `claude-sonnet-4-6` so cells run at a uniform tier ~5× cheaper than
+   * the prior Opus-only experiments. Recovery passes (2a, 2b) inherit
+   * the same override so the recovery envelope matches the model that
+   * produced the truncated pass-1 output.
+   */
+  model?: string;
 }
 
 export interface CodingAgentResult {
@@ -452,7 +461,7 @@ async function runSdkPass(opts: SdkPassOpts): Promise<SdkPassResult> {
     const stream = query({
       prompt: makeUserStream(),
       options: {
-        model: "claude-opus-4-7",
+        model: input.model ?? "claude-opus-4-7",
         cwd: input.worktreePath,
         additionalDirectories: input.inspectPaths,
         systemPrompt: opts.systemPrompt,

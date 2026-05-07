@@ -270,6 +270,18 @@ export function buildCli(): Command {
       "--no-target-claude-md",
       "Suppress the live target-repo CLAUDE.md prepend in the agent's system prompt. Default: prepend on (every dispatch's effective context = target-repo CLAUDE.md + per-agent CLAUDE.md). Used by curve-study calibration to keep the effective context size equal to the per-agent CLAUDE.md size we're varying.",
     )
+    .option(
+      "--model <name>",
+      "Coding-agent model override (default: claude-opus-4-7). Curve-redo calibration passes claude-sonnet-4-6 so every cell runs at a uniform tier ~5× cheaper than the prior Opus-only experiments. Recovery passes inherit this override.",
+    )
+    .option(
+      "--replay-base-sha <sha>",
+      "Curve-redo replay mode: reset the worktree HEAD to the supplied git SHA before the agent runs (closed-issue replay so the agent encounters the pre-fix codebase state). Open-issue cells omit this flag and stay at origin/main.",
+    )
+    .option(
+      "--capture-diff-path <path>",
+      "Curve-redo replay mode: after the agent finishes, write the worktree's diff (modified + newly-staged tracked files) to this path so downstream test-runner / reasoning-judge phases can score it.",
+    )
     .action(async (opts) => {
       await cmdSpawn(opts);
     });
@@ -2684,6 +2696,12 @@ interface SpawnOpts {
   issueBodyOnly?: boolean;
   /** commander's --no-target-claude-md sets `targetClaudeMd: false`. */
   targetClaudeMd?: boolean;
+  /** Curve-redo: model override threaded into runIssueCore → runCodingAgent. */
+  model?: string;
+  /** Curve-redo: optional base SHA for closed-issue replay. */
+  replayBaseSha?: string;
+  /** Curve-redo: optional path to write the post-run worktree diff. */
+  captureDiffPath?: string;
 }
 
 async function cmdSpawn(opts: SpawnOpts): Promise<void> {
@@ -2732,6 +2750,24 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       ? opts.inspectPaths.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
       : undefined;
 
+    const replayMode =
+      opts.replayBaseSha || opts.captureDiffPath
+        ? {
+            baseSha: opts.replayBaseSha,
+            // Capture path is required when replay mode is used at all —
+            // there's no point doing a rollback if we don't keep the diff.
+            // Mirror the flag absence as a friendly error rather than a
+            // type-system one.
+            captureDiffPath: opts.captureDiffPath ?? "",
+          }
+        : undefined;
+    if (replayMode && !replayMode.captureDiffPath) {
+      process.stderr.write(
+        "ERROR: --replay-base-sha was passed without --capture-diff-path. Replay-mode runs need a destination for the post-run diff or the rollback is wasted.\n",
+      );
+      process.exit(2);
+    }
+
     const result = await runIssueCore({
       agent,
       issue,
@@ -2744,6 +2780,8 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       inspectPaths,
       issueBodyOnly: !!opts.issueBodyOnly,
       suppressTargetClaudeMd: opts.targetClaudeMd === false,
+      model: opts.model,
+      replayMode,
     });
 
     const out = {

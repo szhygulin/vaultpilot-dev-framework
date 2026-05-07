@@ -719,6 +719,45 @@ export function buildCli(): Command {
         .action(async (opts) => {
           await cmdResearchBenchSpecialists(opts);
         }),
+    )
+    .addCommand(
+      new Command("generate-tests")
+        .description(
+          "Curve-redo Phase 1b: generate exactly N hidden tests per issue via Opus. Writes one .test.ts per generated test under --out-dir. Coding agents do NOT see these tests — they're applied to the agent's worktree-diff in Phase 1c's testRunner to score implementation quality. Default 4 batches × 25 tests = 100. Baseline-validation (do all tests fail before any agent runs?) is a Phase 2 operator concern, NOT this subcommand's responsibility.",
+        )
+        .requiredOption("--issue <n>", "Issue number to generate tests for", parsePositive)
+        .requiredOption("--target-repo <owner/repo>", "Target GitHub repo (for issue body fetch)")
+        .option(
+          "--target-repo-path <path>",
+          "Local clone path of the target repo (used for repo-tree + style fixture). Defaults to $HOME/dev/<repo-name>.",
+        )
+        .requiredOption(
+          "--framework <name>",
+          "Target test framework: 'node-test' (vp-development-agents) or 'vitest' (vp-mcp).",
+        )
+        .requiredOption(
+          "--out-dir <path>",
+          "Where the .test.ts files land (e.g. feature-plans/curve-redo-tests/<issueId>/). Created if missing.",
+        )
+        .option(
+          "--batch-count <n>",
+          "Number of LLM calls (default 4). Total tests = batch-count × tests-per-batch.",
+          parsePositive,
+          4,
+        )
+        .option(
+          "--tests-per-batch <n>",
+          "Tests requested per LLM call (default 25). Total tests = batch-count × tests-per-batch.",
+          parsePositive,
+          25,
+        )
+        .option(
+          "--style-fixture <path>",
+          "Optional path to a sibling .test.ts file to use as a style hint. Defaults to the largest .test.ts found in the repo.",
+        )
+        .action(async (opts) => {
+          await cmdResearchGenerateTests(opts);
+        }),
     );
   program.addCommand(researchCmd);
 
@@ -4272,6 +4311,52 @@ async function cmdResearchBenchSpecialists(
   });
   process.stdout.write("\n" + formatBenchReport(result) + "\n");
   process.stdout.write(`\nProposal written to ${opts.output}.\n`);
+}
+
+interface ResearchGenerateTestsOpts {
+  issue: number;
+  targetRepo: string;
+  targetRepoPath?: string;
+  framework: string;
+  outDir: string;
+  batchCount: number;
+  testsPerBatch: number;
+  styleFixture?: string;
+}
+
+async function cmdResearchGenerateTests(opts: ResearchGenerateTestsOpts): Promise<void> {
+  if (opts.framework !== "node-test" && opts.framework !== "vitest") {
+    process.stderr.write(
+      `ERROR: --framework must be 'node-test' or 'vitest', got '${opts.framework}'.\n`,
+    );
+    process.exit(2);
+  }
+  const repoPath = await resolveTargetRepoPath(opts.targetRepo, opts.targetRepoPath);
+  const detail = await getIssueDetail(opts.targetRepo, opts.issue);
+  if (!detail) {
+    process.stderr.write(`ERROR: issue #${opts.issue} not found in ${opts.targetRepo}.\n`);
+    process.exit(2);
+  }
+  const { generateTests } = await import("./research/curveStudy/testGenerator.js");
+  const totalRequested = opts.batchCount * opts.testsPerBatch;
+  process.stderr.write(
+    `Generating ${totalRequested} tests for issue #${opts.issue} (${detail.title})\n` +
+      `  framework=${opts.framework}, batches=${opts.batchCount} × ${opts.testsPerBatch}\n` +
+      `  out-dir=${opts.outDir}\n`,
+  );
+  const result = await generateTests({
+    issueId: opts.issue,
+    issueTitle: detail.title,
+    issueBody: detail.body,
+    repoPath,
+    framework: opts.framework as "node-test" | "vitest",
+    outDir: opts.outDir,
+    batchCount: opts.batchCount,
+    testsPerBatch: opts.testsPerBatch,
+    styleFixturePath: opts.styleFixture,
+  });
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  if (!result.ok) process.exit(1);
 }
 
 function printCurveSummary(

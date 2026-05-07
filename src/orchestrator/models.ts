@@ -43,6 +43,17 @@ export const ORCHESTRATOR_MODEL_TRIM =
 export const ORCHESTRATOR_MODEL_DEDUP =
   process.env.VP_DEV_DEDUP_MODEL ?? "claude-opus-4-7";
 
+// Curve-redo experiment (Phase 1b/1c): hidden-test generator and
+// blinded reasoning judge both run on opus by default — quality of the
+// generated tests and grading rubric is the load-bearing dimension.
+// Operators tightening the budget can downshift to sonnet via env var,
+// but the default is opus for consistent measurement across cells.
+export const ORCHESTRATOR_MODEL_TEST_GENERATOR =
+  process.env.VP_DEV_TEST_GENERATOR_MODEL ?? "claude-opus-4-7";
+
+export const ORCHESTRATOR_MODEL_REASONING_JUDGE =
+  process.env.VP_DEV_REASONING_JUDGE_MODEL ?? "claude-opus-4-7";
+
 /**
  * Snapshot of the resolved model map, suitable for inclusion in the
  * `run.started` log payload. Built as a function (not a const map) so each
@@ -57,6 +68,8 @@ export function resolvedModelTiers(): {
   summarizer: string;
   trim: string;
   dedup: string;
+  testGenerator: string;
+  reasoningJudge: string;
 } {
   return {
     triage: ORCHESTRATOR_MODEL_TRIAGE,
@@ -65,5 +78,7 @@ export function resolvedModelTiers(): {
     summarizer: ORCHESTRATOR_MODEL_SUMMARIZER,
     trim: ORCHESTRATOR_MODEL_TRIM,
     dedup: ORCHESTRATOR_MODEL_DEDUP,
+    testGenerator: ORCHESTRATOR_MODEL_TEST_GENERATOR,
+    reasoningJudge: ORCHESTRATOR_MODEL_REASONING_JUDGE,
   };
 }

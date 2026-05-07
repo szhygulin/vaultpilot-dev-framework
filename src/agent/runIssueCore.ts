@@ -11,7 +11,10 @@ import {
 } from "./specialization.js";
 import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput } from "./summarizer.js";
 import { resolveExpiryPolicies } from "../util/sentinels.js";
-import { normalizedAccuracyFactor } from "../util/contextCostCurve.js";
+import {
+  BYTE_BUDGET_WARNING_THRESHOLD,
+  normalizedAccuracyFactor,
+} from "../util/contextCostCurve.js";
 import {
   checkLessonNovelty,
   deriveStableSectionId,
@@ -667,6 +670,24 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
       bytesAppended: appendOutcome.bytesAppended,
       totalBytes: appendOutcome.totalBytes,
     });
+    // Soft byte-budget warning (#200, option 1 scope). Fires when the
+    // post-append size meets/exceeds the empirical p95 of the calibration
+    // sample bytes. Observability only — no enforcement, no eviction. The
+    // model-free p95 statistic was chosen over the issue's original
+    // "elbow" framing because the validated K=13 fit (#179 / #203) is
+    // linear-log and monotone (no inflection). Forced eviction is
+    // deferred until a utility-signal correlation study lands per #200's
+    // bake-window note.
+    if (appendOutcome.totalBytes >= BYTE_BUDGET_WARNING_THRESHOLD) {
+      args.logger.warn("specialization.budget_warning", {
+        agentId: args.agent.agentId,
+        issueId: args.issue.id,
+        totalBytes: appendOutcome.totalBytes,
+        threshold: BYTE_BUDGET_WARNING_THRESHOLD,
+        overBy: appendOutcome.totalBytes - BYTE_BUDGET_WARNING_THRESHOLD,
+        reason: "claude-md size at/above empirical p95 of calibration samples",
+      });
+    }
   } else {
     args.logger.warn("specialization.cap", {
       agentId: args.agent.agentId,

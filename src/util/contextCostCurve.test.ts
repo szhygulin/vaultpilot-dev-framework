@@ -2,9 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ACCURACY_DEGRADATION_SAMPLES,
+  BYTE_BUDGET_WARNING_THRESHOLD,
   DEFAULT_COST_WEIGHTS,
   TOKEN_COST_SAMPLES,
   accuracyDegradationFactor,
+  byteBudgetWarningThreshold,
   contextCostFactor,
   getAccuracyDegradationRegression,
   getTokenCostRegression,
@@ -13,6 +15,7 @@ import {
   resetContextCostCurveCache,
   tokenCostFactor,
 } from "./contextCostCurve.js";
+import { SOFT_CAP_BYTES } from "../agent/specialization.js";
 
 test("samples: both curves have factor >= 1 at every sample (normalized to cheapest=1.0)", () => {
   for (const arr of [ACCURACY_DEGRADATION_SAMPLES, TOKEN_COST_SAMPLES]) {
@@ -136,6 +139,56 @@ test("contextCostFactor: rejects negative weights", () => {
   assert.throws(() =>
     contextCostFactor(24000, { weights: { accuracy: 1.5, cost: -0.5 } }),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Soft byte-budget warning threshold (#200, option 1 scope).
+// ---------------------------------------------------------------------------
+
+test("byteBudgetWarningThreshold: equals R-7 p95 of ACCURACY_DEGRADATION_SAMPLES.xBytes", () => {
+  // Independent recomputation: sort the bytes asc, linearly interpolate at
+  // rank = 0.95 * (n-1). For n=18 the rank is 16.15, between order-stats
+  // 16 and 17. Round to integer to match the threshold's representation.
+  const xs = ACCURACY_DEGRADATION_SAMPLES.map((s) => s.xBytes).sort(
+    (a, b) => a - b,
+  );
+  const rank = 0.95 * (xs.length - 1);
+  const lo = Math.floor(rank);
+  const hi = Math.ceil(rank);
+  const frac = rank - lo;
+  const expected = Math.round(
+    lo === hi ? xs[lo] : xs[lo] + frac * (xs[hi] - xs[lo]),
+  );
+  assert.equal(byteBudgetWarningThreshold(), expected);
+  assert.equal(BYTE_BUDGET_WARNING_THRESHOLD, expected);
+});
+
+test("BYTE_BUDGET_WARNING_THRESHOLD: sits below the hard SOFT_CAP_BYTES so warnings precede the cap", () => {
+  // The whole point of a soft warning is that it fires BEFORE the existing
+  // hard cap blocks the append; otherwise operators only see the cap event
+  // and never get an early heads-up.
+  assert.ok(
+    BYTE_BUDGET_WARNING_THRESHOLD < SOFT_CAP_BYTES,
+    `threshold ${BYTE_BUDGET_WARNING_THRESHOLD} must be < SOFT_CAP_BYTES ${SOFT_CAP_BYTES}`,
+  );
+});
+
+test("BYTE_BUDGET_WARNING_THRESHOLD: sits within the calibration sample range (not extrapolation)", () => {
+  // The threshold is a percentile of measured sample bytes — by
+  // construction it lies between min and max of the samples. Guarding
+  // against an off-by-one in the percentile helper that would push the
+  // value outside the sample range.
+  const xs = ACCURACY_DEGRADATION_SAMPLES.map((s) => s.xBytes);
+  const lo = Math.min(...xs);
+  const hi = Math.max(...xs);
+  assert.ok(BYTE_BUDGET_WARNING_THRESHOLD >= lo);
+  assert.ok(BYTE_BUDGET_WARNING_THRESHOLD <= hi);
+});
+
+test("byteBudgetWarningThreshold: idempotent across calls (stateless on the immutable sample array)", () => {
+  const a = byteBudgetWarningThreshold();
+  const b = byteBudgetWarningThreshold();
+  assert.equal(a, b);
 });
 
 test("contextCostFactor: clampHigh propagates to both component curves", () => {

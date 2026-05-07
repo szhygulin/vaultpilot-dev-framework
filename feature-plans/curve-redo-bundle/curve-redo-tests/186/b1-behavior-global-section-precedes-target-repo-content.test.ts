@@ -1,0 +1,41 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { buildAgentSystemPrompt } from "./prompt.js";
+
+test("global body content precedes live target-repo body content", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "vp-h-"));
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "vp-a-"));
+  const agentId = "agent-x";
+  fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, ".claude", "CLAUDE.md"),
+    "## GHead\nMARKER_GLOBAL_AAA\n",
+  );
+  fs.mkdirSync(path.join(agentsDir, agentId), { recursive: true });
+  fs.writeFileSync(path.join(agentsDir, agentId, "CLAUDE.md"), "## Z\n");
+  const prevHome = process.env.HOME;
+  const prevUP = process.env.USERPROFILE;
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  try {
+    const result = String(
+      await (buildAgentSystemPrompt as any)({
+        agentId,
+        liveProjectClaudeMd: "## LHead\nMARKER_LIVE_BBB\n",
+        agentsDir,
+      }),
+    );
+    const ig = result.indexOf("MARKER_GLOBAL_AAA");
+    const il = result.indexOf("MARKER_LIVE_BBB");
+    assert.ok(ig >= 0 && il >= 0, "both markers must be present");
+    assert.ok(ig < il, `global body (${ig}) must precede live body (${il})`);
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    if (prevUP === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUP;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(agentsDir, { recursive: true, force: true });
+  }
+});

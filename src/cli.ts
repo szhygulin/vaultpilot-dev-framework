@@ -427,6 +427,35 @@ export function buildCli(): Command {
         }),
     )
     .addCommand(
+      new Command("assess-claude-md")
+        .description(
+          "Phase 3 of #177 (issue #180): per-section verdict (keep / trim / drop) for an agent's CLAUDE.md. Combines #178's per-section utility data (reinforcement, pushback, past-incident, recency, cross-reference) with #179's context-cost curve. Advisory only — destructive --apply path deferred to Phase 4. Composes with compact-claude-md, tighten-claude-md, and prune-lessons.",
+        )
+        .argument("<agentId>", "Agent to inspect (e.g. agent-916a)")
+        .option("--json", "Print machine-readable JSON")
+        .option(
+          "--keep-threshold <n>",
+          "Sections with benefit ≥ this value are kept (default 0.20).",
+          parsePositive,
+          0.20,
+        )
+        .option(
+          "--drop-threshold <n>",
+          "Sections with benefit < this value are dropped (default 0.05).",
+          parsePositive,
+          0.05,
+        )
+        .option(
+          "--recency-decay-days <n>",
+          "Days after which lastReinforcedAt decays to zero recency (default 60).",
+          parsePositive,
+          60,
+        )
+        .action(async (agentId, opts) => {
+          await cmdAgentsAssessClaudeMd(agentId, opts);
+        }),
+    )
+    .addCommand(
       new Command("stats")
         .description("Per-agent rollup of PR outcomes (merge rate, median rework, median CI cycles).")
         .option("--json", "Print machine-readable JSON")
@@ -2490,6 +2519,45 @@ async function cmdAgentsAuditLessons(
     return;
   }
   process.stdout.write(formatAuditProposal(proposal) + "\n");
+}
+
+interface AgentsAssessClaudeMdOpts {
+  json?: boolean;
+  keepThreshold: number;
+  dropThreshold: number;
+  recencyDecayDays: number;
+}
+
+async function cmdAgentsAssessClaudeMd(
+  agentId: string,
+  opts: AgentsAssessClaudeMdOpts,
+): Promise<void> {
+  const reg = await loadRegistry();
+  const agent = reg.agents.find((a) => a.agentId === agentId);
+  if (!agent) {
+    process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+    process.exit(2);
+  }
+  if (opts.dropThreshold > opts.keepThreshold) {
+    process.stderr.write(
+      `ERROR: --drop-threshold (${opts.dropThreshold}) must be ≤ --keep-threshold (${opts.keepThreshold}).\n`,
+    );
+    process.exit(2);
+  }
+  const { proposeAssessment, formatAssessProposal } = await import(
+    "./agent/assessClaudeMd.js"
+  );
+  const proposal = await proposeAssessment({
+    agentId,
+    keepThreshold: opts.keepThreshold,
+    dropThreshold: opts.dropThreshold,
+    recencyDecayDays: opts.recencyDecayDays,
+  });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(proposal, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(formatAssessProposal(proposal) + "\n");
 }
 
 interface AgentsTightenClaudeMdOpts {

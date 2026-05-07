@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ensureDir, withFileLock } from "../state/locks.js";
 import {
@@ -53,6 +54,37 @@ export async function readSeedClaudeMd(targetRepoPath: string): Promise<string> 
     return await fs.readFile(candidate, "utf-8");
   } catch {
     return GENERIC_SEED;
+  }
+}
+
+/**
+ * Resolve the path to the user's global CLAUDE.md (`~/.claude/CLAUDE.md`).
+ * Lazy on `os.homedir()` so test harnesses can override `process.env.HOME`
+ * without monkey-patching the module — same pattern as `sharedLessonsDir`.
+ *
+ * Exported for testing; production callers go through `readUserGlobalClaudeMd`.
+ */
+export function userGlobalClaudeMdPath(): string {
+  return path.join(os.homedir(), ".claude", "CLAUDE.md");
+}
+
+/**
+ * Read the operator's per-user CLAUDE.md (`~/.claude/CLAUDE.md`). Returns the
+ * empty string when the file is missing — many operators won't have one and
+ * absence is not an error. Differs from `readSeedClaudeMd`, which substitutes
+ * a generic project-rules fallback when the target-repo file is absent: there
+ * is no analogous fallback for the global tier (a missing global CLAUDE.md
+ * means "operator hasn't opted in," and the prompt simply omits Layer 1).
+ *
+ * Read every dispatch (live), same as the live target-repo CLAUDE.md, so
+ * operators can iterate on the file and edits reach existing specialists
+ * immediately without re-forking.
+ */
+export async function readUserGlobalClaudeMd(): Promise<string> {
+  try {
+    return await fs.readFile(userGlobalClaudeMdPath(), "utf-8");
+  } catch {
+    return "";
   }
 }
 

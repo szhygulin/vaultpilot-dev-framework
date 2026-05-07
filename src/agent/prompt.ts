@@ -1,6 +1,10 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { readAgentClaudeMd, readSeedClaudeMd } from "./specialization.js";
+import {
+  readAgentClaudeMd,
+  readSeedClaudeMd,
+  readUserGlobalClaudeMd,
+} from "./specialization.js";
 import { readSharedLessonsForDomains } from "./sharedLessons.js";
 import { renderWorkflow, type WorkflowVars } from "./workflow.js";
 import type { AgentRecord, ResumeContext } from "../types.js";
@@ -29,12 +33,30 @@ export async function buildAgentSystemPrompt(opts: {
    */
   suppressTargetClaudeMd?: boolean;
 }): Promise<string> {
-  const [perAgentClaudeMd, liveProjectClaudeMdRaw] = await Promise.all([
-    readAgentClaudeMd(opts.agent.agentId, opts.targetRepoPath),
-    readSeedClaudeMd(opts.targetRepoPath),
-  ]);
+  const [perAgentClaudeMd, liveProjectClaudeMdRaw, userGlobalClaudeMdRaw] =
+    await Promise.all([
+      readAgentClaudeMd(opts.agent.agentId, opts.targetRepoPath),
+      readSeedClaudeMd(opts.targetRepoPath),
+      readUserGlobalClaudeMd(),
+    ]);
+  // The suppress flag (issue #179 phase 3) is a context-size calibration
+  // knob: when true we drop both the target-repo and the global tiers so the
+  // effective seed size matches the per-agent CLAUDE.md size we're varying.
+  // Suppressing only the target tier while leaving the global on would
+  // distort the curve study by a per-operator amount.
   const liveProjectClaudeMd = opts.suppressTargetClaudeMd ? "" : liveProjectClaudeMdRaw;
-  const dedupedPerAgent = stripOverlappingSections(perAgentClaudeMd, liveProjectClaudeMd);
+  const userGlobalClaudeMd = opts.suppressTargetClaudeMd ? "" : userGlobalClaudeMdRaw;
+  // Dedup the per-agent layer against the union of upstream layers (global ∪
+  // live). The per-agent file is the most-specific layer but is also the
+  // most stale — forked at agent-mint time and possibly weeks old — so any
+  // ## heading that already appears in either upstream layer is dropped.
+  // The live and global layers themselves are NOT cross-deduped: when both
+  // carry the same heading, both are emitted and the more-specific (later
+  // in the prompt) section wins by attention-position.
+  const upstreamBaseline = [userGlobalClaudeMd, liveProjectClaudeMd]
+    .filter((s) => s.length > 0)
+    .join("\n");
+  const dedupedPerAgent = stripOverlappingSections(perAgentClaudeMd, upstreamBaseline);
 
   const workflow = renderWorkflow(opts.workflow);
 
@@ -63,6 +85,21 @@ export async function buildAgentSystemPrompt(opts: {
   ]);
 
   const sections: string[] = [];
+  if (userGlobalClaudeMd.trim().length > 0) {
+    sections.push(
+      "# User global CLAUDE.md (~/.claude/CLAUDE.md — operator's per-user process rules)",
+      "",
+      "These rules apply across every project the operator works on. They are",
+      "generic process habits (Git/PR conventions, push-back discipline, doc style)",
+      "and do NOT carry domain-specific scope — see the Project rules below for",
+      "target-repo specifics that override these.",
+      "",
+      userGlobalClaudeMd.trim(),
+      "",
+      "---",
+      "",
+    );
+  }
   if (!opts.suppressTargetClaudeMd) {
     sections.push(
       "# Project rules (live target-repo CLAUDE.md — current as of this dispatch)",

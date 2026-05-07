@@ -1,7 +1,7 @@
 // Curve-redo Phase 1c: blinded reasoning judge.
 //
 // For each cell, Opus reads {issue body, agent's diff OR pushback comment}
-// and emits a 0-100 score on whether the artifact addresses the issue. K=3
+// and emits a 0-50 score on whether the artifact addresses the issue. K=3
 // independent samples per cell, median; variance reported so high-variance
 // cells can be flagged for operator review.
 //
@@ -11,8 +11,12 @@
 // knowing who wrote it.
 //
 // The output JSON is what Phase 1d's aggregator reads. Schema:
-//   {median: 0..100, scores: number[], variance, rationales: string[],
+//   {median: 0..50, scores: number[], variance, rationales: string[],
 //    costUsd, isError, errorReason}
+//
+// The 0-50 range pairs with B (hidden-test pass rate, also 0-50) for a
+// 0-100 total quality range. Pushback cells use 2A (also 0-100). The
+// rescale lets the test signal carry equal weight to the judge signal.
 //
 // LlmCall is injectable so unit tests can substitute a synthetic K-sample
 // generator without spinning up the real SDK.
@@ -25,7 +29,7 @@ import { ORCHESTRATOR_MODEL_REASONING_JUDGE } from "../../orchestrator/models.js
 import type { Logger } from "../../log/logger.js";
 
 const JUDGE_OUTPUT_SCHEMA = z.object({
-  score: z.number().min(0).max(100),
+  score: z.number().min(0).max(50),
   rationale: z.string().min(1),
 });
 
@@ -48,7 +52,7 @@ export interface GradeReasoningInput {
 }
 
 export interface GradeReasoningResult {
-  /** Median of the K judge samples. 0-100. */
+  /** Median of the K judge samples. 0-50. */
   median: number;
   /** All K samples (after blinding). */
   scores: number[];
@@ -82,26 +86,26 @@ const DEFAULT_K = 3;
 
 const JUDGE_SYSTEM_PROMPT = `You grade a coding agent's response to a GitHub issue. The agent either (a) implemented a fix and produced a unified diff, or (b) pushed back on the issue and produced a comment explaining why no implementation is appropriate.
 
-Score 0-100 on whether the artifact correctly addresses the issue. Use the full range:
+Score 0-50 on whether the artifact correctly addresses the issue. Use the full range:
 
-  0-25   — Misses the issue's intent, harmful, or unsupported by the code.
-  26-50  — Addresses the issue partially or has obvious bugs / wrong scope.
-  51-75  — Addresses the issue with reasonable scope; minor concerns; would
+  0-12   — Misses the issue's intent, harmful, or unsupported by the code.
+  13-25  — Addresses the issue partially or has obvious bugs / wrong scope.
+  26-37  — Addresses the issue with reasonable scope; minor concerns; would
            need small revisions to merge.
-  76-100 — Addresses the issue cleanly; right scope; sound approach.
+  38-50  — Addresses the issue cleanly; right scope; sound approach.
 
 Calibration anchors:
   - A diff that adds a guard rail the issue body explicitly requests, with
-    matching tests, scopes correctly: 80-90.
+    matching tests, scopes correctly: 40-45.
   - A pushback that names the issue's exact failure mode, cites a more
     appropriate venue (e.g. "this belongs upstream / in skill / advisory
-    not implementation"), and proposes 2-3 alternatives: 80-90.
+    not implementation"), and proposes 2-3 alternatives: 40-45.
   - A diff that does the wrong thing (fixes a different file, ignores the
-    body's constraint, breaks an obvious invariant): 10-20.
-  - A pushback that just refuses without engaging with the body: 10-20.
+    body's constraint, breaks an obvious invariant): 5-10.
+  - A pushback that just refuses without engaging with the body: 5-10.
 
 OUTPUT FORMAT — strict JSON, no prose around it:
-{ "score": <integer 0-100>, "rationale": "<1-3 sentences>" }`;
+{ "score": <integer 0-50>, "rationale": "<1-3 sentences>" }`;
 
 // Order matters: more-specific patterns first. Branch names contain
 // agent-ids, so the branch pattern runs before agent-id stripping

@@ -319,6 +319,133 @@ test("runHiddenTests: empty tests directory returns errorReason", async () => {
   }
 });
 
+test("runHiddenTests: applies a relative diffPath against the process cwd, not the clone", async () => {
+  const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
+  const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);
+  // Stage a sibling dir that holds the diff under the process cwd. The
+  // dispatch recipe in the curve-redo bundle runs scoring from the repo
+  // root and points --diff-path at `feature-plans/curve-redo-data/...`
+  // (relative). Pre-fix this resolved against `cloneDir` after `git -C`
+  // and silently failed.
+  const cwdAnchor = await fs.mkdtemp(path.join(os.tmpdir(), "cwd-anchor-"));
+  const prevCwd = process.cwd();
+  try {
+    const diffSubdir = path.join(cwdAnchor, "diffs");
+    await fs.mkdir(diffSubdir, { recursive: true });
+    const relativeDiffPath = path.join("diffs", "rel.diff");
+    // Empty diff is valid (clean worktree → no apply); we just need the
+    // file to be locatable for the size-stat step.
+    await fs.writeFile(path.join(cwdAnchor, relativeDiffPath), "");
+    process.chdir(cwdAnchor);
+    const exec: ExecTestCommand = async () => ({
+      stdout: "# pass 1\n# fail 0\n",
+      stderr: "",
+    });
+    const r = await runHiddenTests({
+      diffPath: relativeDiffPath,
+      testsDir,
+      cloneDir,
+      framework: "node-test",
+      execTestCommand: exec,
+    });
+    assert.equal(r.applyCleanly, true, `relative diff resolved correctly (got applyError=${r.applyError ?? "none"})`);
+    assert.equal(r.passed, 1);
+  } finally {
+    process.chdir(prevCwd);
+    await fs.rm(cwdAnchor, { recursive: true, force: true });
+    await cleanClone();
+    await cleanTests();
+  }
+});
+
+test("runHiddenTests: vitest framework writes the override config and references it via --config", async () => {
+  const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
+  const { testsDir, cleanup: cleanTests } = await makeTestsDir(2);
+  try {
+    let capturedCmd = "";
+    const exec: ExecTestCommand = async ({ cmd }) => {
+      capturedCmd = cmd;
+      return {
+        stdout: " Test Files  1 passed (1)\n      Tests  2 passed (2)\n",
+        stderr: "",
+      };
+    };
+    const r = await runHiddenTests({
+      testsDir,
+      cloneDir,
+      framework: "vitest",
+      baselineOnly: true,
+      execTestCommand: exec,
+    });
+    assert.equal(r.passed, 2);
+    assert.match(capturedCmd, /vitest run --config vitest\.curve-redo\.config\.mjs/);
+    const overrideContent = await fs.readFile(
+      path.join(cloneDir, "vitest.curve-redo.config.mjs"),
+      "utf8",
+    );
+    assert.match(overrideContent, /defineConfig/);
+    assert.match(overrideContent, /curve-redo-hidden-tests\/\*\*\/\*\.test\.ts/);
+  } finally {
+    await cleanClone();
+    await cleanTests();
+  }
+});
+
+test("runHiddenTests: vitest override config honors testsDestRelDir", async () => {
+  const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
+  const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);
+  try {
+    const exec: ExecTestCommand = async () => ({
+      stdout: " Test Files  1 passed (1)\n      Tests  1 passed (1)\n",
+      stderr: "",
+    });
+    await runHiddenTests({
+      testsDir,
+      cloneDir,
+      framework: "vitest",
+      baselineOnly: true,
+      testsDestRelDir: "src/agent",
+      execTestCommand: exec,
+    });
+    const overrideContent = await fs.readFile(
+      path.join(cloneDir, "vitest.curve-redo.config.mjs"),
+      "utf8",
+    );
+    assert.match(overrideContent, /src\/agent\/\*\*\/\*\.test\.ts/);
+  } finally {
+    await cleanClone();
+    await cleanTests();
+  }
+});
+
+test("runHiddenTests: vitest with custom --test-cmd skips the override config write", async () => {
+  const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
+  const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);
+  try {
+    const exec: ExecTestCommand = async () => ({
+      stdout: " Test Files  1 passed (1)\n      Tests  1 passed (1)\n",
+      stderr: "",
+    });
+    await runHiddenTests({
+      testsDir,
+      cloneDir,
+      framework: "vitest",
+      baselineOnly: true,
+      testCmd: "custom-vitest ${testsDir}",
+      execTestCommand: exec,
+    });
+    // No override config should be written when caller is overriding the cmd.
+    const exists = await fs
+      .stat(path.join(cloneDir, "vitest.curve-redo.config.mjs"))
+      .then(() => true)
+      .catch(() => false);
+    assert.equal(exists, false);
+  } finally {
+    await cleanClone();
+    await cleanTests();
+  }
+});
+
 test("runHiddenTests: --test-cmd template substitution", async () => {
   const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
   const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);

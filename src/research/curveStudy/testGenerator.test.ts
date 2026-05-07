@@ -197,6 +197,44 @@ test("generateTests: ok=true when all batches return the requested test count", 
   }
 });
 
+test("generateTests: prompt instructs the LLM that tests live at curve-redo-hidden-tests/ and imports must use ../src/ paths", async () => {
+  const { repoPath, cleanup } = await makeRepo();
+  try {
+    const captured: { systemPrompt: string; userPrompt: string }[] = [];
+    const llm: LlmCall = async (args) => {
+      captured.push({ systemPrompt: args.systemPrompt, userPrompt: args.userPrompt });
+      return {
+        raw: JSON.stringify({ tests: [{ filename: "a.test.ts", code: "// noop" }] }),
+        isError: false,
+        costUsd: 0.01,
+      };
+    };
+    await generateTests({
+      issueId: 999,
+      issueTitle: "Capture prompts",
+      issueBody: "Body",
+      repoPath,
+      framework: "node-test",
+      outDir: path.join(repoPath, "tests-out"),
+      batchCount: 1,
+      testsPerBatch: 1,
+      llmCall: llm,
+    });
+    assert.equal(captured.length, 1);
+    const sys = captured[0].systemPrompt;
+    // Test placement is named explicitly so the LLM knows where its output runs from.
+    assert.match(sys, /curve-redo-hidden-tests\//);
+    // Both the do (../src/) and the don't (no sibling) are spelled out.
+    assert.match(sys, /\.\.\/src\//);
+    assert.match(sys, /sibling imports/i);
+    // Style fixture's path style is explicitly NOT to be mimicked.
+    const user = captured[0].userPrompt;
+    assert.match(user, /API\/idiom style, NOT its import-path style/);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("generateTests: ok=false and failures recorded when LLM short-counts a batch", async () => {
   const { repoPath, cleanup } = await makeRepo();
   try {

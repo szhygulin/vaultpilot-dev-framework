@@ -119,6 +119,11 @@ CRITICAL CONSTRAINTS — violating these wastes the test:
 - Test files MUST compile cleanly. Use the framework's idiomatic test/expect API exactly as the style fixture demonstrates.
 - Filenames are kebab-case ending in \`.test.ts\`. No spaces, no uppercase, no special chars.
 
+IMPORT PATHS — your tests will NOT live next to the impl modules they exercise:
+- Generated tests are placed at \`<cloneRoot>/curve-redo-hidden-tests/<filename>.test.ts\` (a sibling of \`src/\`, not inside it).
+- Use \`../src/<dir>/<module>.js\` to reach impl modules. Never use sibling imports (\`./<module>.js\`) — those would resolve inside \`curve-redo-hidden-tests/\` where no impl files exist.
+- The style fixture below was authored AT a location next to its impl, so its imports may be sibling-style. DO NOT mimic that path style — translate every \`./<x>.js\` to \`../src/<dir>/<x>.js\` based on where the file actually lives in the repo tree. Match its API/idiom style, not its import paths.
+
 OUTPUT FORMAT — strict JSON object, no prose before or after:
 {
   "tests": [
@@ -158,7 +163,7 @@ function buildUserPrompt(args: {
     "Repo tree (depth 2):",
     args.repoTree,
     "",
-    `Style fixture (existing test from this repo at ${args.styleFixturePath} — match this style):`,
+    `Style fixture (existing test from this repo at ${args.styleFixturePath} — match its API/idiom style, NOT its import-path style: this fixture lives next to its impl, but your generated tests live at curve-redo-hidden-tests/, so rewrite any sibling imports to ../src/<dir>/<x>.js):`,
     "```ts",
     args.styleFixture,
     "```",

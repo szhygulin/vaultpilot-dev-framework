@@ -446,6 +446,70 @@ test("runHiddenTests: vitest with custom --test-cmd skips the override config wr
   }
 });
 
+test("runHiddenTests: skips npm ci when package.json is absent (synthetic fixtures)", async () => {
+  const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
+  const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);
+  try {
+    // Fixture has no package.json. The exec stub records whether npm ran.
+    let cmdsRan: string[] = [];
+    const exec: ExecTestCommand = async ({ cmd }) => {
+      cmdsRan.push(cmd);
+      return { stdout: "# pass 1\n# fail 0\n", stderr: "" };
+    };
+    const r = await runHiddenTests({
+      testsDir,
+      cloneDir,
+      framework: "node-test",
+      baselineOnly: true,
+      execTestCommand: exec,
+    });
+    assert.equal(r.passed, 1);
+    // No node_modules exists, but absence of package.json means we skip
+    // install. Stub-recorded commands must not include "npm ci".
+    assert.ok(
+      !cmdsRan.some((c) => c.startsWith("npm ci")),
+      "npm ci should not run when package.json is absent",
+    );
+  } finally {
+    await cleanClone();
+    await cleanTests();
+  }
+});
+
+test("runHiddenTests: skips npm ci when node_modules already present (operator-managed clones)", async () => {
+  const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
+  const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);
+  try {
+    // Add a stub package.json + a sentinel node_modules dir so the
+    // "needInstall" branch chooses to skip.
+    await fs.writeFile(
+      path.join(cloneDir, "package.json"),
+      JSON.stringify({ name: "fixture", version: "0.0.0" }),
+    );
+    await fs.mkdir(path.join(cloneDir, "node_modules"));
+    let cmdsRan: string[] = [];
+    const exec: ExecTestCommand = async ({ cmd }) => {
+      cmdsRan.push(cmd);
+      return { stdout: "# pass 1\n# fail 0\n", stderr: "" };
+    };
+    const r = await runHiddenTests({
+      testsDir,
+      cloneDir,
+      framework: "node-test",
+      baselineOnly: true,
+      execTestCommand: exec,
+    });
+    assert.equal(r.passed, 1);
+    assert.ok(
+      !cmdsRan.some((c) => c.startsWith("npm ci")),
+      "npm ci should not run when node_modules already exists",
+    );
+  } finally {
+    await cleanClone();
+    await cleanTests();
+  }
+});
+
 test("runHiddenTests: --test-cmd template substitution", async () => {
   const { cloneDir, cleanup: cleanClone } = await makeFixtureClone();
   const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);

@@ -146,6 +146,44 @@ export async function runHiddenTests(input: RunHiddenTestsInput): Promise<RunHid
     }
   }
 
+  // Step 1.5: install dependencies. Hidden tests import from the source
+  // tree (e.g. `compactClaudeMd.ts` → zod), and a fresh `git clone` has no
+  // node_modules — without this, every test errors with `Cannot find
+  // package 'X'`. Skipped when (a) node_modules already exists (operator-
+  // managed clones, idempotent re-runs), or (b) the clone has no
+  // package.json (synthetic test fixtures + corner-case repos that don't
+  // need installs). `npm ci --no-audit --no-fund --silent` is ~2-3s warm.
+  let needInstall = false;
+  try {
+    await fs.access(path.join(input.cloneDir, "package.json"));
+    try {
+      await fs.access(path.join(input.cloneDir, "node_modules"));
+    } catch {
+      needInstall = true;
+    }
+  } catch {
+    // no package.json — skip install entirely
+  }
+  if (needInstall) {
+    try {
+      await execFile("npm", ["ci", "--no-audit", "--no-fund", "--silent"], {
+        cwd: input.cloneDir,
+        timeout: 5 * 60 * 1000,
+        maxBuffer: 32 * 1024 * 1024,
+      });
+    } catch (err) {
+      return {
+        passed: 0,
+        failed: 0,
+        errored: 0,
+        total: 0,
+        applyCleanly,
+        runtimeMs: Date.now() - start,
+        errorReason: `npm ci failed: ${(err as { stderr?: string }).stderr ?? (err as Error).message}`,
+      };
+    }
+  }
+
   // Step 2: copy hidden tests into the clone.
   const destDir = path.join(input.cloneDir, destRelDir);
   const copiedRelPaths: string[] = [];

@@ -13,8 +13,11 @@ feature-plans/issue-179-leg2-bundle/
 ├── agents-spec-phase3.json            (88 KB) — full spec (36 entries, both legs combined)
 ├── trims-phase3/                      (576 KB, 18 files) — pre-generated trim CLAUDE.mds
 ├── leg-1-curve-study-mcp.json         (56 KB) — leg-1 fit output (linear-log, 108 cells, $123.70)
-├── leg-1-logs.tar.gz                  (60 KB compressed → 860 KB extracted, 109 files) — per-cell spawn logs from leg 1 (tarballed because *.log is in .gitignore)
 └── combine-legs.cjs                    — Node helper: aggregates leg-1 + leg-2 logs, fits linear-log, writes combined output
+
+(`leg-1-logs.tar.gz` was stripped after K=13 shipped — the leg-1 cells are no longer
+needed for re-runs. The fit output `leg-1-curve-study-mcp.json` retains the
+distilled per-cell summary that drove the curve.)
 ```
 
 ## Prerequisites on the executing agent
@@ -41,9 +44,10 @@ cp feature-plans/issue-179-leg2-bundle/parent-agent-916a-CLAUDE.md agents/agent-
 cp feature-plans/issue-179-leg2-bundle/trims-phase3/*.md feature-plans/issue-179-data/trims-phase3/
 cp feature-plans/issue-179-leg2-bundle/agents-spec-phase3*.json feature-plans/issue-179-data/
 
-# Leg-1 cell logs (extract tarball — *.log is in .gitignore so the bundle ships it as .tar.gz)
-tar xzf feature-plans/issue-179-leg2-bundle/leg-1-logs.tar.gz -C feature-plans/issue-179-leg2-bundle/
-cp feature-plans/issue-179-leg2-bundle/leg-1-logs/*.log feature-plans/issue-179-data/logs-mcp/
+# Leg-1 cell logs (the original `leg-1-logs.tar.gz` was stripped post-K=13;
+# only the distilled fit JSON remains. To re-run the leg-1 dispatch from
+# scratch, follow the leg-2 dispatch procedure below against the vp-mcp
+# issues + agents-spec-phase3-mcp.json instead.)
 cp feature-plans/issue-179-leg2-bundle/leg-1-curve-study-mcp.json feature-plans/issue-179-data/curve-study-mcp.json
 ```
 

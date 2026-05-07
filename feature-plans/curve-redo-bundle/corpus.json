@@ -1,11 +1,11 @@
 {
-  "_comment": "Curve-redo experiment corpus. 13 issues split across 2 legs (vp-mcp / vp-dev-agents). Each cell runs ISOLATED (no target-repo CLAUDE.md, no user-global CLAUDE.md — only per-agent CLAUDE.md per the size axis). Closed issues replay-rollback to baseSha (the codebase right before the fix landed). Open issues run against current main. Quality scoring: A (judge, 0-50) + B (test pass rate, 0-50) = 0-100; pushback uses 2A.",
+  "_comment": "Curve-redo experiment corpus. 13 issues split across 2 legs (vp-mcp / vp-dev-agents). Each cell runs ISOLATED (no target-repo CLAUDE.md, no user-global CLAUDE.md \u2014 only per-agent CLAUDE.md per the size axis). Closed issues replay-rollback to baseSha (the codebase right before the fix landed). Open issues run against current main. Quality scoring: A (judge, 0-50) + B (test pass rate, 0-50) = 0-100; pushback uses 2A.",
   "model": "claude-sonnet-4-6",
   "trims": {
     "agentsSpec": "feature-plans/issue-179-leg2-bundle/agents-spec-phase3.json",
     "trimsDir": "feature-plans/issue-179-leg2-bundle/trims-phase3",
     "parentSnapshot": "feature-plans/issue-179-leg2-bundle/parent-agent-916a-CLAUDE.md",
-    "_comment": "18 trim agents at 6 sizes (~6KB, 14KB, 22KB, 35KB, 50KB, 58KB) × 3 seeds. Same trims used for #179 K=13 — direct comparability."
+    "_comment": "18 trim agents at 6 sizes (~6KB, 14KB, 22KB, 35KB, 50KB, 58KB) \u00d7 3 seeds. Same trims used for #179 K=13 \u2014 direct comparability."
   },
   "issues": [
     {
@@ -15,8 +15,8 @@
       "leg": 1,
       "decisionClass": "pushback",
       "state": "open",
-      "title": "Track MarginFi SDK stale IDL — second unknown OracleSetup variant (15) observed on mainnet",
-      "_comment": "Pushback-class — dependency tracker. Agent should defer to upstream fix, not implement."
+      "title": "Track MarginFi SDK stale IDL \u2014 second unknown OracleSetup variant (15) observed on mainnet",
+      "_comment": "Pushback-class \u2014 dependency tracker. Agent should defer to upstream fix, not implement."
     },
     {
       "issueId": 162,
@@ -25,8 +25,8 @@
       "leg": 1,
       "decisionClass": "pushback",
       "state": "open",
-      "title": "chore(deps): track upstream fix for bigint-buffer toBigIntLE() overflow (GHSA-3gc7-fjrx-p6mg) — 12 transitive high-severity advisories",
-      "_comment": "Pushback-class — dependency tracker."
+      "title": "chore(deps): track upstream fix for bigint-buffer toBigIntLE() overflow (GHSA-3gc7-fjrx-p6mg) \u2014 12 transitive high-severity advisories",
+      "_comment": "Pushback-class \u2014 dependency tracker."
     },
     {
       "issueId": 565,
@@ -35,7 +35,7 @@
       "leg": 1,
       "decisionClass": "implement",
       "state": "open",
-      "title": "MCP/skill: read-only data-plane has no integrity check — daily briefing, tax stance, market narrative all spoofable"
+      "title": "MCP/skill: read-only data-plane has no integrity check \u2014 daily briefing, tax stance, market narrative all spoofable"
     },
     {
       "issueId": 574,
@@ -45,7 +45,7 @@
       "decisionClass": "pushback",
       "state": "open",
       "title": "MCP: resolve_ens_name / reverse_resolve_ens have no agent-side or multi-RPC verification",
-      "_comment": "Pushback-class — rogue-MCP threat; cross-repo scope split."
+      "_comment": "Pushback-class \u2014 rogue-MCP threat; cross-repo scope split."
     },
     {
       "issueId": 649,
@@ -85,7 +85,8 @@
       "state": "closed",
       "closedByPr": 171,
       "baseSha": "f9bbe7b9a1de",
-      "title": "compact-claude-md: --allow-pair-clusters opt-in for clean 2-section near-duplicates"
+      "title": "compact-claude-md: --allow-pair-clusters opt-in for clean 2-section near-duplicates",
+      "testsDestRelDir": "src/agent"
     },
     {
       "issueId": 172,
@@ -96,7 +97,8 @@
       "state": "closed",
       "closedByPr": 174,
       "baseSha": "22d83f74e891",
-      "title": "feat: vp-dev agents tighten-claude-md — Phase A advisory (dry-run only)"
+      "title": "feat: vp-dev agents tighten-claude-md \u2014 Phase A advisory (dry-run only)",
+      "testsDestRelDir": "src/agent"
     },
     {
       "issueId": 178,
@@ -107,7 +109,8 @@
       "state": "closed",
       "closedByPr": 184,
       "baseSha": "d383beb10a87",
-      "title": "feat: Phase 1 — per-section utility-scoring data collection (state + summarizer hook)"
+      "title": "feat: Phase 1 \u2014 per-section utility-scoring data collection (state + summarizer hook)",
+      "testsDestRelDir": "src/state"
     },
     {
       "issueId": 180,
@@ -118,7 +121,8 @@
       "state": "closed",
       "closedByPr": 208,
       "baseSha": "6f2b581db8ba",
-      "title": "feat: Phase 3 — `vp-dev agents assess-claude-md` advisory output"
+      "title": "feat: Phase 3 \u2014 `vp-dev agents assess-claude-md` advisory output",
+      "testsDestRelDir": "src/agent"
     },
     {
       "issueId": 185,
@@ -129,7 +133,8 @@
       "state": "closed",
       "closedByPr": 211,
       "baseSha": "418faff75f8b",
-      "title": "feat: pre-dispatch dependency check — defer issues whose body references an open prerequisite"
+      "title": "feat: pre-dispatch dependency check \u2014 defer issues whose body references an open prerequisite",
+      "testsDestRelDir": "src/orchestrator"
     },
     {
       "issueId": 186,
@@ -140,7 +145,8 @@
       "state": "closed",
       "closedByPr": 206,
       "baseSha": "834d80f6ab80",
-      "title": "feat: load user global `~/.claude/CLAUDE.md` into the agent prompt as a third layer"
+      "title": "feat: load user global `~/.claude/CLAUDE.md` into the agent prompt as a third layer",
+      "testsDestRelDir": "src/agent"
     }
   ]
 }

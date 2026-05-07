@@ -29,8 +29,13 @@ const execFile = promisify(execFileCb);
 export type Framework = "node-test" | "vitest";
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_NODE_TEST_TEMPLATE = "npx --yes tsx --test ${testsGlob}";
-const DEFAULT_VITEST_TEMPLATE = "npx --yes vitest run ${testsDir}";
+// Default templates use ${testFiles} (explicit list of copied hidden tests)
+// so the framework runs ONLY hidden tests, even when --tests-dest-rel-dir
+// places them next to existing source-tree tests (e.g. `src/agent/` already
+// has the repo's own *.test.ts files). The ${testsGlob} / ${testsDir}
+// substitutions are kept for backward-compat with custom --test-cmd users.
+const DEFAULT_NODE_TEST_TEMPLATE = "npx --yes tsx --test ${testFiles}";
+const DEFAULT_VITEST_TEMPLATE = "npx --yes vitest run ${testFiles}";
 
 export interface RunHiddenTestsInput {
   /**
@@ -54,6 +59,15 @@ export interface RunHiddenTestsInput {
   testCmd?: string;
   /** When true, skip diff application (counts baseline pass rate). */
   baselineOnly?: boolean;
+  /**
+   * Clone-relative directory the hidden tests are copied into before the
+   * framework runs. Default `curve-redo-hidden-tests`. Set per-issue (via
+   * the corpus's `testsDestRelDir`) when generated tests use sibling
+   * imports (`./<module>.js`) that match the codebase's source-tree
+   * colocation pattern — placing tests next to the impl in `src/agent/`,
+   * `src/state/`, etc. lets sibling resolution succeed.
+   */
+  testsDestRelDir?: string;
   /** Test seam — substitute the framework command in unit tests. */
   execTestCommand?: ExecTestCommand;
 }
@@ -88,12 +102,13 @@ export type ExecTestCommand = (args: {
   timeoutMs: number;
 }) => Promise<ExecTestCommandResult>;
 
-const DEST_SUBDIR = "curve-redo-hidden-tests";
+const DEFAULT_DEST_SUBDIR = "curve-redo-hidden-tests";
 
 export async function runHiddenTests(input: RunHiddenTestsInput): Promise<RunHiddenTestsResult> {
   const start = Date.now();
   const exec = input.execTestCommand ?? defaultExecTestCommand;
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const destRelDir = input.testsDestRelDir ?? DEFAULT_DEST_SUBDIR;
 
   // Step 1: optionally apply the cell's diff.
   let applyCleanly = true;
@@ -121,22 +136,28 @@ export async function runHiddenTests(input: RunHiddenTestsInput): Promise<RunHid
   }
 
   // Step 2: copy hidden tests into the clone.
-  const destDir = path.join(input.cloneDir, DEST_SUBDIR);
+  const destDir = path.join(input.cloneDir, destRelDir);
+  const copiedRelPaths: string[] = [];
   try {
-    await fs.rm(destDir, { recursive: true, force: true });
+    // Only clear destDir when it's the default sandbox subdir. When the
+    // operator points us at an existing source dir (e.g. `src/agent`), we
+    // copy in alongside whatever's already there — clearing would wipe
+    // the impl files the tests need to import.
+    if (destRelDir === DEFAULT_DEST_SUBDIR) {
+      await fs.rm(destDir, { recursive: true, force: true });
+    }
     await fs.mkdir(destDir, { recursive: true });
     const entries = await fs.readdir(input.testsDir, { withFileTypes: true });
-    let copiedCount = 0;
     for (const e of entries) {
       if (e.isFile() && /\.(test|spec)\.tsx?$/.test(e.name)) {
         await fs.copyFile(
           path.join(input.testsDir, e.name),
           path.join(destDir, e.name),
         );
-        copiedCount += 1;
+        copiedRelPaths.push(`${destRelDir}/${e.name}`);
       }
     }
-    if (copiedCount === 0) {
+    if (copiedRelPaths.length === 0) {
       return {
         passed: 0,
         failed: 0,
@@ -161,9 +182,13 @@ export async function runHiddenTests(input: RunHiddenTestsInput): Promise<RunHid
 
   // Step 3: run the framework command.
   const template = input.testCmd ?? defaultCommandTemplate(input.framework);
+  // ${testFiles} is the explicit list of copied hidden tests — robust when
+  // the dest dir already contains other *.test.ts files (e.g. when copying
+  // into `src/agent/` so sibling imports resolve).
   const cmd = template
-    .replace(/\$\{testsGlob\}/g, `${DEST_SUBDIR}/*.test.ts`)
-    .replace(/\$\{testsDir\}/g, DEST_SUBDIR);
+    .replace(/\$\{testFiles\}/g, copiedRelPaths.join(" "))
+    .replace(/\$\{testsGlob\}/g, `${destRelDir}/*.test.ts`)
+    .replace(/\$\{testsDir\}/g, destRelDir);
   let runResult: ExecTestCommandResult;
   try {
     runResult = await exec({ cmd, cwd: input.cloneDir, timeoutMs });

@@ -209,6 +209,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
         await captureWorktreeDiff({
           worktreePath: worktree.path,
           outPath: input.replayMode.captureDiffPath,
+          baseSha: input.replayMode.baseSha,
         });
         input.logger.info("agent.replay_diff_captured", {
           agentId: input.agent.agentId,

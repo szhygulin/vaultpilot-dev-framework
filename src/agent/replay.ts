@@ -37,14 +37,17 @@ export async function applyReplayRollback(opts: {
 }
 
 /**
- * Capture the worktree's diff (modified + new files) and write it to
- * `outPath`. The output feeds the test-runner and reasoning judge in later
- * phases.
+ * Capture the worktree's diff (modified + new files, committed + uncommitted)
+ * and write it to `outPath`. The output feeds the test-runner and reasoning
+ * judge in later phases.
  *
- * Approach: stage everything with `git add -A`, then emit `git diff --cached`.
- * Staging first ensures newly-created tracked files (which `git diff HEAD`
- * alone would miss) appear in the output. The worktree is about to be torn
- * down by removeWorktree, so the index mutation has no lasting effect.
+ * Approach: stage everything with `git add -A`, then emit `git diff --cached
+ * <baseSha>`. Staging first ensures newly-created tracked files (which a
+ * HEAD-only diff would miss) appear in the output; diffing against the
+ * replay base SHA captures both committed work (the coding agent typically
+ * runs `git commit` on its branch) AND any leftover uncommitted edits in the
+ * same diff. Without `baseSha`, `git diff --cached` is HEAD-relative and
+ * silently drops the entire commit the agent just made.
  *
  * Parent directory of `outPath` is created if missing. `maxBuffer` is set
  * to 32 MiB — diffs from a 50-turn coding-agent run rarely exceed a few KB,
@@ -53,13 +56,12 @@ export async function applyReplayRollback(opts: {
 export async function captureWorktreeDiff(opts: {
   worktreePath: string;
   outPath: string;
+  baseSha?: string;
 }): Promise<void> {
   await fs.mkdir(path.dirname(opts.outPath), { recursive: true });
   await execFile("git", ["-C", opts.worktreePath, "add", "-A"]);
-  const { stdout } = await execFile(
-    "git",
-    ["-C", opts.worktreePath, "diff", "--cached"],
-    { maxBuffer: 32 * 1024 * 1024 },
-  );
+  const args = ["-C", opts.worktreePath, "diff", "--cached"];
+  if (opts.baseSha) args.push(opts.baseSha);
+  const { stdout } = await execFile("git", args, { maxBuffer: 32 * 1024 * 1024 });
   await fs.writeFile(opts.outPath, stdout);
 }

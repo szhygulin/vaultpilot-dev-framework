@@ -113,6 +113,8 @@ Hidden tests are committed in `feature-plans/curve-redo-bundle/curve-redo-tests/
 
 `vp-dev research curve-study` already hardcodes CLAUDE.md isolation (`suppressTargetClaudeMd: true`) per [#216](https://github.com/szhygulin/vaultpilot-development-agents/pull/216), so no flag needed for that. **But curve-study itself doesn't yet wire `--model` / `--replay-base-sha` / `--capture-diff-path` into the cell spawn.** For the curve-redo experiment, dispatch via a thin shell loop calling `vp-dev spawn` directly (one cell at a time, per-trim parallelism via `&`):
 
+`--capture-diff-path` defaults its diff base to the worktree's HEAD at spawn-start when `--replay-base-sha` isn't set, so leg-1 open-issue cells correctly capture committed agent work without operator-side wiring. Leg-2 closed-issue cells still pass `--replay-base-sha` for the rollback step.
+
 ```bash
 # Leg 1 dispatch script (run on machine 1)
 mkdir -p feature-plans/curve-redo-data/{logs-leg1,diffs-leg1,scores-leg1}

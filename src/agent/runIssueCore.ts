@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { ensureAgent, mutateRegistry } from "../state/registry.js";
 import { runCodingAgent } from "./codingAgent.js";
-import { applyReplayRollback, captureWorktreeDiff } from "./replay.js";
+import { applyReplayRollback, captureWorktreeDiff, readWorktreeHead } from "./replay.js";
 import {
   agentClaudeMdPath,
   appendBlock,
@@ -103,6 +103,10 @@ export interface RunIssueCoreInput {
    *   - after the coding agent finishes, the worktree's diff (modified +
    *     newly-staged tracked files) is written to `captureDiffPath` so
    *     downstream test-runner / reasoning-judge phases can score it.
+   *   - the diff capture's base is the supplied `baseSha` if present, else
+   *     the worktree's HEAD SHA snapshotted just before the agent runs.
+   *     Open-issue cells (no `baseSha`) thus capture committed agent work
+   *     without needing operator-side wiring.
    * Undefined for normal callers — preserves pre-curve-redo behavior.
    */
   replayMode?: {
@@ -183,6 +187,19 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       });
     }
 
+    // Snapshot the worktree HEAD BEFORE the coding agent runs (after any
+    // replay rollback). captureWorktreeDiff diffs against this so committed
+    // work the agent makes on its branch is visible in the captured diff
+    // even when the caller didn't pass an explicit baseSha. Without this
+    // snapshot, `git diff --cached` is HEAD-relative and silently drops the
+    // agent's commit (the worktree is clean post-commit). Skipped when
+    // captureDiffPath is unset to keep normal callers shell-free.
+    let captureBaseSha: string | undefined;
+    if (input.replayMode?.captureDiffPath) {
+      captureBaseSha =
+        input.replayMode.baseSha ?? (await readWorktreeHead(worktree.path));
+    }
+
     const result = await runCodingAgent({
       agent: input.agent,
       issueId: input.issue.id,
@@ -209,7 +226,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
         await captureWorktreeDiff({
           worktreePath: worktree.path,
           outPath: input.replayMode.captureDiffPath,
-          baseSha: input.replayMode.baseSha,
+          baseSha: captureBaseSha,
         });
         input.logger.info("agent.replay_diff_captured", {
           agentId: input.agent.agentId,

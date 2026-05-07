@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { applyReplayRollback, captureWorktreeDiff } from "./replay.js";
+import { applyReplayRollback, captureWorktreeDiff, readWorktreeHead } from "./replay.js";
 
 const execFile = promisify(execFileCb);
 
@@ -143,6 +143,47 @@ test("captureWorktreeDiff: with baseSha, captures committed + uncommitted edits 
     assert.match(diff, /\+first edit/);
     assert.match(diff, /diff --git a\/leftover\.txt b\/leftover\.txt/);
     assert.match(diff, /\+uncommitted/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("readWorktreeHead: returns the worktree's current HEAD SHA", async () => {
+  const { repoRoot, seedSha, cleanup } = await makeFixtureRepo();
+  try {
+    const head = await readWorktreeHead(repoRoot);
+    assert.equal(head, seedSha);
+    // Advance HEAD with a second commit and re-read.
+    await fs.writeFile(path.join(repoRoot, "seed.txt"), "second\n");
+    await execFile("git", ["-C", repoRoot, "add", "-A"]);
+    await execFile("git", ["-C", repoRoot, "commit", "-q", "-m", "second"]);
+    const headAfter = await readWorktreeHead(repoRoot);
+    assert.notEqual(headAfter, seedSha);
+    assert.match(headAfter, /^[0-9a-f]{40}$/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("captureWorktreeDiff: WITHOUT baseSha after commit returns EMPTY diff (the bug runIssueCore's HEAD snapshot works around)", async () => {
+  // This test pins down the bug shape that motivates the runIssueCore
+  // snapshot: when the agent commits its work and capture is invoked
+  // without a baseSha, `git diff --cached` is HEAD-relative and silently
+  // drops the entire commit. The fix lives in runIssueCore (it snapshots
+  // HEAD pre-agent and threads it as baseSha); this test asserts the
+  // failure mode the snapshot prevents.
+  const { repoRoot, cleanup } = await makeFixtureRepo();
+  try {
+    await execFile("git", ["-C", repoRoot, "checkout", "-q", "-b", "agent-branch"]);
+    await fs.writeFile(path.join(repoRoot, "seed.txt"), "agent-edited\n");
+    await execFile("git", ["-C", repoRoot, "add", "-A"]);
+    await execFile("git", ["-C", repoRoot, "commit", "-q", "-m", "agent work"]);
+
+    const outPath = path.join(repoRoot, "out", "no-base.diff");
+    await captureWorktreeDiff({ worktreePath: repoRoot, outPath });
+
+    const diff = await fs.readFile(outPath, "utf-8");
+    assert.equal(diff, "", "without baseSha the agent's commit is silently dropped");
   } finally {
     await cleanup();
   }

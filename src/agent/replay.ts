@@ -37,6 +37,18 @@ export async function applyReplayRollback(opts: {
 }
 
 /**
+ * Read the worktree's current HEAD SHA. The orchestrator snapshots HEAD
+ * pre-agent (after any replay rollback) so captureWorktreeDiff has a stable
+ * base even when the caller didn't pass an explicit replay baseSha — without
+ * this, open-issue cells whose agent commits its work emit empty diffs
+ * because `git diff --cached` is HEAD-relative.
+ */
+export async function readWorktreeHead(worktreePath: string): Promise<string> {
+  const { stdout } = await execFile("git", ["-C", worktreePath, "rev-parse", "HEAD"]);
+  return stdout.trim();
+}
+
+/**
  * Capture the worktree's diff (modified + new files, committed + uncommitted)
  * and write it to `outPath`. The output feeds the test-runner and reasoning
  * judge in later phases.

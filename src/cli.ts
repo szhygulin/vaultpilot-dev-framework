@@ -634,7 +634,7 @@ export function buildCli(): Command {
     .addCommand(
       new Command("curve-study")
         .description(
-          "Refit src/util/contextCostCurve.ts (CLAUDE.md size → accuracyDegradationFactor). Operator pre-trims the parent dev-agent into N forks at chosen byte budgets and registers them; this command dispatches all (devAgent × issue) cells with 4-way parallelism + per-dev-agent serialization, aggregates outcomes, scores quality per #179, fits an OLS polynomial regression, and writes a JSON proposal the operator hand-merges into CONTEXT_COST_SAMPLES.",
+          "Refit src/util/contextCostCurve.ts (CLAUDE.md size → accuracyDegradationFactor). Operator pre-trims the parent dev-agent into N forks at chosen byte budgets and registers them; this command dispatches all (devAgent × issue) cells with 4-way parallelism + per-dev-agent serialization, aggregates outcomes, scores quality per #179, fits an OLS polynomial regression, and writes a JSON proposal the operator hand-merges into CONTEXT_COST_SAMPLES. Each cell runs ISOLATED — neither the live target-repo CLAUDE.md nor the user-global ~/.claude/CLAUDE.md is loaded. Effective context per cell = per-agent CLAUDE.md only, matching the size axis we're varying. Isolation is hardcoded; running loaded would distort the curve by an operator-specific amount.",
         )
         .requiredOption("--agents-spec <path>", "JSON file: array of {devAgentId, sizeBytes, clonePath}")
         .requiredOption("--target-repo <owner/repo>", "GitHub target repo (e.g. szhygulin/vaultpilot-mcp-smoke-test)")
@@ -651,10 +651,6 @@ export function buildCli(): Command {
         .option(
           "--issue-body-only",
           "Forward --issue-body-only to each cell's spawn. Step 1 fetches body only — no comments. Required for closed-issue dispatches so the resolution-PR link doesn't contaminate the measurement.",
-        )
-        .option(
-          "--no-target-claude-md",
-          "Forward --no-target-claude-md to each cell's spawn. Suppress the live target-repo CLAUDE.md prepend so effective context size matches the per-agent CLAUDE.md size we're varying.",
         )
         .option(
           "--max-total-cost-usd <usd>",
@@ -4220,8 +4216,6 @@ interface ResearchCurveStudyOpts {
   dryRun: boolean;
   allowClosedIssue?: boolean;
   issueBodyOnly?: boolean;
-  /** commander's --no-target-claude-md sets `targetClaudeMd: false`. */
-  targetClaudeMd?: boolean;
   maxTotalCostUsd?: number;
   mode: string;
   collisionPolicy: string;
@@ -4286,7 +4280,14 @@ async function cmdResearchCurveStudy(opts: ResearchCurveStudyOpts): Promise<void
     dryRun: opts.dryRun,
     allowClosedIssue: !!opts.allowClosedIssue,
     issueBodyOnly: !!opts.issueBodyOnly,
-    suppressTargetClaudeMd: opts.targetClaudeMd === false,
+    // Hardcoded isolation: each cell runs without the live target-repo CLAUDE.md
+    // or the user-global ~/.claude/CLAUDE.md. Effective context = per-agent
+    // CLAUDE.md only, matching the size axis we're varying. Loaded mode is
+    // operator-specific (user-global content varies per individual) and would
+    // dilute the per-agent signal — the curve is consumed by the orchestrator's
+    // pickAgents at decision time, where target + global are constant across
+    // candidates and per-agent bytes are the only variable that differs.
+    suppressTargetClaudeMd: true,
     maxTotalCostUsd: opts.maxTotalCostUsd,
     logsDir: opts.logsDir,
     outputPath: opts.output,

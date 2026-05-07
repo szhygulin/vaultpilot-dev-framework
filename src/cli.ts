@@ -482,6 +482,34 @@ export function buildCli(): Command {
         .action(async (domain, opts) => {
           await cmdLessonsTrim(domain, opts);
         }),
+    )
+    .addCommand(
+      new Command("clear-local-queue")
+        .description(
+          "Drop already-merged entries from state/local-claude-md-pending.md (issue #202, follow-up to PR #196). Compares each queue entry's heading + body-prefix against project-local CLAUDE.md sections via Jaccard; entries above threshold are considered already promoted. Default: advisory (lists what would be removed). With --apply: mutates the queue file under tmp-then-rename.",
+        )
+        .option(
+          "--all",
+          "Operator override: drop EVERY queue entry (e.g. after a manual cleanup pass). Mutually exclusive with --merged.",
+        )
+        .option(
+          "--merged",
+          "Drop only entries with similarity ≥ threshold to a project-local CLAUDE.md section (default mode when neither --all nor --merged is passed)",
+        )
+        .option(
+          "--threshold <n>",
+          "Override Jaccard threshold (0..1; default 0.55, env: VP_DEV_QUEUE_CLEAR_JACCARD_MIN)",
+          parseUnitInterval,
+        )
+        .option(
+          "--apply",
+          "Actually mutate the queue file (default: list-only)",
+        )
+        .option("--yes", "Skip the y/N confirmation in --apply mode (required for non-TTY environments)")
+        .option("--json", "Print machine-readable JSON output")
+        .action(async (opts) => {
+          await cmdLessonsClearLocalQueue(opts);
+        }),
     );
   program.addCommand(lessonsCmd);
 
@@ -3487,6 +3515,204 @@ async function cmdLessonsTrim(domain: string, opts: LessonsTrimOpts): Promise<vo
   );
 }
 
+interface LessonsClearLocalQueueOpts {
+  all?: boolean;
+  merged?: boolean;
+  threshold?: number;
+  apply?: boolean;
+  yes?: boolean;
+  json?: boolean;
+}
+
+async function cmdLessonsClearLocalQueue(
+  opts: LessonsClearLocalQueueOpts,
+): Promise<void> {
+  if (opts.all && opts.merged) {
+    process.stderr.write(
+      "ERROR: --all and --merged are mutually exclusive.\n",
+    );
+    process.exit(2);
+  }
+  // Default mode: --merged. The advisory output still surfaces the full
+  // entry count + match count, so the operator sees how many entries
+  // would NOT be dropped (i.e. those still pending PR / merge).
+  const mode: "all" | "merged" = opts.all ? "all" : "merged";
+  const {
+    LOCAL_CLAUDE_QUEUE_FILE,
+  } = await import("./agent/localClaudeQueue.js");
+  const {
+    DEFAULT_QUEUE_CLEAR_JACCARD_MIN,
+    clearLocalClaudeQueue,
+    detectMergedQueueEntries,
+    parseQueueEntries,
+    resolveQueueClearJaccardMin,
+  } = await import("./agent/localClaudeQueueClear.js");
+
+  const threshold = opts.threshold ?? resolveQueueClearJaccardMin();
+  const queueFilePath = LOCAL_CLAUDE_QUEUE_FILE;
+  const claudeMdPath = "CLAUDE.md";
+
+  // Read current state for advisory output. Both file-not-found cases are
+  // benign: missing queue → nothing to do; missing CLAUDE.md → no merges.
+  let queueContent = "";
+  try {
+    queueContent = await fs.readFile(queueFilePath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  let claudeMd = "";
+  try {
+    claudeMd = await fs.readFile(claudeMdPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  const allEntries = parseQueueEntries(queueContent);
+  const detected =
+    mode === "merged"
+      ? detectMergedQueueEntries({
+          queueContent,
+          claudeMd,
+          jaccardMin: threshold,
+        })
+      : { entries: allEntries, merged: [] };
+  const candidatesToRemove =
+    mode === "all" ? allEntries : detected.merged.map((m) => m.entry);
+
+  if (opts.json && !opts.apply) {
+    const payload = {
+      mode,
+      threshold: mode === "merged" ? threshold : undefined,
+      defaultThreshold: DEFAULT_QUEUE_CLEAR_JACCARD_MIN,
+      queueFilePath,
+      claudeMdPath,
+      totalEntries: allEntries.length,
+      candidatesToRemove: candidatesToRemove.length,
+      matches: detected.merged.map((m) => ({
+        sourceHeader: m.entry.header,
+        heading: m.entry.heading,
+        similarity: Number(m.similarity.toFixed(4)),
+        matchedSectionHeading: m.matchedSection.heading,
+      })),
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    return;
+  }
+
+  if (allEntries.length === 0) {
+    process.stdout.write(
+      `Queue is empty (${queueFilePath}). Nothing to clear.\n`,
+    );
+    return;
+  }
+
+  // Advisory header.
+  process.stdout.write(
+    `Queue: ${queueFilePath} (${allEntries.length} entries, ${queueContent.length} bytes)\n`,
+  );
+  if (mode === "merged") {
+    process.stdout.write(
+      `Mode: --merged (threshold ${threshold}; project CLAUDE.md: ${
+        claudeMd.length > 0 ? `${claudeMd.length} bytes` : "MISSING — no merges detectable"
+      })\n`,
+    );
+    if (detected.merged.length === 0) {
+      process.stdout.write(
+        "No queue entries match a section in project-local CLAUDE.md above threshold. Nothing to drop.\n",
+      );
+      return;
+    }
+    process.stdout.write(
+      `\n${detected.merged.length} entries look already-merged (similarity ≥ ${threshold}):\n\n`,
+    );
+    printTable(
+      ["heading", "similarity", "matched-section", "source"],
+      detected.merged.map((m) => [
+        truncate(m.entry.heading || "(no heading)", 40),
+        m.similarity.toFixed(3),
+        truncate(m.matchedSection.heading, 40),
+        extractSourceFromHeader(m.entry.header),
+      ]),
+    );
+  } else {
+    process.stdout.write("Mode: --all (operator override; will drop EVERY entry)\n\n");
+    printTable(
+      ["heading", "source"],
+      allEntries.map((e) => [
+        truncate(e.heading || "(no heading)", 50),
+        extractSourceFromHeader(e.header),
+      ]),
+    );
+  }
+
+  if (!opts.apply) {
+    process.stdout.write(
+      "\nList-only (default). Re-run with --apply to actually mutate the queue file.\n",
+    );
+    return;
+  }
+
+  // --apply path. Confirm via TTY prompt unless --yes was passed. Mirrors
+  // `cleanup incomplete-branches` rather than the compact/prune-lessons
+  // token-gate pattern: queue is gitignored append-only state, false
+  // positives are recoverable from the rendered CLAUDE.md content, and the
+  // proposal-vs-current-file drift invariant doesn't apply here.
+  if (!opts.yes) {
+    if (!process.stdin.isTTY) {
+      process.stderr.write(
+        "ERROR: stdin is not a TTY and --yes was not passed. Re-run with --yes for non-interactive use.\n",
+      );
+      process.exit(2);
+    }
+    const { createInterface } = await import("node:readline/promises");
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    let answer: string;
+    try {
+      answer = (
+        await rl.question(
+          `\nDrop ${candidatesToRemove.length} entry/entries from ${queueFilePath}? [y/N] `,
+        )
+      )
+        .trim()
+        .toLowerCase();
+    } finally {
+      rl.close();
+    }
+    if (answer !== "y" && answer !== "yes") {
+      process.stdout.write("Aborted — no mutation.\n");
+      return;
+    }
+  } else {
+    process.stdout.write("\nAuto-confirmed (--yes).\n");
+  }
+
+  const result = await clearLocalClaudeQueue({
+    mode,
+    jaccardMin: mode === "merged" ? threshold : undefined,
+  });
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(
+    `\nQueue cleared: removed ${result.removed} entry/entries, ${result.remaining} remaining. (${result.bytesBefore} -> ${result.bytesAfter} bytes)\n`,
+  );
+}
+
+function extractSourceFromHeader(header: string): string {
+  const m = header.match(/source=(\S+)/);
+  return m ? m[1] : "(unknown)";
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 3) + "...";
+}
+
 function printTable(headers: string[], rows: string[][]): void {
   const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i]?.length ?? 0)));
   const fmt = (cells: string[]) =>
@@ -3500,6 +3726,15 @@ function parsePositive(value: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
     throw new Error(`Expected positive integer, got "${value}"`);
+  }
+  return n;
+}
+
+/** Parse a finite number in (0, 1]. Used by `lessons clear-local-queue --threshold`. */
+function parseUnitInterval(value: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0 || n > 1) {
+    throw new Error(`Expected finite number in (0, 1], got "${value}"`);
   }
   return n;
 }

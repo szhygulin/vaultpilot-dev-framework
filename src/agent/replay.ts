@@ -34,6 +34,20 @@ export async function applyReplayRollback(opts: {
   baseSha: string;
 }): Promise<void> {
   await execFile("git", ["-C", opts.worktreePath, "reset", "--hard", opts.baseSha]);
+  // Replay-mode invariant: the agent must encounter the pre-fix codebase
+  // state. Larger trim CLAUDE.mds carry a "sync to main before work" rule
+  // that, when followed, runs `git rebase origin/main` and undoes the
+  // rollback — corrupting the captured diff with every upstream commit
+  // (smoke 2026-05-07 saw 1433 files in a 58KB-trim cell vs 2 files in a
+  // 6KB-trim cell on the same issue). Strip the `origin` remote so any
+  // sync attempt fails fast. `--dry-run` already intercepts push; replay
+  // never reads from origin afterwards.
+  try {
+    await execFile("git", ["-C", opts.worktreePath, "remote", "remove", "origin"]);
+  } catch {
+    // remote may already be absent (e.g. subsequent cells reusing the same
+    // clone where a prior cell stripped it). Best-effort, idempotent.
+  }
 }
 
 /**

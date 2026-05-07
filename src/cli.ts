@@ -758,6 +758,57 @@ export function buildCli(): Command {
         .action(async (opts) => {
           await cmdResearchGenerateTests(opts);
         }),
+    )
+    .addCommand(
+      new Command("run-tests")
+        .description(
+          "Curve-redo Phase 1c: apply a captured cell diff to a fresh clone at the issue base SHA, copy the issue's hidden tests in, run the framework, and write the per-cell test-pass score JSON for Phase 1d's aggregator. Default test command: `npx --yes tsx --test ${testsGlob}` (node-test) / `npx --yes vitest run ${testsDir}` (vitest); override with --test-cmd.",
+        )
+        .option(
+          "--diff-path <path>",
+          "Cell's captured worktree diff (Phase 1a output). Omit when --baseline-only is set.",
+        )
+        .requiredOption("--tests-dir <path>", "Directory with the issue's hidden .test.ts files")
+        .requiredOption(
+          "--clone-dir <path>",
+          "Fresh clone at the issue's base SHA (operator-managed; testRunner does not clone).",
+        )
+        .requiredOption("--framework <name>", "'node-test' or 'vitest'")
+        .requiredOption("--out <path>", "Where to write the per-cell test-pass score JSON")
+        .option("--timeout-ms <n>", "Per-cell test runtime cap (default 5 min).", parsePositive, 300000)
+        .option(
+          "--test-cmd <template>",
+          "Override the framework's command template. Substitutions: ${testsGlob}, ${testsDir}.",
+        )
+        .option("--baseline-only", "Skip diff application — count baseline pass rate.")
+        .action(async (opts) => {
+          await cmdResearchRunTests(opts);
+        }),
+    )
+    .addCommand(
+      new Command("grade-reasoning")
+        .description(
+          "Curve-redo Phase 1c: blinded Opus K=3 grading of a cell's diff (decision=implement) or pushback comment (decision=pushback). Output JSON has {median, scores, variance, rationales} for Phase 1d's aggregator. Agent IDs / branch names / replicate hints are stripped before sending — judges grade the artifact, not the agent.",
+        )
+        .requiredOption("--issue <n>", "Issue number (for body fetch)", parsePositive)
+        .requiredOption("--target-repo <owner/repo>", "GitHub target repo")
+        .requiredOption(
+          "--decision <name>",
+          "'implement' or 'pushback' (or 'error' to record a 0 score)",
+        )
+        .option(
+          "--diff-path <path>",
+          "Path to the cell's captured diff. Required when --decision implement.",
+        )
+        .option(
+          "--pushback-path <path>",
+          "Path to a file with the pushback comment text. Required when --decision pushback.",
+        )
+        .option("--k <n>", "Number of judge samples (default 3).", parsePositive, 3)
+        .requiredOption("--out <path>", "Where to write the per-cell judge score JSON")
+        .action(async (opts) => {
+          await cmdResearchGradeReasoning(opts);
+        }),
     );
   program.addCommand(researchCmd);
 
@@ -4386,4 +4437,99 @@ function printCurveSummary(
   for (const s of curve.samples) {
     process.stdout.write(`  { xBytes: ${s.xBytes}, factor: ${s.factor.toFixed(3)} },\n`);
   }
+}
+
+interface ResearchRunTestsOpts {
+  diffPath?: string;
+  testsDir: string;
+  cloneDir: string;
+  framework: string;
+  out: string;
+  timeoutMs: number;
+  testCmd?: string;
+  baselineOnly?: boolean;
+}
+
+async function cmdResearchRunTests(opts: ResearchRunTestsOpts): Promise<void> {
+  if (opts.framework !== "node-test" && opts.framework !== "vitest") {
+    process.stderr.write(
+      `ERROR: --framework must be 'node-test' or 'vitest', got '${opts.framework}'.\n`,
+    );
+    process.exit(2);
+  }
+  if (!opts.baselineOnly && !opts.diffPath) {
+    process.stderr.write(
+      `ERROR: --diff-path is required unless --baseline-only is set.\n`,
+    );
+    process.exit(2);
+  }
+  const { runHiddenTests } = await import("./research/curveStudy/testRunner.js");
+  const result = await runHiddenTests({
+    diffPath: opts.diffPath,
+    testsDir: opts.testsDir,
+    cloneDir: opts.cloneDir,
+    framework: opts.framework as "node-test" | "vitest",
+    timeoutMs: opts.timeoutMs,
+    testCmd: opts.testCmd,
+    baselineOnly: !!opts.baselineOnly,
+  });
+  await fs.mkdir(path.dirname(opts.out), { recursive: true });
+  await fs.writeFile(opts.out, JSON.stringify(result, null, 2) + "\n");
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  // Non-zero exit when the run failed structurally (apply / parse / timeout)
+  // so caller scripts can branch on it without re-parsing the JSON.
+  if (!result.applyCleanly || result.errorReason) process.exit(1);
+}
+
+interface ResearchGradeReasoningOpts {
+  issue: number;
+  targetRepo: string;
+  decision: string;
+  diffPath?: string;
+  pushbackPath?: string;
+  k: number;
+  out: string;
+}
+
+async function cmdResearchGradeReasoning(opts: ResearchGradeReasoningOpts): Promise<void> {
+  if (opts.decision !== "implement" && opts.decision !== "pushback" && opts.decision !== "error") {
+    process.stderr.write(
+      `ERROR: --decision must be 'implement', 'pushback', or 'error', got '${opts.decision}'.\n`,
+    );
+    process.exit(2);
+  }
+  const detail = await getIssueDetail(opts.targetRepo, opts.issue);
+  if (!detail) {
+    process.stderr.write(`ERROR: issue #${opts.issue} not found in ${opts.targetRepo}.\n`);
+    process.exit(2);
+  }
+  let diff: string | undefined;
+  let pushbackComment: string | undefined;
+  if (opts.decision === "implement") {
+    if (!opts.diffPath) {
+      process.stderr.write(`ERROR: --diff-path is required when --decision implement.\n`);
+      process.exit(2);
+    }
+    diff = await fs.readFile(opts.diffPath, "utf-8");
+  } else if (opts.decision === "pushback") {
+    if (!opts.pushbackPath) {
+      process.stderr.write(`ERROR: --pushback-path is required when --decision pushback.\n`);
+      process.exit(2);
+    }
+    pushbackComment = await fs.readFile(opts.pushbackPath, "utf-8");
+  }
+  const { gradeReasoning } = await import("./research/curveStudy/reasoningJudge.js");
+  const result = await gradeReasoning({
+    issueId: opts.issue,
+    issueTitle: detail.title,
+    issueBody: detail.body,
+    decision: opts.decision as "implement" | "pushback" | "error",
+    diff,
+    pushbackComment,
+    k: opts.k,
+  });
+  await fs.mkdir(path.dirname(opts.out), { recursive: true });
+  await fs.writeFile(opts.out, JSON.stringify(result, null, 2) + "\n");
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  if (result.isError) process.exit(1);
 }

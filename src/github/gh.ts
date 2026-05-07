@@ -51,24 +51,89 @@ export async function listOpenIssues(targetRepo: string): Promise<IssueSummary[]
   return records.map(toSummary);
 }
 
-export async function getIssue(targetRepo: string, number: number): Promise<IssueSummary | null> {
-  try {
-    const { stdout } = await execFile(
-      "gh",
-      [
-        "issue",
-        "view",
-        String(number),
-        "--repo",
-        targetRepo,
-        "--json",
-        "number,title,state,labels",
-      ],
-      { maxBuffer: 5 * 1024 * 1024 },
-    );
-    return toSummary(JSON.parse(stdout) as GhIssueRecord);
-  } catch {
-    return null;
+/**
+ * Default retry delays (ms) for `getIssue`. Two retries with a 2s/5s backoff —
+ * picked to ride out transient GitHub-side 404s / rate-limits / network
+ * hiccups without burning more than ~7s on a genuinely-missing issue.
+ *
+ * Issue #204: the curve-study leg-2 dispatch saw two cells exit `rc=2`
+ * with "issue not found" on issues that other cells in the same run had
+ * fetched successfully — a brief gh API hiccup. Without retries those
+ * cells were silently dropped from the scoring pass; with retries the
+ * `rc=2` outcome only fires on issues that genuinely cannot be fetched.
+ */
+const DEFAULT_GH_ISSUE_VIEW_RETRY_DELAYS_MS = [2000, 5000];
+
+export interface GetIssueOptions {
+  /**
+   * Per-attempt sleep durations (ms) between retries. The number of
+   * delays equals the number of retries; total attempts = `delays.length + 1`.
+   * Pass `[]` to disable retries (matches the legacy single-attempt
+   * behavior). Defaults to `DEFAULT_GH_ISSUE_VIEW_RETRY_DELAYS_MS`.
+   */
+  retryDelaysMs?: number[];
+  /**
+   * Sleep hook. Tests pass a synchronous-resolving stub so the retry
+   * loop runs at unit-test speed; production callers leave this unset.
+   */
+  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Fired once per retry attempt (after the failure, before the sleep).
+   * Optional visibility hook for run-level loggers; the function also
+   * writes a one-line breadcrumb to stderr unconditionally.
+   */
+  onRetry?: (attempt: number, err: unknown) => void;
+  /**
+   * Test-only override for the underlying `gh issue view` shell-out.
+   * Default invokes the real `gh` CLI. Underscored to signal "test seam,
+   * do not use from production code".
+   */
+  _fetch?: (targetRepo: string, number: number) => Promise<GhIssueRecord>;
+}
+
+async function fetchIssueRecord(targetRepo: string, number: number): Promise<GhIssueRecord> {
+  const { stdout } = await execFile(
+    "gh",
+    [
+      "issue",
+      "view",
+      String(number),
+      "--repo",
+      targetRepo,
+      "--json",
+      "number,title,state,labels",
+    ],
+    { maxBuffer: 5 * 1024 * 1024 },
+  );
+  return JSON.parse(stdout) as GhIssueRecord;
+}
+
+export async function getIssue(
+  targetRepo: string,
+  number: number,
+  opts?: GetIssueOptions,
+): Promise<IssueSummary | null> {
+  const delays = opts?.retryDelaysMs ?? DEFAULT_GH_ISSUE_VIEW_RETRY_DELAYS_MS;
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const fetchOnce = opts?._fetch ?? fetchIssueRecord;
+  const totalAttempts = delays.length + 1;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const rec = await fetchOnce(targetRepo, number);
+      return toSummary(rec);
+    } catch (err) {
+      if (attempt >= totalAttempts) return null;
+      const delay = delays[attempt - 1];
+      opts?.onRetry?.(attempt, err);
+      // Operator-visible breadcrumb so a mid-run gh hiccup shows up in
+      // the cell log instead of vanishing into the silent-null path.
+      // The issue (#204) traced two leg-2 `rc=2` cells back to exactly
+      // this gap — the retry is invisible without a log line here.
+      process.stderr.write(
+        `[gh] issue view ${targetRepo}#${number} failed (attempt ${attempt}/${totalAttempts}); retrying in ${delay}ms\n`,
+      );
+      await sleep(delay);
+    }
   }
 }
 

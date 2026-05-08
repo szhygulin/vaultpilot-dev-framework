@@ -1,0 +1,18 @@
+{
+  "_comment": "Manually-enriched labels for the 13 corpus issues, derived from issue titles to overlap with topical specialists' tag sets. Merged with live `gh issue view --json labels` output (deduped) by pick-specialists.cjs --labels-override. See feature-plans/curve-redo-specialist-followup-plan.md §'Findings from picker dry-run' (Option 2). Picker dry-run with these labels routes 13 issues across 10 distinct specialists; agent-92ff retains 1 (#649, cost-preview multi-chain — his strongest tag-overlap territory).",
+  "labels": {
+    "156": ["marginfi", "oracle-setup", "sdk-drift", "solana"],
+    "162": ["upstream-tracking", "upstream-gated", "advisory-layer", "tracker-issue"],
+    "565": ["data-source-attestation", "provenance-footer", "data-integrity", "rogue-mcp"],
+    "574": ["rpc-divergence-check", "ens-resolution", "rpc-integrity", "cross-rpc-divergence"],
+    "649": ["cost-preview-block", "tron-net-burn", "fee-preview", "multi-chain-cost"],
+    "665": ["pushback-hook", "advisory-only", "out-of-scope", "fdic-claim"],
+    "157": ["launch-breadcrumb", "progress-check-discoverability", "vp-dev-status", "vp-dev"],
+    "168": ["claude-md-compaction", "llm-merge-proposal", "section-verdict", "pair-clusters"],
+    "172": ["tighten-claude-md", "claude-md-tightening", "advisory-dry-run", "phase-a-formatter"],
+    "178": ["lesson-utility-scoring", "summarizer-hook", "agent-memory-health", "section-verdict"],
+    "180": ["claude-md-compaction", "lesson-utility-scoring", "summarizer-hook", "advisory-finding"],
+    "185": ["predecessor-check", "pre-dispatch-gate", "dependency-detection", "issue-body-parser"],
+    "186": ["claude-md-layering", "agent-prompt", "system-prompt", "user-global"]
+  }
+}

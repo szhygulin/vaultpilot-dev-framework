@@ -18,13 +18,22 @@ export interface TriageSkipped {
 // Per-issue cost estimate surfaced in the gate. One entry per dispatched
 // issue plus one per skipped-over-budget issue (issue #99). Read by the
 // renderer to show the user which issues fit the cost ceiling and which
-// don't, before y/N approval.
+// don't, before y/N approval. Issue #249 added the `"history-fallback"`
+// source variant: when no plan file is available, the estimator now uses
+// a rolling-history median across the last N completed runs instead of
+// the static $1.50 constant. The constant is reserved for first-install
+// (no completed runs on disk yet).
 export interface IssueCostForecastEntry {
   issueId: number;
   estimateUsd: number;
-  source: "plan" | "fallback";
+  source: "plan" | "fallback" | "history-fallback";
   fileCount?: number;
   planFile?: string;
+  // Set only when source === "history-fallback" — the number of
+  // historical runs that contributed to the median. Surfaced in the gate
+  // as `(rolling history, N runs)` so the operator sees the calibration
+  // provenance.
+  historySampleCount?: number;
 }
 
 // Issues filtered out because an open vp-dev PR already covers them. See
@@ -479,6 +488,15 @@ function formatIdList(ids: number[]): string {
 }
 
 function describeForecastSource(f: IssueCostForecastEntry): string {
+  if (f.source === "history-fallback") {
+    // Issue #249: rolling-history median replaces the static $1.50 constant
+    // when prior runs exist. Surfaces the sample count so the operator can
+    // judge how stable the calibration is — `1 run` is a single data point
+    // that may swing widely; `20 runs` is the smoothed steady state.
+    const n = f.historySampleCount ?? 0;
+    const label = n === 1 ? "1 run" : `${n} runs`;
+    return `(no plan; rolling history, ${label})`;
+  }
   if (f.source === "fallback") return "(no plan; fallback estimate)";
   return `(${f.fileCount ?? 0}-file plan)`;
 }

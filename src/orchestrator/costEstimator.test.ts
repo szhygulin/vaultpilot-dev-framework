@@ -1,11 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import {
   COST_PER_FILE_USD,
   FALLBACK_ESTIMATE_USD,
+  computeHistoryFallback,
   countDistinctFilePaths,
   estimateIssueCost,
   partitionByBudget,
+  weightedMedian,
+  type HistoryFallback,
   type IssueCostEstimate,
 } from "./costEstimator.js";
 import type { IssueSummary } from "../types.js";
@@ -211,4 +217,295 @@ test("partitionByBudget: equal-to-remaining estimate dispatches (boundary)", () 
   // existing exceedsBudget semantics in costTracker.ts.
   assert.equal(r.dispatch.length, 1);
   assert.equal(r.budgetExceededSkipped.length, 0);
+});
+
+// =====================================================================
+// Issue #249: rolling-history fallback
+// =====================================================================
+
+test("estimateIssueCost: history-fallback when no plan AND historyFallback provided", () => {
+  const history: HistoryFallback = { medianUsd: 5.12, sampleCount: 11 };
+  const e = estimateIssueCost({ historyFallback: history });
+  assert.equal(e.source, "history-fallback");
+  assert.equal(e.estimateUsd, 5.12);
+  assert.equal(e.historySampleCount, 11);
+  assert.equal(e.fileCount, undefined);
+  assert.equal(e.planFile, undefined);
+});
+
+test("estimateIssueCost: history-fallback when plan has zero file paths", () => {
+  // Mirrors the "fallback when plan has no recognizable file paths" case but
+  // with calibration data — the prose-only plan should NOT prevent the
+  // calibrated fallback from kicking in.
+  const plan = `# Plan\n\nThis is prose with no backtick paths. Just words.`;
+  const history: HistoryFallback = { medianUsd: 4.2, sampleCount: 8 };
+  const e = estimateIssueCost({
+    planContent: plan,
+    planFile: "issue-1-x.md",
+    historyFallback: history,
+  });
+  assert.equal(e.source, "history-fallback");
+  assert.equal(e.estimateUsd, 4.2);
+  assert.equal(e.historySampleCount, 8);
+  // planFile is intentionally NOT propagated on the fallback path — same
+  // contract as the static-fallback case in the original test.
+  assert.equal(e.planFile, undefined);
+});
+
+test("estimateIssueCost: plan source unaffected by historyFallback presence", () => {
+  // When the plan yields a file count, the per-file calculation wins —
+  // historyFallback is only consulted on the fallback path.
+  const plan = `\`a.ts\` \`b.ts\``;
+  const history: HistoryFallback = { medianUsd: 99.99, sampleCount: 20 };
+  const e = estimateIssueCost({ planContent: plan, historyFallback: history });
+  assert.equal(e.source, "plan");
+  assert.equal(e.fileCount, 2);
+  assert.equal(e.estimateUsd, 2 * COST_PER_FILE_USD);
+  assert.equal(e.historySampleCount, undefined);
+});
+
+test("estimateIssueCost: empty-sample-count history degrades to constant", () => {
+  // Defensive: a HistoryFallback with sampleCount === 0 should not be
+  // honored — the caller may surface the static-fallback variant instead.
+  const history: HistoryFallback = { medianUsd: 5.0, sampleCount: 0 };
+  const e = estimateIssueCost({ historyFallback: history });
+  assert.equal(e.source, "fallback");
+  assert.equal(e.estimateUsd, FALLBACK_ESTIMATE_USD);
+});
+
+test("weightedMedian: uniform weights match plain median (odd-length)", () => {
+  // Three samples → middle value wins.
+  const m = weightedMedian([1, 5, 3], [1, 1, 1]);
+  assert.equal(m, 3);
+});
+
+test("weightedMedian: uniform weights match plain median (even-length boundary)", () => {
+  // Four uniform samples → cumulative half-total lands exactly on the 2nd
+  // sample, so we average sorted[1] and sorted[2].
+  // sorted = [1, 2, 3, 4], totalWeight=4, half=2.
+  // i=0: cumulative=1 (<2, continue). i=1: cumulative=2 (==half, average
+  // sorted[1]=2 with sorted[2]=3 → 2.5).
+  const m = weightedMedian([1, 2, 3, 4], [1, 1, 1, 1]);
+  assert.equal(m, 2.5);
+});
+
+test("weightedMedian: recency-weighted shifts median toward heavier samples", () => {
+  // Old samples [1, 1, 1] all weight 1; new samples [10, 10] weight 2 each.
+  // Sorted by value: 1(w=1), 1(w=1), 1(w=1), 10(w=2), 10(w=2). totalWeight=7,
+  // half=3.5. Cumulative: 1, 2, 3, 5(>=3.5). Boundary not exact → return 10.
+  const m = weightedMedian([1, 1, 1, 10, 10], [1, 1, 1, 2, 2]);
+  assert.equal(m, 10);
+});
+
+test("weightedMedian: empty input throws", () => {
+  assert.throws(() => weightedMedian([], []), /empty input/);
+});
+
+test("weightedMedian: length mismatch throws", () => {
+  assert.throws(() => weightedMedian([1, 2], [1]), /length mismatch/);
+});
+
+// Helper: write a synthetic run-state file with a controlled cost / issue
+// shape so `computeHistoryFallback` has eligible samples to score.
+async function writeRunStateFile(
+  dir: string,
+  filename: string,
+  spec: {
+    costAccumulatedUsd?: number;
+    issueStatuses?: string[];
+    dryRun?: boolean;
+  },
+): Promise<void> {
+  const issues: Record<string, { status?: string }> = {};
+  (spec.issueStatuses ?? []).forEach((s, i) => {
+    issues[String(100 + i)] = { status: s };
+  });
+  const state: Record<string, unknown> = {
+    runId: filename.replace(/\.json$/, ""),
+    issues,
+    dryRun: spec.dryRun ?? false,
+  };
+  if (spec.costAccumulatedUsd !== undefined) {
+    state.costAccumulatedUsd = spec.costAccumulatedUsd;
+  }
+  await fs.writeFile(path.join(dir, filename), JSON.stringify(state));
+}
+
+async function makeStateDir(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), "vp-dev-history-"));
+  return dir;
+}
+
+test("computeHistoryFallback: missing state dir returns null", async () => {
+  const r = await computeHistoryFallback({
+    stateDir: path.join(tmpdir(), `vp-dev-no-such-dir-${Date.now()}`),
+  });
+  assert.equal(r, null);
+});
+
+test("computeHistoryFallback: empty state dir returns null", async () => {
+  const dir = await makeStateDir();
+  try {
+    const r = await computeHistoryFallback({ stateDir: dir });
+    assert.equal(r, null);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeHistoryFallback: ignores non-run files (current-run.txt, run-confirm-*)", async () => {
+  const dir = await makeStateDir();
+  try {
+    await fs.writeFile(path.join(dir, "current-run.txt"), "run-2026-01-01T00-00-00-000Z");
+    await fs.writeFile(path.join(dir, "run-confirm-abc123.json"), "{}");
+    const r = await computeHistoryFallback({ stateDir: dir });
+    assert.equal(r, null, "neither file matches RUN_STATE_FILE_RE");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeHistoryFallback: skips dry-run, zero-cost, and no-completed-issues runs", async () => {
+  const dir = await makeStateDir();
+  try {
+    // Eligible: $5/issue, 1 done.
+    await writeRunStateFile(dir, "run-2026-05-01T00-00-00-000Z.json", {
+      costAccumulatedUsd: 5,
+      issueStatuses: ["done"],
+    });
+    // Ineligible: dry-run.
+    await writeRunStateFile(dir, "run-2026-05-02T00-00-00-000Z.json", {
+      costAccumulatedUsd: 5,
+      issueStatuses: ["done"],
+      dryRun: true,
+    });
+    // Ineligible: zero cost.
+    await writeRunStateFile(dir, "run-2026-05-03T00-00-00-000Z.json", {
+      costAccumulatedUsd: 0,
+      issueStatuses: ["done"],
+    });
+    // Ineligible: only aborted-budget + pending — no completed issues.
+    await writeRunStateFile(dir, "run-2026-05-04T00-00-00-000Z.json", {
+      costAccumulatedUsd: 10,
+      issueStatuses: ["aborted-budget", "pending"],
+    });
+    // Ineligible: missing costAccumulatedUsd entirely.
+    await writeRunStateFile(dir, "run-2026-05-05T00-00-00-000Z.json", {
+      issueStatuses: ["done"],
+    });
+    const r = await computeHistoryFallback({ stateDir: dir });
+    assert.ok(r);
+    assert.equal(r.sampleCount, 1, "only the eligible run contributed");
+    assert.equal(r.medianUsd, 5);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeHistoryFallback: per-run cost is total / completed-issue count", async () => {
+  const dir = await makeStateDir();
+  try {
+    // $24 / 6 done = $4/issue. The aborted-budget entry is excluded from
+    // the denominator (consistent with "didn't complete a full dispatch").
+    await writeRunStateFile(dir, "run-2026-05-01T00-00-00-000Z.json", {
+      costAccumulatedUsd: 24,
+      issueStatuses: ["done", "done", "done", "done", "failed", "failed", "aborted-budget"],
+    });
+    const r = await computeHistoryFallback({ stateDir: dir });
+    assert.ok(r);
+    assert.equal(r.sampleCount, 1);
+    assert.equal(r.medianUsd, 4);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeHistoryFallback: respects limit and recency-weights the median", async () => {
+  const dir = await makeStateDir();
+  try {
+    // Older runs (lex-earlier filenames) at $1/issue, recent runs at $10/issue.
+    // The 5 most-recent get weight=2 (per ROLLING_HISTORY_RECENT_BIAS_*),
+    // older 15 get weight=1. With 15 olds at $1 and 5 recents at $10:
+    // values sorted: [1×15, 10×5], weights aligned: [1×15, 2×5].
+    // totalWeight = 15 + 10 = 25, half = 12.5.
+    // cumulative walk on sorted: at i=12 → 12, i=13 → 13 ≥ 12.5 → return 1.
+    // So even with recency weighting, the recent samples' weight-doubling
+    // alone doesn't tip the median — confirms the bias is moderate, not
+    // overwhelming. This test pins the calibration choice so a future
+    // change (e.g. weight=4) breaks it loudly.
+    for (let i = 0; i < 15; i++) {
+      const ts = `2026-05-01T00-00-${String(i).padStart(2, "0")}-000Z`;
+      await writeRunStateFile(dir, `run-${ts}.json`, {
+        costAccumulatedUsd: 1,
+        issueStatuses: ["done"],
+      });
+    }
+    for (let i = 0; i < 5; i++) {
+      // Lexically later filenames → most-recent in sort order.
+      const ts = `2026-05-02T00-00-${String(i).padStart(2, "0")}-000Z`;
+      await writeRunStateFile(dir, `run-${ts}.json`, {
+        costAccumulatedUsd: 10,
+        issueStatuses: ["done"],
+      });
+    }
+    const r = await computeHistoryFallback({ stateDir: dir });
+    assert.ok(r);
+    assert.equal(r.sampleCount, 20);
+    assert.equal(r.medianUsd, 1);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeHistoryFallback: limit truncates to most-recent N runs", async () => {
+  const dir = await makeStateDir();
+  try {
+    // 25 eligible runs; limit=20 should drop the 5 oldest.
+    for (let i = 0; i < 25; i++) {
+      const ts = `2026-05-01T${String(i).padStart(2, "0")}-00-00-000Z`;
+      await writeRunStateFile(dir, `run-${ts}.json`, {
+        costAccumulatedUsd: 5,
+        issueStatuses: ["done"],
+      });
+    }
+    const r = await computeHistoryFallback({ stateDir: dir, limit: 20 });
+    assert.ok(r);
+    assert.equal(r.sampleCount, 20);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeHistoryFallback: minSamples gate returns null below threshold", async () => {
+  const dir = await makeStateDir();
+  try {
+    await writeRunStateFile(dir, "run-2026-05-01T00-00-00-000Z.json", {
+      costAccumulatedUsd: 5,
+      issueStatuses: ["done"],
+    });
+    const r = await computeHistoryFallback({ stateDir: dir, minSamples: 3 });
+    assert.equal(r, null, "1 eligible sample < minSamples=3");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("computeHistoryFallback: malformed JSON files are skipped, not fatal", async () => {
+  const dir = await makeStateDir();
+  try {
+    await fs.writeFile(
+      path.join(dir, "run-2026-05-01T00-00-00-000Z.json"),
+      "not valid json {{{",
+    );
+    await writeRunStateFile(dir, "run-2026-05-02T00-00-00-000Z.json", {
+      costAccumulatedUsd: 7,
+      issueStatuses: ["done"],
+    });
+    const r = await computeHistoryFallback({ stateDir: dir });
+    assert.ok(r);
+    assert.equal(r.sampleCount, 1, "only the well-formed run contributed");
+    assert.equal(r.medianUsd, 7);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

@@ -36,6 +36,7 @@ import {
   type TriageSkipped,
 } from "./orchestrator/setup.js";
 import {
+  computeHistoryFallback,
   estimateIssueCost,
   partitionByBudget,
   readPlanFileForIssue,
@@ -1344,6 +1345,18 @@ async function cmdRun(opts: RunOpts): Promise<void> {
   // spend so issues whose individual estimate exceeds remaining budget are
   // surfaced in the gate as skipped — preventing the doomed-dispatch
   // failure mode from #34.
+  //
+  // Issue #249: compute the rolling-history fallback once before the
+  // per-issue loop. When prior `state/run-*.json` files exist, the fallback
+  // uses a recency-weighted median of `costAccumulatedUsd / numCompleted`
+  // across the last N runs instead of the static $1.50 constant. The same
+  // calibration is threaded through every per-issue call so the forecast
+  // block stays internally consistent. A null result (first install, no
+  // eligible runs yet) preserves the legacy $1.50 path with
+  // `source: "fallback"`.
+  const historyFallback =
+    (await computeHistoryFallback({ stateDir: STATE_DIR }).catch(() => null)) ??
+    undefined;
   const estimates = new Map<number, IssueCostEstimate>();
   for (const issue of dispatchIssues) {
     const plan = await readPlanFileForIssue({
@@ -1355,6 +1368,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       estimateIssueCost({
         planContent: plan?.content,
         planFile: plan?.filename,
+        historyFallback,
       }),
     );
   }
@@ -1375,6 +1389,7 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       source: est.source,
       fileCount: est.fileCount,
       planFile: est.planFile,
+      historySampleCount: est.historySampleCount,
     };
   });
   const dispatchAfterBudgetCount = partition.dispatch.length;

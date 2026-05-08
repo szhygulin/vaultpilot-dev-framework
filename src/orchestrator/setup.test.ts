@@ -283,3 +283,92 @@ test("formatSetupPreview: dependency block drift changes the rendered text (prev
   );
   assert.notEqual(c, d, "force-included drift must change rendered preview text");
 });
+
+// =====================================================================
+// Issue #249: per-issue forecast source label for the rolling-history
+// fallback. The label is `(no plan; rolling history, N runs)` so the
+// operator sees the calibration provenance + sample count, distinct from
+// the legacy `(no plan; fallback estimate)` static-constant label.
+// =====================================================================
+
+test("formatSetupPreview: rolling-history forecast label surfaces sample count", () => {
+  const text = formatSetupPreview(
+    basePreview({
+      costForecast: [
+        {
+          issueId: 100,
+          estimateUsd: 5.12,
+          source: "history-fallback",
+          historySampleCount: 11,
+        },
+      ],
+    }),
+  );
+  assert.match(text, /Per-issue cost forecast:/);
+  assert.match(text, /#100\s+~\$5\.12\s+\(no plan; rolling history, 11 runs\)/);
+  // Legacy static-fallback label MUST NOT leak into the history-fallback
+  // render — they're distinct provenance signals.
+  assert.doesNotMatch(text, /\(no plan; fallback estimate\)/);
+});
+
+test("formatSetupPreview: rolling-history label uses singular `1 run` for sampleCount=1", () => {
+  // A single historical run is technically calibration data but a thin
+  // signal — the singular label flags this so the operator can judge.
+  const text = formatSetupPreview(
+    basePreview({
+      costForecast: [
+        {
+          issueId: 100,
+          estimateUsd: 4.0,
+          source: "history-fallback",
+          historySampleCount: 1,
+        },
+      ],
+    }),
+  );
+  assert.match(text, /\(no plan; rolling history, 1 run\)/);
+  // Defensive: must NOT pluralize "1 runs" — that's a quality smell.
+  assert.doesNotMatch(text, /1 runs/);
+});
+
+test("formatSetupPreview: legacy fallback label still renders when source is `fallback`", () => {
+  // The history-fallback variant is opt-in (only when prior runs exist).
+  // First-install dispatches still render the legacy label so the operator
+  // sees they're getting an uncalibrated estimate.
+  const text = formatSetupPreview(
+    basePreview({
+      costForecast: [
+        { issueId: 200, estimateUsd: 1.5, source: "fallback" },
+      ],
+    }),
+  );
+  assert.match(text, /#200\s+~\$1\.50\s+\(no plan; fallback estimate\)/);
+  assert.doesNotMatch(text, /rolling history/);
+});
+
+test("formatSetupPreview: forecast source drift changes rendered preview (previewHash coverage)", () => {
+  // Same per-issue $ amount, different provenance label. The plan→confirm
+  // token MUST treat these as different previews so a state-dir change
+  // between --plan and --confirm rejects the confirm and forces a
+  // re-plan with the up-to-date calibration.
+  const a = formatSetupPreview(
+    basePreview({
+      costForecast: [
+        { issueId: 100, estimateUsd: 1.5, source: "fallback" },
+      ],
+    }),
+  );
+  const b = formatSetupPreview(
+    basePreview({
+      costForecast: [
+        {
+          issueId: 100,
+          estimateUsd: 1.5,
+          source: "history-fallback",
+          historySampleCount: 5,
+        },
+      ],
+    }),
+  );
+  assert.notEqual(a, b, "history-fallback vs fallback must change rendered text");
+});

@@ -10,6 +10,7 @@ const FIXTURE_RECORD = {
   title: "fix(curve-study): transient gh issue view 404 should retry",
   state: "OPEN",
   labels: [{ name: "bug" }],
+  body: "",
 };
 
 test("getIssue: first-attempt success returns issue, no retries fired", async () => {

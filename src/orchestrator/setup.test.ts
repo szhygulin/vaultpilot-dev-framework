@@ -16,8 +16,8 @@ function basePreview(overrides: Partial<SetupPreview> = {}): SetupPreview {
     targetRepoPath: "/tmp/octocat-repo",
     rangeLabel: "100-110",
     openIssues: [
-      { id: 100, title: "first", state: "open", labels: [] },
-      { id: 110, title: "second", state: "open", labels: [] },
+      { id: 100, title: "first", state: "open", labels: [], body: "" },
+      { id: 110, title: "second", state: "open", labels: [], body: "" },
     ],
     closedSkipped: [],
     parallelism: 2,
@@ -221,7 +221,7 @@ test("formatSetupPreview: empty dependencyDeferred renders no skip block", () =>
 test("formatSetupPreview: non-empty dependencyDeferred renders the skip block + override hint", () => {
   const deferred = [
     {
-      issue: { id: 180, title: "Phase 3 advisory", state: "open" as const, labels: [] },
+      issue: { id: 180, title: "Phase 3 advisory", state: "open" as const, labels: [], body: "" },
       blockingVerdicts: [
         { ref: { issueId: 178 }, state: "open" as const },
       ],
@@ -237,7 +237,7 @@ test("formatSetupPreview: non-empty dependencyDeferred renders the skip block + 
 test("formatSetupPreview: dependencyForceIncluded renders WARNING block (not deferred block)", () => {
   const forceIncluded = [
     {
-      issue: { id: 180, title: "Phase 3 advisory", state: "open" as const, labels: [] },
+      issue: { id: 180, title: "Phase 3 advisory", state: "open" as const, labels: [], body: "" },
       blockingVerdicts: [
         { ref: { issueId: 178 }, state: "open" as const },
       ],
@@ -260,7 +260,7 @@ test("formatSetupPreview: dependency block drift changes the rendered text (prev
     basePreview({
       dependencyDeferred: [
         {
-          issue: { id: 50, title: "x", state: "open", labels: [] },
+          issue: { id: 50, title: "x", state: "open", labels: [], body: "" },
           blockingVerdicts: [{ ref: { issueId: 40 }, state: "open" }],
           reason: "depends on open #40 — re-dispatch after #40 lands",
         },
@@ -274,7 +274,7 @@ test("formatSetupPreview: dependency block drift changes the rendered text (prev
     basePreview({
       dependencyForceIncluded: [
         {
-          issue: { id: 50, title: "x", state: "open", labels: [] },
+          issue: { id: 50, title: "x", state: "open", labels: [], body: "" },
           blockingVerdicts: [{ ref: { issueId: 40 }, state: "open" }],
           reason: "depends on open #40 — re-dispatch after #40 lands",
         },

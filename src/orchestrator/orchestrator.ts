@@ -158,6 +158,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
         logger: input.logger,
         costTracker: input.costTracker,
         preferAgentId: input.preferAgentId,
+        targetRepoPath: repoPath,
       });
       input.logger.info("tick.proposal", {
         tick: input.state.tickCount,

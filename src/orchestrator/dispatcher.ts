@@ -36,6 +36,14 @@ export interface DispatchInput {
    * always picks it first.
    */
   preferAgentId?: string;
+  /**
+   * Path to the target repo's checkout. Threaded into the dispatcher
+   * prompt so each per-agent CLAUDE.md can be deduped against the
+   * project's seed CLAUDE.md (mirrors `buildAgentSystemPrompt`'s
+   * live-load logic). Required: the prompt builder reads files using
+   * this path.
+   */
+  targetRepoPath: string;
 }
 
 export interface DispatchResult {
@@ -58,6 +66,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     logger: input.logger,
     costTracker: input.costTracker,
     preferAgentId: input.preferAgentId,
+    targetRepoPath: input.targetRepoPath,
   });
   if (firstAttempt.assignments) {
     return { assignments: firstAttempt.assignments, source: "llm" };
@@ -76,6 +85,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     errorsFromPrior: firstAttempt.errors,
     costTracker: input.costTracker,
     preferAgentId: input.preferAgentId,
+    targetRepoPath: input.targetRepoPath,
   });
   if (retry.assignments) {
     return { assignments: retry.assignments, source: "llm-retry" };
@@ -108,13 +118,16 @@ async function tryProposeWithLLM(opts: {
   errorsFromPrior?: string[];
   costTracker?: RunCostTracker;
   preferAgentId?: string;
+  targetRepoPath: string;
 }): Promise<ProposeOutcome> {
-  const prompt = buildTickPrompt({
+  const prompt = await buildTickPrompt({
     pendingIssues: opts.pendingIssues,
     idleAgents: opts.idleAgents,
     cap: opts.cap,
     errorsFromPrior: opts.errorsFromPrior,
     preferAgentId: opts.preferAgentId,
+    targetRepoPath: opts.targetRepoPath,
+    logger: opts.logger,
   });
 
   let raw = "";

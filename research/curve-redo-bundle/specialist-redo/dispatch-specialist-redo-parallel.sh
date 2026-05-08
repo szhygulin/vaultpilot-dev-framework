@@ -10,6 +10,12 @@
 #
 # Behavior matches the serial dispatcher cell-for-cell:
 #   * --dry-run, --no-target-claude-md, --skip-summary, --capture-diff-path
+#   * --no-registry-mutation (research-mode): suppresses every persistent side
+#     effect of the run on the per-agent registry record. Without this flag,
+#     each cell's envelope `memoryUpdate.addTags` mutates the agent's tags
+#     mid-run — for the picker-vs-content naive arm (one agent across 39
+#     cells) that drift contaminated cells 2..N before the fix. Snapshot
+#     state/agents-registry.json before the run anyway as defense in depth.
 #   * --replay-base-sha + --allow-closed-issue + --issue-body-only for closed
 #     leg-2 issues
 #   * --model claude-sonnet-4-6 (override via $MODEL)
@@ -191,6 +197,7 @@ run_cell() {
     --dry-run
     --no-target-claude-md
     --skip-summary
+    --no-registry-mutation
     --model "$MODEL"
     --capture-diff-path "$diff_path")
   if [[ "$state" == "closed" ]]; then

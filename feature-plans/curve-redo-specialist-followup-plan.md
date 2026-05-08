@@ -11,7 +11,7 @@ Hypothesis: per-issue mean Q (specialist arm) > per-issue mean Q (trim arm), pai
 ## Design summary
 
 - **Picker**: `pickAgents()` from `src/orchestrator/orchestrator.ts:283` called as a library, with the 18 trim agents filtered out via a `regOverride` copy (no registry mutation). 1 agent picked per issue. `general` fallback / fresh mint accepted as treatment, stratified by rationale in the analysis.
-- **Dispatch**: Thin shell loop per `research/curve-redo-data/dispatch-leg1.sh`, NOT `vp-dev research bench-specialists` — the bench command's `runBenchDispatch` (`src/research/specialistBench/dispatch.ts:188-209`) hardcodes argv and doesn't plumb the `--no-target-claude-md` / `--capture-diff-path` / `--model` / `--replay-base-sha` flags.
+- **Dispatch**: Thin shell loop per `research/curve-redo-data/dispatch-leg1.sh`, NOT `vp-dev research bench-specialists` — the bench command's `runBenchDispatch` (`src/research/specialistBench/dispatch.ts:188-209`) hardcodes argv and doesn't plumb the `--capture-diff-path` / `--model` / `--replay-base-sha` flags.
 - **Replicates**: same agent for all 3 replicates (deterministic pick). Runs sequentially on the same per-agent clone to avoid worktree races; agents in parallel up to 4-wide.
 - **Cell ID**: `bench-r{N}-<agentId>-<issueId>` — the `bench-r{N}-` prefix follows `specialistBench/dispatch.ts:145`'s convention so the existing aggregator can group replicates.
 - **Score path**: reuses leg-1 testRunner + reasoningJudge end-to-end (PRs [#228](https://github.com/szhygulin/vaultpilot-dev-framework/pull/228) + [#229](https://github.com/szhygulin/vaultpilot-dev-framework/pull/229) already merged). Symlinked `node_modules` from canonical clones; `npm ci` auto-runs as safety net.

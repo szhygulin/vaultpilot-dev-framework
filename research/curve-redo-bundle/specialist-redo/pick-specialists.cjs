@@ -13,6 +13,14 @@
 //     --out research/curve-redo-data/specialist-redo/picks.tsv \
 //     [--registry state/agents-registry.json]    # default: state/agents-registry.json
 //     [--target-repo szhygulin/vaultpilot-mcp]   # passed to gh issue view
+//     [--labels-override <path>]                 # JSON {labels:{issueId:[labels]}};
+//                                                # merged with live `gh issue view`
+//                                                # labels (deduped). Lets the operator
+//                                                # enrich zero-label closed issues so
+//                                                # the picker doesn't collapse to one
+//                                                # specialist via the recency bump alone.
+//                                                # See research/curve-redo-bundle/
+//                                                # specialist-redo/enriched-labels.json.
 //
 // Reads built dist/ — run `npm run build` first.
 
@@ -100,6 +108,21 @@ async function main() {
     process.exit(1);
   }
 
+  let overrideMap = null;
+  if (args["labels-override"]) {
+    const parsed = JSON.parse(fs.readFileSync(args["labels-override"], "utf-8"));
+    if (!parsed.labels || typeof parsed.labels !== "object") {
+      process.stderr.write(
+        `ERROR: ${args["labels-override"]} must have a top-level \`labels\` object.\n`,
+      );
+      process.exit(1);
+    }
+    overrideMap = parsed.labels;
+    process.stderr.write(
+      `Labels override: ${Object.keys(overrideMap).length} issue(s) from ${args["labels-override"]}.\n`,
+    );
+  }
+
   const rows = [];
   for (const issue of corpus.issues) {
     const repo = args["target-repo"] ?? issue.repo;
@@ -109,7 +132,10 @@ async function main() {
       );
       process.exit(1);
     }
-    const labels = fetchLabels(issue.issueId, repo);
+    const liveLabels = fetchLabels(issue.issueId, repo);
+    const overrideLabels = overrideMap?.[String(issue.issueId)] ?? [];
+    // Merge dedupe — live labels win on identity, override extends.
+    const labels = Array.from(new Set([...liveLabels, ...overrideLabels]));
     const issueSummary = {
       id: issue.issueId,
       title: issue.title ?? "",

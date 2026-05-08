@@ -84,14 +84,24 @@ done < <(node -e '
 # Resolve a fresh clone at the issue's baseSha (or origin/main for open
 # issues). Clones are reused per-issue across cells. testRunner copies the
 # diff in and resets between cells, so a single clone per issue is safe.
-# Source defaults to the conventional clone at $HOME/dev/<repo-name>.
+# Source defaults to the conventional clone at $HOME/dev/<repo-name>, with
+# a two-path fallback to $HOME/dev/vaultpilot/<repo-name> (issue #254) so a
+# grouped layout works without an outer back-compat symlink. Falls through
+# to a fresh `gh repo clone` if neither candidate exists.
 ensure_score_clone() {
   local issueId="$1" repo="$2" sha="$3"
   local name="${repo##*/}"
   local cdir="$SCORE_CLONES_DIR/${name}-${issueId}"
   if [[ ! -d "$cdir/.git" ]]; then
-    local src="${HOME:-/home}/dev/$name"
-    if [[ -d "$src/.git" ]]; then
+    local src=""
+    local candidate
+    for candidate in "${HOME:-/home}/dev/$name" "${HOME:-/home}/dev/vaultpilot/$name"; do
+      if [[ -d "$candidate/.git" ]]; then
+        src="$candidate"
+        break
+      fi
+    done
+    if [[ -n "$src" ]]; then
       git clone --quiet "$src" "$cdir" >&2
     else
       gh repo clone "$repo" "$cdir" -- --quiet >&2

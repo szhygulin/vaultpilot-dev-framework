@@ -123,18 +123,23 @@ while IFS=$'\t' read -r issueId agentId rationale score pickedLeg labels; do
 done <"$PICKS"
 
 # Resolve the clone path for a target repo. Mirrors `resolveTargetRepoPath` in
-# src/git/worktree.ts: defaults to $HOME/dev/<repo-name>. The whole loop runs
+# src/git/worktree.ts: defaults to $HOME/dev/<repo-name>, with a two-path
+# fallback to $HOME/dev/vaultpilot/<repo-name> (issue #254) so a grouped
+# layout works without an outer back-compat symlink. The whole loop runs
 # serially (one cell at a time), so a single shared clone per repo is safe —
 # `vp-dev spawn` manages its own worktrees inside the clone.
 clone_path_for_repo() {
   local repo="$1"
   local name="${repo##*/}"
-  local p; p="${HOME:-/home}/dev/$name"
-  if [[ ! -d "$p/.git" ]]; then
-    echo "ERROR: no clone at $p for repo $repo. Clone it (gh repo clone $repo) before dispatching." >&2
-    return 1
-  fi
-  echo "$p"
+  local candidate
+  for candidate in "${HOME:-/home}/dev/$name" "${HOME:-/home}/dev/vaultpilot/$name"; do
+    if [[ -d "$candidate/.git" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  echo "ERROR: no clone at ${HOME:-/home}/dev/$name nor ${HOME:-/home}/dev/vaultpilot/$name for repo $repo. Clone it (gh repo clone $repo) before dispatching." >&2
+  return 1
 }
 
 # Group dispatch by agent so cells on the same clone serialize naturally.

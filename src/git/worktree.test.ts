@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { buildIncompleteBranchName, ensureOriginRemote } from "./worktree.js";
+import {
+  buildIncompleteBranchName,
+  ensureOriginRemote,
+  resolveTargetRepoPath,
+} from "./worktree.js";
 
 const execFile = promisify(execFileCb);
 
@@ -124,4 +128,100 @@ test("ensureOriginRemote: idempotent — calling twice without intervening strip
   } finally {
     await cleanup();
   }
+});
+
+// ---------------------------------------------------------------------------
+// resolveTargetRepoPath — issue #254 two-path fallback.
+//
+// Convention: $HOME/dev/<repo-name>. Fallback: $HOME/dev/vaultpilot/<repo-name>
+// (the grouped layout used by this repo's operator after the
+// vaultpilot-dev-framework rename, when the outer back-compat symlink may
+// be missing). Tests run with a tmpdir HOME so they don't depend on the
+// caller's actual layout.
+// ---------------------------------------------------------------------------
+
+async function withTmpHome<T>(
+  fn: (homeDir: string) => Promise<T>,
+): Promise<T> {
+  const homeDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "vp-resolve-target-"),
+  );
+  const prevHome = process.env.HOME;
+  process.env.HOME = homeDir;
+  try {
+    return await fn(homeDir);
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = prevHome;
+    }
+    await fs.rm(homeDir, { recursive: true, force: true });
+  }
+}
+
+async function makeFakeClone(parent: string, name: string): Promise<string> {
+  const repoDir = path.join(parent, name);
+  await fs.mkdir(path.join(repoDir, ".git"), { recursive: true });
+  return repoDir;
+}
+
+test("resolveTargetRepoPath: prefers conventional $HOME/dev/<name> when present", async () => {
+  await withTmpHome(async (home) => {
+    const expected = await makeFakeClone(path.join(home, "dev"), "demo-repo");
+    // Also make the grouped fallback exist — flat must still win.
+    await makeFakeClone(path.join(home, "dev", "vaultpilot"), "demo-repo");
+    const got = await resolveTargetRepoPath("octo/demo-repo");
+    assert.equal(got, expected);
+  });
+});
+
+test("resolveTargetRepoPath: falls back to $HOME/dev/vaultpilot/<name> when flat path is missing", async () => {
+  await withTmpHome(async (home) => {
+    const expected = await makeFakeClone(
+      path.join(home, "dev", "vaultpilot"),
+      "vaultpilot-dev-framework",
+    );
+    const got = await resolveTargetRepoPath(
+      "szhygulin/vaultpilot-dev-framework",
+    );
+    assert.equal(got, expected);
+  });
+});
+
+test("resolveTargetRepoPath: throws ENOENT naming both candidates when neither exists", async () => {
+  await withTmpHome(async (home) => {
+    await assert.rejects(
+      () => resolveTargetRepoPath("octo/missing-repo"),
+      (err: NodeJS.ErrnoException) => {
+        assert.equal(err.code, "ENOENT");
+        assert.match(err.message, /missing-repo/);
+        assert.match(err.message, /dev\/missing-repo/);
+        assert.match(err.message, /dev\/vaultpilot\/missing-repo/);
+        // Sanity: home is what we expect (tmp).
+        assert.match(err.message, new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        return true;
+      },
+    );
+  });
+});
+
+test("resolveTargetRepoPath: explicit path wins regardless of convention layout", async () => {
+  await withTmpHome(async (home) => {
+    // Conventional path also exists — explicit must still win.
+    await makeFakeClone(path.join(home, "dev"), "explicit-repo");
+    const customParent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "vp-explicit-"),
+    );
+    try {
+      const explicit = await makeFakeClone(customParent, "explicit-repo");
+      const got = await resolveTargetRepoPath(
+        "octo/explicit-repo",
+        explicit,
+      );
+      assert.equal(got, explicit);
+    } finally {
+      await fs.rm(customParent, { recursive: true, force: true });
+    }
+  });
 });

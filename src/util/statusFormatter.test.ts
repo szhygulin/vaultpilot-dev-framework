@@ -11,7 +11,7 @@ import type { RunState } from "../types.js";
 function fixture(overrides: Partial<RunState> = {}): RunState {
   return {
     runId: "run-2026-05-05T13-32-46-094Z",
-    targetRepo: "szhygulin/vaultpilot-development-agents",
+    targetRepo: "szhygulin/vaultpilot-dev-framework",
     issueRange: { kind: "csv", ids: [119] },
     parallelism: 1,
     agents: [{ agentId: "agent-08c4", status: "idle" }],

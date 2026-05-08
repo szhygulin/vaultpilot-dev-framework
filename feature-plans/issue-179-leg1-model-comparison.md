@@ -1,6 +1,6 @@
 # #179 leg-1 model-form comparison
 
-Analysis run on `feature-plans/issue-179-data/curve-study-mcp.json` (108 cells, 18 agents, vp-mcp leg, 2026-05-06). All numbers are from `dist/src/research/curveStudy/regression.js` (the same code-path tests cover in this PR).
+Analysis run on `research/issue-179-data/curve-study-mcp.json` (108 cells, 18 agents, vp-mcp leg, 2026-05-06). All numbers are from `dist/src/research/curveStudy/regression.js` (the same code-path tests cover in this PR).
 
 ## AIC sweep — which curve form fits the data?
 

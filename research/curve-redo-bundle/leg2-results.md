@@ -3,9 +3,9 @@
 Run date: 2026-05-07. Coding cells: Sonnet 4.6. Reasoning judge: Opus 4.7 (K=3 medians).
 Target repo: `szhygulin/vaultpilot-development-agents` (node-test). Issues: 7 leg-2 ids × 18 trims = 126 cells.
 
-Tarball: [`feature-plans/curve-redo-bundle/leg2-results.tar.gz`](leg2-results.tar.gz) (839 KB,
-gitignored at runtime under `feature-plans/curve-redo-data/`). Bundle layout per
-[`README.md`](README.md). Reproducer scripts in `feature-plans/curve-redo-data/`.
+Tarball: [`research/curve-redo-bundle/leg2-results.tar.gz`](leg2-results.tar.gz) (839 KB,
+gitignored at runtime under `research/curve-redo-data/`). Bundle layout per
+[`README.md`](README.md). Reproducer scripts in `research/curve-redo-data/`.
 
 ## Headline
 
@@ -78,7 +78,7 @@ production run:
 Operational caveat (not a code fix): #227's blanket `git remote remove origin`
 also breaks the orchestrator's createWorktree step on subsequent cells reusing
 the same per-agent clone (createWorktree needs `git fetch origin main`). The
-leg-2 dispatch wrapper (`feature-plans/curve-redo-data/dispatch-leg2.sh` and
+leg-2 dispatch wrapper (`research/curve-redo-data/dispatch-leg2.sh` and
 `redispatch-leg2.sh`) compensates by running `git remote add origin <SRC>`
 idempotently before each `vp-dev spawn`. The first dispatch attempt skipped
 this step, lost 110 of 126 cells to `fatal: 'origin' does not appear to be a

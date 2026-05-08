@@ -324,7 +324,7 @@ test("runHiddenTests: applies a relative diffPath against the process cwd, not t
   const { testsDir, cleanup: cleanTests } = await makeTestsDir(1);
   // Stage a sibling dir that holds the diff under the process cwd. The
   // dispatch recipe in the curve-redo bundle runs scoring from the repo
-  // root and points --diff-path at `feature-plans/curve-redo-data/...`
+  // root and points --diff-path at `research/curve-redo-data/...`
   // (relative). Pre-fix this resolved against `cloneDir` after `git -C`
   // and silently failed.
   const cwdAnchor = await fs.mkdtemp(path.join(os.tmpdir(), "cwd-anchor-"));

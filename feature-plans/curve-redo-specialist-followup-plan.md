@@ -11,22 +11,22 @@ Hypothesis: per-issue mean Q (specialist arm) > per-issue mean Q (trim arm), pai
 ## Design summary
 
 - **Picker**: `pickAgents()` from `src/orchestrator/orchestrator.ts:283` called as a library, with the 18 trim agents filtered out via a `regOverride` copy (no registry mutation). 1 agent picked per issue. `general` fallback / fresh mint accepted as treatment, stratified by rationale in the analysis.
-- **Dispatch**: Thin shell loop per `feature-plans/curve-redo-data/dispatch-leg1.sh`, NOT `vp-dev research bench-specialists` — the bench command's `runBenchDispatch` (`src/research/specialistBench/dispatch.ts:188-209`) hardcodes argv and doesn't plumb the `--no-target-claude-md` / `--capture-diff-path` / `--model` / `--replay-base-sha` flags.
+- **Dispatch**: Thin shell loop per `research/curve-redo-data/dispatch-leg1.sh`, NOT `vp-dev research bench-specialists` — the bench command's `runBenchDispatch` (`src/research/specialistBench/dispatch.ts:188-209`) hardcodes argv and doesn't plumb the `--no-target-claude-md` / `--capture-diff-path` / `--model` / `--replay-base-sha` flags.
 - **Replicates**: same agent for all 3 replicates (deterministic pick). Runs sequentially on the same per-agent clone to avoid worktree races; agents in parallel up to 4-wide.
 - **Cell ID**: `bench-r{N}-<agentId>-<issueId>` — the `bench-r{N}-` prefix follows `specialistBench/dispatch.ts:145`'s convention so the existing aggregator can group replicates.
 - **Score path**: reuses leg-1 testRunner + reasoningJudge end-to-end (PRs [#228](https://github.com/szhygulin/vaultpilot-development-agents/pull/228) + [#229](https://github.com/szhygulin/vaultpilot-development-agents/pull/229) already merged). Symlinked `node_modules` from canonical clones; `npm ci` auto-runs as safety net.
-- **Comparator**: new `combine-and-compare.cjs` that reuses `pairByIssue` from `src/research/specialistBench/aggregate.ts:135-176`, swapping its heuristic `qualityFromDecision` for A+B-formula values via existing `samplesFromCellScores` (mirroring `feature-plans/curve-redo-bundle/combine-legs.cjs:51-73`).
+- **Comparator**: new `combine-and-compare.cjs` that reuses `pairByIssue` from `src/research/specialistBench/aggregate.ts:135-176`, swapping its heuristic `qualityFromDecision` for A+B-formula values via existing `samplesFromCellScores` (mirroring `research/curve-redo-bundle/combine-legs.cjs:51-73`).
 
 ## File layout
 
 All under `/Users/s/dev/vaultpilot/vaultpilot-development-agents/`:
 
 ```
-feature-plans/curve-redo-bundle/                    (committed)
+research/curve-redo-bundle/                    (committed)
 └── specialist-redo-results.md                       (NEW — final writeup)
 └── specialist-redo-results.tar.gz                   (NEW — bundled artefacts)
 
-feature-plans/curve-redo-data/specialist-redo/      (gitignored)
+research/curve-redo-data/specialist-redo/      (gitignored)
 ├── pick-specialists.cjs                             (NEW — calls pickAgents, writes picks.tsv)
 ├── picks.tsv                                        (issueId\tagentId\trationale\tscore\tleg)
 ├── dispatch-specialist-redo.sh                      (NEW — shell loop, K=3 replicates)
@@ -46,10 +46,10 @@ feature-plans/curve-redo-data/specialist-redo/      (gitignored)
 | `src/orchestrator/routing.ts:13-179` | `SPECIALIST_THRESHOLD = 0.25`, jaccard, twoPhasePick |
 | `src/research/specialistBench/aggregate.ts:135-176` | `pairByIssue()` — paired-difference engine |
 | `src/research/specialistBench/stats.ts` | `wilcoxonSignedRankPaired` — primary test |
-| `feature-plans/curve-redo-bundle/combine-legs.cjs:51-73` | A+B-via-`samplesFromCellScores` template |
-| `feature-plans/curve-redo-data/dispatch-leg1.sh` | Dispatcher template |
-| `feature-plans/curve-redo-data/score-leg1.sh` | Scorer template (only paths change) |
-| `feature-plans/curve-redo-bundle/corpus.json` | Per-issue framework / baseSha / testsDestRelDir |
+| `research/curve-redo-bundle/combine-legs.cjs:51-73` | A+B-via-`samplesFromCellScores` template |
+| `research/curve-redo-data/dispatch-leg1.sh` | Dispatcher template |
+| `research/curve-redo-data/score-leg1.sh` | Scorer template (only paths change) |
+| `research/curve-redo-bundle/corpus.json` | Per-issue framework / baseSha / testsDestRelDir |
 
 ## Cost & wall-time
 
@@ -90,7 +90,7 @@ Wall: ~30 min (issues parallel 4-wide, replicates sequential per agent's clone).
 
 9. **Hand-author `specialist-redo-results.md`** following `leg1-results.md`'s structure: headline metrics, per-issue paired table (treatment − control), test result, rationale stratification, caveats.
 
-10. **Bundle + PR**: `tar czf feature-plans/curve-redo-bundle/specialist-redo-results.tar.gz -C feature-plans/curve-redo-data specialist-redo/`. Commit `specialist-redo-results.md` + tarball on a feature branch. Open dedicated results PR (don't bundle into a fix PR, repeating leg-1's mistake).
+10. **Bundle + PR**: `tar czf research/curve-redo-bundle/specialist-redo-results.tar.gz -C research/curve-redo-data specialist-redo/`. Commit `specialist-redo-results.md` + tarball on a feature branch. Open dedicated results PR (don't bundle into a fix PR, repeating leg-1's mistake).
 
 11. **Restore registry**: `diff` the snapshot vs current state; if drift exists, restore. The `--skip-summary` flag should prevent any drift, but verify.
 
@@ -131,4 +131,4 @@ This is the picker's production behavior, but it collapses the "specialist diver
 
 The picker also reveals a structural finding worth its own follow-up issue: **`scoreAgentIssue` returns positive for any agent with prior history, even on zero-label issues**, which means the threshold check `if (s.score <= 0) break` in `pickAgents` (orchestrator.ts:327) never triggers for established agents. The intended "no specialist matches" branch (mint-fresh, fall-through to general) is unreachable in practice once the registry has any seasoned agents. May or may not be a bug depending on intent — but worth clarifying in the codebase, since the curve-redo experiment exposed it.
 
-Picker output committed locally (gitignored) at `feature-plans/curve-redo-data/specialist-redo/picks.tsv`; `pick-specialists.cjs` in the same directory.
+Picker output committed locally (gitignored) at `research/curve-redo-data/specialist-redo/picks.tsv`; `pick-specialists.cjs` in the same directory.

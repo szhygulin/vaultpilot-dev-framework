@@ -2,9 +2,9 @@
   "_comment": "Curve-redo experiment corpus. 13 issues split across 2 legs (vp-mcp / vp-dev-agents). Each cell runs ISOLATED (no target-repo CLAUDE.md, no user-global CLAUDE.md \u2014 only per-agent CLAUDE.md per the size axis). Closed issues replay-rollback to baseSha (the codebase right before the fix landed). Open issues run against current main. Quality scoring: A (judge, 0-50) + B (test pass rate, 0-50) = 0-100; pushback uses 2A.",
   "model": "claude-sonnet-4-6",
   "trims": {
-    "agentsSpec": "feature-plans/issue-179-leg2-bundle/agents-spec-phase3.json",
-    "trimsDir": "feature-plans/issue-179-leg2-bundle/trims-phase3",
-    "parentSnapshot": "feature-plans/issue-179-leg2-bundle/parent-agent-916a-CLAUDE.md",
+    "agentsSpec": "research/issue-179-leg2-bundle/agents-spec-phase3.json",
+    "trimsDir": "research/issue-179-leg2-bundle/trims-phase3",
+    "parentSnapshot": "research/issue-179-leg2-bundle/parent-agent-916a-CLAUDE.md",
     "_comment": "18 trim agents at 6 sizes (~6KB, 14KB, 22KB, 35KB, 50KB, 58KB) \u00d7 3 seeds. Same trims used for #179 K=13 \u2014 direct comparability."
   },
   "issues": [

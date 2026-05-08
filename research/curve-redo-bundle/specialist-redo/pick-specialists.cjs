@@ -8,9 +8,9 @@
 //   issueId\tagentId\trationale\tscore\tleg
 //
 // Usage:
-//   node feature-plans/curve-redo-bundle/specialist-redo/pick-specialists.cjs \
-//     --corpus feature-plans/curve-redo-bundle/corpus.json \
-//     --out feature-plans/curve-redo-data/specialist-redo/picks.tsv \
+//   node research/curve-redo-bundle/specialist-redo/pick-specialists.cjs \
+//     --corpus research/curve-redo-bundle/corpus.json \
+//     --out research/curve-redo-data/specialist-redo/picks.tsv \
 //     [--registry state/agents-registry.json]    # default: state/agents-registry.json
 //     [--target-repo szhygulin/vaultpilot-mcp]   # passed to gh issue view
 //

@@ -87,7 +87,7 @@ Recommended: hold the placeholder. File a follow-up issue: "Curve study v2 — h
 
 ## Artifacts
 
-- `feature-plans/issue-179-data/cells.json` — 76 cells total (15 vp-mcp pilot + 28 phase-2 + the older incidentals).
-- `feature-plans/issue-179-data/curve-proposal-2026-05-06.json` — quality-based proposal (degenerate; for record).
-- `feature-plans/issue-179-data/curve-proposal-cost-based-2026-05-06.json` — cost-based proposal (provisional).
-- `feature-plans/issue-179-data/logs/smoke-10size-phase2/` — 28 envelope-complete cell logs + dispatch orchestration log.
+- `research/issue-179-data/cells.json` — 76 cells total (15 vp-mcp pilot + 28 phase-2 + the older incidentals).
+- `research/issue-179-data/curve-proposal-2026-05-06.json` — quality-based proposal (degenerate; for record).
+- `research/issue-179-data/curve-proposal-cost-based-2026-05-06.json` — cost-based proposal (provisional).
+- `research/issue-179-data/logs/smoke-10size-phase2/` — 28 envelope-complete cell logs + dispatch orchestration log.

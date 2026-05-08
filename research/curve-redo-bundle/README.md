@@ -7,7 +7,7 @@ Coding agent: **Sonnet 4.6** throughout (`--model claude-sonnet-4-6`). Test gene
 ## Bundle contents
 
 ```
-feature-plans/curve-redo-bundle/
+research/curve-redo-bundle/
 ├── README.md                  (this file)
 ├── corpus.json                — 13 issues × 2 legs; closed issues carry baseSha
 ├── combine-legs.cjs           — Node helper: aggregates both legs, applies A+B
@@ -17,10 +17,10 @@ feature-plans/curve-redo-bundle/
                                   reproducibility
 ```
 
-Reuses the **18 trim agents** from `feature-plans/issue-179-leg2-bundle/`:
+Reuses the **18 trim agents** from `research/issue-179-leg2-bundle/`:
 
 ```
-feature-plans/issue-179-leg2-bundle/
+research/issue-179-leg2-bundle/
 ├── parent-agent-916a-CLAUDE.md   — seed for plan-trims
 ├── agents-spec-phase3.json        — 18 trims × 6 sizes (~6KB / 14KB / 22KB / 35KB / 50KB / 58KB) × 3 seeds
 └── trims-phase3/                  — 18 pre-generated trim CLAUDE.md files
@@ -72,14 +72,14 @@ cd $REPO
 git fetch origin main && git rebase origin/main
 
 # Restore the gitignored parent CLAUDE.md from the prior bundle's snapshot
-mkdir -p agents/agent-916a feature-plans/curve-redo-data/trims
-cp feature-plans/issue-179-leg2-bundle/parent-agent-916a-CLAUDE.md agents/agent-916a/CLAUDE.md
-cp feature-plans/issue-179-leg2-bundle/trims-phase3/*.md feature-plans/curve-redo-data/trims/
+mkdir -p agents/agent-916a research/curve-redo-data/trims
+cp research/issue-179-leg2-bundle/parent-agent-916a-CLAUDE.md agents/agent-916a/CLAUDE.md
+cp research/issue-179-leg2-bundle/trims-phase3/*.md research/curve-redo-data/trims/
 
 # Register the 18 trim agents (skip if state/agents-registry.json already has them)
 node dist/bin/vp-dev.js research register-trims \
-  --agents-spec feature-plans/issue-179-leg2-bundle/agents-spec-phase3.json \
-  --trims-dir feature-plans/curve-redo-data/trims/ \
+  --agents-spec research/issue-179-leg2-bundle/agents-spec-phase3.json \
+  --trims-dir research/curve-redo-data/trims/ \
   --tags-from agent-916a
 
 node dist/bin/vp-dev.js agents list | grep agent-916a-trim | wc -l   # expect 18
@@ -95,13 +95,13 @@ mkdir -p /tmp/curve-redo-clones-leg{1,2}
 # Leg 1 (vp-mcp): clone source = local working tree
 LEG1_SRC=$HOME/dev/recon-mcp
 jq -r '.[] | select(.clonePath | contains("vaultpilot-mcp")) | .clonePath' \
-  feature-plans/issue-179-leg2-bundle/agents-spec-phase3.json > /tmp/leg1-clone-paths.txt
+  research/issue-179-leg2-bundle/agents-spec-phase3.json > /tmp/leg1-clone-paths.txt
 xargs -a /tmp/leg1-clone-paths.txt -P 8 -I{} git clone --no-local "$LEG1_SRC" {}
 
 # Leg 2 (vp-dev-agents): clone source = local working tree
 LEG2_SRC=$HOME/dev/vaultpilot-development-agents
 jq -r '.[] | select(.clonePath | contains("vaultpilot-development-agents")) | .clonePath' \
-  feature-plans/issue-179-leg2-bundle/agents-spec-phase3.json > /tmp/leg2-clone-paths.txt
+  research/issue-179-leg2-bundle/agents-spec-phase3.json > /tmp/leg2-clone-paths.txt
 xargs -a /tmp/leg2-clone-paths.txt -P 8 -I{} git clone --no-local "$LEG2_SRC" {}
 ```
 
@@ -119,7 +119,7 @@ xargs -a /tmp/leg1-clone-paths.txt -P 8 -I{} \
 
 ### Step 3 — leg-specific: dispatch with replay-mode + capture-diff + Sonnet model
 
-Hidden tests are committed in `feature-plans/curve-redo-bundle/curve-redo-tests/<issueId>/`. Per-cell diffs land in `feature-plans/curve-redo-data/diffs-leg<N>/<cellId>.diff`. Cell logs land in `feature-plans/curve-redo-data/logs-leg<N>/`.
+Hidden tests are committed in `research/curve-redo-bundle/curve-redo-tests/<issueId>/`. Per-cell diffs land in `research/curve-redo-data/diffs-leg<N>/<cellId>.diff`. Cell logs land in `research/curve-redo-data/logs-leg<N>/`.
 
 `vp-dev research curve-study` already hardcodes CLAUDE.md isolation (`suppressTargetClaudeMd: true`) per [#216](https://github.com/szhygulin/vaultpilot-development-agents/pull/216), so no flag needed for that. **But curve-study itself doesn't yet wire `--model` / `--replay-base-sha` / `--capture-diff-path` into the cell spawn.** For the curve-redo experiment, dispatch via a thin shell loop calling `vp-dev spawn` directly (one cell at a time, per-trim parallelism via `&`):
 
@@ -127,15 +127,15 @@ Hidden tests are committed in `feature-plans/curve-redo-bundle/curve-redo-tests/
 
 ```bash
 # Leg 1 dispatch script (run on machine 1)
-mkdir -p feature-plans/curve-redo-data/{logs-leg1,diffs-leg1,scores-leg1}
+mkdir -p research/curve-redo-data/{logs-leg1,diffs-leg1,scores-leg1}
 
 LEG=1
 TARGET_REPO=szhygulin/vaultpilot-mcp
 jq -r '.issues[] | select(.leg == 1) | "\(.issueId)\t\(.state)\t\(.baseSha // "")"' \
-  feature-plans/curve-redo-bundle/corpus.json > /tmp/leg1-issues.tsv
+  research/curve-redo-bundle/corpus.json > /tmp/leg1-issues.tsv
 
 jq -r '.[] | select(.clonePath | contains("vaultpilot-mcp")) | "\(.devAgentId)\t\(.clonePath)"' \
-  feature-plans/issue-179-leg2-bundle/agents-spec-phase3.json > /tmp/leg1-trims.tsv
+  research/issue-179-leg2-bundle/agents-spec-phase3.json > /tmp/leg1-trims.tsv
 
 while IFS=$'\t' read -r issueId state baseSha; do
   while IFS=$'\t' read -r agentId clonePath; do
@@ -150,16 +150,16 @@ while IFS=$'\t' read -r issueId state baseSha; do
       --dry-run --skip-summary \
       --allow-closed-issue --issue-body-only --no-target-claude-md \
       --model claude-sonnet-4-6 \
-      --capture-diff-path "feature-plans/curve-redo-data/diffs-leg${LEG}/${cellId}.diff" \
+      --capture-diff-path "research/curve-redo-data/diffs-leg${LEG}/${cellId}.diff" \
       $extra \
-      > "feature-plans/curve-redo-data/logs-leg${LEG}/curveStudy-${cellId}.log" 2>&1 &
+      > "research/curve-redo-data/logs-leg${LEG}/curveStudy-${cellId}.log" 2>&1 &
     # Throttle: max 4 concurrent
     while [ $(jobs -r | wc -l) -ge 4 ]; do sleep 1; done
   done < /tmp/leg1-trims.tsv
   wait
 done < /tmp/leg1-issues.tsv
 
-ls feature-plans/curve-redo-data/logs-leg1/curveStudy-*.log | wc -l   # expect 108
+ls research/curve-redo-data/logs-leg1/curveStudy-*.log | wc -l   # expect 108
 ```
 
 (Leg 2 is the symmetric script — `LEG=2`, `TARGET_REPO=szhygulin/vaultpilot-development-agents`, leg-2 corpus filter, leg-2 trims-tsv.)
@@ -169,22 +169,22 @@ ls feature-plans/curve-redo-data/logs-leg1/curveStudy-*.log | wc -l   # expect 1
 ```bash
 LEG=1
 TARGET_REPO=szhygulin/vaultpilot-mcp
-mkdir -p feature-plans/curve-redo-data/scores-leg${LEG}
+mkdir -p research/curve-redo-data/scores-leg${LEG}
 
 # For each captured diff, run hidden tests + reasoning judge
-for diff in feature-plans/curve-redo-data/diffs-leg${LEG}/*.diff; do
+for diff in research/curve-redo-data/diffs-leg${LEG}/*.diff; do
   cellId=$(basename "$diff" .diff)
   # cellId = <agentId>-<issueId>
   agentId=$(echo "$cellId" | sed 's/-[0-9]*$//')
   issueId=$(echo "$cellId" | sed 's/.*-//')
   framework=$(jq -r --arg id "$issueId" '.issues[] | select(.issueId == ($id | tonumber)) | .framework' \
-    feature-plans/curve-redo-bundle/corpus.json)
-  decision=$(jq -r '.envelope.decision // "error"' "feature-plans/curve-redo-data/logs-leg${LEG}/curveStudy-${cellId}.log" \
+    research/curve-redo-bundle/corpus.json)
+  decision=$(jq -r '.envelope.decision // "error"' "research/curve-redo-data/logs-leg${LEG}/curveStudy-${cellId}.log" \
     | tail -1)
   baseSha=$(jq -r --arg id "$issueId" '.issues[] | select(.issueId == ($id | tonumber)) | .baseSha // ""' \
-    feature-plans/curve-redo-bundle/corpus.json)
+    research/curve-redo-bundle/corpus.json)
   testsDestRelDir=$(jq -r --arg id "$issueId" '.issues[] | select(.issueId == ($id | tonumber)) | .testsDestRelDir // ""' \
-    feature-plans/curve-redo-bundle/corpus.json)
+    research/curve-redo-bundle/corpus.json)
 
   # Fresh clone at baseSha (or origin/main if open issue). Symlink the
   # source clone's `node_modules/` so vitest can find its config-time
@@ -205,26 +205,26 @@ for diff in feature-plans/curve-redo-data/diffs-leg${LEG}/*.diff; do
   [ -n "$testsDestRelDir" ] && destFlag=(--tests-dest-rel-dir "$testsDestRelDir")
   node dist/bin/vp-dev.js research run-tests \
     --diff-path "$diff" \
-    --tests-dir "feature-plans/curve-redo-bundle/curve-redo-tests/${issueId}" \
+    --tests-dir "research/curve-redo-bundle/curve-redo-tests/${issueId}" \
     --clone-dir "$cellClone" \
     --framework "$framework" \
     "${destFlag[@]}" \
-    --out "feature-plans/curve-redo-data/scores-leg${LEG}/${cellId}-tests.json"
+    --out "research/curve-redo-data/scores-leg${LEG}/${cellId}-tests.json"
 
   # Reasoning judge (A)
   if [ "$decision" = "implement" ]; then
     node dist/bin/vp-dev.js research grade-reasoning \
       --issue "$issueId" --target-repo "$TARGET_REPO" \
       --decision implement --diff-path "$diff" \
-      --out "feature-plans/curve-redo-data/scores-leg${LEG}/${cellId}-judge.json"
+      --out "research/curve-redo-data/scores-leg${LEG}/${cellId}-judge.json"
   elif [ "$decision" = "pushback" ]; then
     # Extract pushback reason from envelope
-    jq -r '.envelope.reason // ""' "feature-plans/curve-redo-data/logs-leg${LEG}/curveStudy-${cellId}.log" \
+    jq -r '.envelope.reason // ""' "research/curve-redo-data/logs-leg${LEG}/curveStudy-${cellId}.log" \
       | tail -1 > "/tmp/pushback-${cellId}.txt"
     node dist/bin/vp-dev.js research grade-reasoning \
       --issue "$issueId" --target-repo "$TARGET_REPO" \
       --decision pushback --pushback-path "/tmp/pushback-${cellId}.txt" \
-      --out "feature-plans/curve-redo-data/scores-leg${LEG}/${cellId}-judge.json"
+      --out "research/curve-redo-data/scores-leg${LEG}/${cellId}-judge.json"
   fi
 
   rm -rf "$cellClone"
@@ -240,11 +240,11 @@ Each leg's `logs-leg<N>/`, `diffs-leg<N>/`, `scores-leg<N>/` directories are git
 ```bash
 # Machine 1 (leg 1)
 LEG=1
-tar czf feature-plans/curve-redo-bundle/leg${LEG}-results.tar.gz \
-  -C feature-plans/curve-redo-data \
+tar czf research/curve-redo-bundle/leg${LEG}-results.tar.gz \
+  -C research/curve-redo-data \
   logs-leg${LEG} diffs-leg${LEG} scores-leg${LEG}
 git checkout -b curve-redo/leg${LEG}-results
-git add feature-plans/curve-redo-bundle/leg${LEG}-results.tar.gz
+git add research/curve-redo-bundle/leg${LEG}-results.tar.gz
 git commit -m "study(curve-redo): leg ${LEG} results — 108 cells, vp-mcp"
 git push -u origin curve-redo/leg${LEG}-results
 ```
@@ -260,28 +260,28 @@ git checkout curve-redo/combined  # new branch off main
 git fetch origin main && git rebase origin/main
 
 # Bring both tarballs onto this branch
-git checkout origin/curve-redo/leg1-results -- feature-plans/curve-redo-bundle/leg1-results.tar.gz
-git checkout origin/curve-redo/leg2-results -- feature-plans/curve-redo-bundle/leg2-results.tar.gz
+git checkout origin/curve-redo/leg1-results -- research/curve-redo-bundle/leg1-results.tar.gz
+git checkout origin/curve-redo/leg2-results -- research/curve-redo-bundle/leg2-results.tar.gz
 
 # Extract
-mkdir -p feature-plans/curve-redo-data
-tar xzf feature-plans/curve-redo-bundle/leg1-results.tar.gz -C feature-plans/curve-redo-data
-tar xzf feature-plans/curve-redo-bundle/leg2-results.tar.gz -C feature-plans/curve-redo-data
+mkdir -p research/curve-redo-data
+tar xzf research/curve-redo-bundle/leg1-results.tar.gz -C research/curve-redo-data
+tar xzf research/curve-redo-bundle/leg2-results.tar.gz -C research/curve-redo-data
 
 # Sanity counts
-ls feature-plans/curve-redo-data/logs-leg1/curveStudy-*.log | wc -l   # expect 108
-ls feature-plans/curve-redo-data/logs-leg2/curveStudy-*.log | wc -l   # expect 126
-ls feature-plans/curve-redo-data/scores-leg1/*-tests.json   | wc -l   # expect 108
-ls feature-plans/curve-redo-data/scores-leg2/*-tests.json   | wc -l   # expect 126
+ls research/curve-redo-data/logs-leg1/curveStudy-*.log | wc -l   # expect 108
+ls research/curve-redo-data/logs-leg2/curveStudy-*.log | wc -l   # expect 126
+ls research/curve-redo-data/scores-leg1/*-tests.json   | wc -l   # expect 108
+ls research/curve-redo-data/scores-leg2/*-tests.json   | wc -l   # expect 126
 
 # Combine + fit
-node feature-plans/curve-redo-bundle/combine-legs.cjs \
-  --leg1-logs feature-plans/curve-redo-data/logs-leg1 \
-  --leg1-scores feature-plans/curve-redo-data/scores-leg1 \
-  --leg2-logs feature-plans/curve-redo-data/logs-leg2 \
-  --leg2-scores feature-plans/curve-redo-data/scores-leg2 \
-  --agents-spec feature-plans/issue-179-leg2-bundle/agents-spec-phase3.json \
-  --output feature-plans/curve-redo-bundle/curve-redo-combined.json
+node research/curve-redo-bundle/combine-legs.cjs \
+  --leg1-logs research/curve-redo-data/logs-leg1 \
+  --leg1-scores research/curve-redo-data/scores-leg1 \
+  --leg2-logs research/curve-redo-data/logs-leg2 \
+  --leg2-scores research/curve-redo-data/scores-leg2 \
+  --agents-spec research/issue-179-leg2-bundle/agents-spec-phase3.json \
+  --output research/curve-redo-bundle/curve-redo-combined.json
 ```
 
 Output prints headline stats. Actual 2026-05-08 run on the merged tarballs (2 envelope-parse-fail cells dropped from the 234 dispatched):
@@ -305,7 +305,7 @@ If p ≥ 0.05 on accuracy under every form tried: name what failed (judge varian
 
 ```bash
 rm -rf /tmp/curve-redo-clones-leg{1,2}
-rm -rf feature-plans/curve-redo-data   # gitignored; keep until results land
+rm -rf research/curve-redo-data   # gitignored; keep until results land
 ```
 
 ## Cost gates + safety

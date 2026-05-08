@@ -1,7 +1,12 @@
 import { promises as fs } from "node:fs";
 import { ensureAgent, mutateRegistry } from "../state/registry.js";
 import { runCodingAgent } from "./codingAgent.js";
-import { applyReplayRollback, captureWorktreeDiff, readWorktreeHead } from "./replay.js";
+import {
+  applyReplayRollback,
+  captureWorktreeDiff,
+  readWorktreeHead,
+  restoreOriginRemote,
+} from "./replay.js";
 import {
   agentClaudeMdPath,
   appendBlock,
@@ -151,12 +156,18 @@ export interface RunIssueCoreResult {
 export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCoreResult> {
   let worktree: WorktreeHandle | null = null;
   let envelope: ResultEnvelope | undefined;
+  // Captured by `applyReplayRollback` (issue #253) and consumed by the
+  // finally block to restore the shared `.git/config`'s `origin` after the
+  // agent finishes. Undefined for non-replay cells and for replay cells
+  // whose strip lost the race to a sibling.
+  let savedOriginUrl: string | undefined;
 
   try {
     await forkClaudeMd(input.agent.agentId, input.targetRepoPath);
 
     worktree = await createWorktree({
       repoPath: input.targetRepoPath,
+      targetRepo: input.targetRepo,
       agentId: input.agent.agentId,
       issueId: input.issue.id,
       resumeFromBranch: input.resumeContext?.branch,
@@ -176,14 +187,16 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
     // omit baseSha and the worktree stays at origin/main. Throws on bad
     // SHA — orchestrator surfaces it via the per-cell error envelope.
     if (input.replayMode?.baseSha) {
-      await applyReplayRollback({
+      const rollback = await applyReplayRollback({
         worktreePath: worktree.path,
         baseSha: input.replayMode.baseSha,
       });
+      savedOriginUrl = rollback.originUrl;
       input.logger.info("agent.replay_rollback", {
         agentId: input.agent.agentId,
         issueId: input.issue.id,
         baseSha: input.replayMode.baseSha,
+        originUrlCaptured: !!savedOriginUrl,
       });
     }
 
@@ -548,6 +561,27 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       partialBranchUrl,
     };
   } finally {
+    // Restore the `origin` remote on the SHARED `.git/config` if a replay-
+    // mode strip ran on this cell (issue #253). Done before worktree teardown
+    // so the worktree path still exists; idempotent against concurrent cells
+    // that already re-added origin via `ensureOriginRemote`.
+    if (savedOriginUrl && worktree) {
+      try {
+        await restoreOriginRemote({
+          worktreePath: worktree.path,
+          originUrl: savedOriginUrl,
+        });
+      } catch (err) {
+        // Best-effort: a restore failure is not catastrophic — the next
+        // cell's `ensureOriginRemote` will reconstruct from the targetRepo
+        // slug. Log so the operator has an audit trail.
+        input.logger.warn("agent.replay_origin_restore_failed", {
+          agentId: input.agent.agentId,
+          issueId: input.issue.id,
+          err: (err as Error).message,
+        });
+      }
+    }
     if (worktree) {
       const isImplement = envelope?.decision === "implement";
       await removeWorktree({

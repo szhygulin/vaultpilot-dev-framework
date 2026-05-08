@@ -80,7 +80,55 @@ export async function resolveTargetRepoPath(
   return conventional;
 }
 
-export async function fetchOriginMain(repoPath: string): Promise<void> {
+/**
+ * Defensive re-add of the `origin` remote against the target repo's shared
+ * `.git/config`. No-op when origin is already present.
+ *
+ * Surfaced by issue #253: `applyReplayRollback` (curve-redo replay-mode) runs
+ * `git -C <worktree> remote remove origin` to make a sibling agent's
+ * "sync to main before work" rule fail-fast. In a non-bare clone the strip
+ * mutates the SHARED `.git/config` rather than per-worktree state, so every
+ * subsequent cell on the same clone — including normal `createWorktree`
+ * calls — used to fail at `git fetch origin main` with `'origin' does not
+ * appear to be a git repository`. Re-adding origin idempotently here unblocks
+ * the next cell whether or not the prior cell crashed before its restore step.
+ *
+ * `targetRepo` is the canonical `<owner>/<repo>` slug; we reconstruct
+ * `https://github.com/<owner>/<repo>` rather than spelunking after the
+ * pre-strip URL because by the time we notice it's missing, the URL is gone.
+ * Cells running concurrently on the same clone race on this write, but
+ * `git remote add` is fast and `withRepoLock` already serializes the
+ * surrounding `worktree add` so the race is bounded.
+ */
+export async function ensureOriginRemote(
+  repoPath: string,
+  targetRepo: string,
+): Promise<{ added: boolean }> {
+  try {
+    await execFile("git", ["-C", repoPath, "remote", "get-url", "origin"]);
+    return { added: false };
+  } catch {
+    // origin missing — re-add from canonical GitHub URL
+    await execFile("git", [
+      "-C",
+      repoPath,
+      "remote",
+      "add",
+      "origin",
+      `https://github.com/${targetRepo}`,
+    ]);
+    return { added: true };
+  }
+}
+
+export async function fetchOriginMain(
+  repoPath: string,
+  targetRepo?: string,
+): Promise<void> {
+  // When `targetRepo` is supplied, defensively re-add origin if a prior
+  // replay-mode cell stripped it (#253). Optional so test fixtures that
+  // build their own ad-hoc clones without a github-shaped slug still work.
+  if (targetRepo) await ensureOriginRemote(repoPath, targetRepo);
   await execFile("git", ["fetch", "origin", "main"], { cwd: repoPath });
 }
 
@@ -90,6 +138,13 @@ export async function pruneWorktrees(repoPath: string): Promise<void> {
 
 export async function createWorktree(opts: {
   repoPath: string;
+  /**
+   * Canonical `<owner>/<repo>` GitHub slug. Used to re-add `origin` if a
+   * prior replay-mode cell stripped it from the shared `.git/config`
+   * (issue #253). Required because the strip happens after the saved-URL
+   * window closes, so we reconstruct the URL from the slug.
+   */
+  targetRepo: string;
   agentId: string;
   issueId: number;
   /**
@@ -112,6 +167,10 @@ export async function createWorktree(opts: {
   const wtRel = path.join(".claude", "worktrees", `${opts.agentId}-issue-${opts.issueId}`);
 
   // CLAUDE.md: cd <repoPath> BEFORE worktree add — execFile with cwd does that explicitly.
+  // Defensive re-add of `origin` first: a prior replay-mode cell may have
+  // stripped it from the shared `.git/config` (issue #253). No-op when
+  // origin is already present.
+  await ensureOriginRemote(opts.repoPath, opts.targetRepo);
   await execFile("git", ["fetch", "origin", "main"], { cwd: opts.repoPath });
 
   // When resuming from a salvage ref, fetch that specific branch into the

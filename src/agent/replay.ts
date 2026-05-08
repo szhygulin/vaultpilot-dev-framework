@@ -20,6 +20,17 @@ import { promisify } from "node:util";
 
 const execFile = promisify(execFileCb);
 
+export interface ApplyReplayRollbackResult {
+  /**
+   * URL of the `origin` remote captured before the strip. The orchestrator
+   * passes this back to `restoreOriginRemote` after the agent finishes so
+   * the shared `.git/config` is left clean for the next cell on the same
+   * clone. `undefined` when the strip ran against a clone that already had
+   * no origin (e.g. a sibling cell stripped first).
+   */
+  originUrl?: string;
+}
+
 /**
  * Reset the worktree to a specific git SHA. Used for closed-issue replay so
  * the coding agent encounters the codebase at the issue's pre-fix base SHA
@@ -28,11 +39,19 @@ const execFile = promisify(execFileCb);
  * Throws if the SHA is unknown or the reset fails — callers let the
  * orchestrator surface the error rather than swallowing it. Open-issue
  * dispatches skip this helper entirely (no baseSha supplied).
+ *
+ * Returns the pre-strip `origin` URL so the caller can restore it after the
+ * agent finishes (issue #253). The strip mutates the SHARED `.git/config`
+ * because non-bare clones don't scope `git remote remove` to the worktree;
+ * leaving that mutation in place broke every subsequent cell's
+ * `createWorktree` fetch on the same clone. Pairing strip with restore (and
+ * a defensive `ensureOriginRemote` in `createWorktree`) keeps the cross-cell
+ * surface clean.
  */
 export async function applyReplayRollback(opts: {
   worktreePath: string;
   baseSha: string;
-}): Promise<void> {
+}): Promise<ApplyReplayRollbackResult> {
   await execFile("git", ["-C", opts.worktreePath, "reset", "--hard", opts.baseSha]);
   // Replay-mode invariant: the agent must encounter the pre-fix codebase
   // state. Larger trim CLAUDE.mds carry a "sync to main before work" rule
@@ -42,11 +61,74 @@ export async function applyReplayRollback(opts: {
   // 6KB-trim cell on the same issue). Strip the `origin` remote so any
   // sync attempt fails fast. `--dry-run` already intercepts push; replay
   // never reads from origin afterwards.
+  //
+  // Save the URL FIRST so the caller can restore it on cleanup. Best-effort:
+  // a sibling cell may already have stripped origin, in which case we leave
+  // `originUrl` undefined and rely on `ensureOriginRemote` in the next
+  // `createWorktree` to reconstruct from the targetRepo slug.
+  let originUrl: string | undefined;
+  try {
+    const { stdout } = await execFile("git", [
+      "-C",
+      opts.worktreePath,
+      "remote",
+      "get-url",
+      "origin",
+    ]);
+    originUrl = stdout.trim() || undefined;
+  } catch {
+    // origin already absent — sibling cell stripped first, or clone has
+    // no remote configured. `originUrl` stays undefined.
+  }
   try {
     await execFile("git", ["-C", opts.worktreePath, "remote", "remove", "origin"]);
   } catch {
     // remote may already be absent (e.g. subsequent cells reusing the same
     // clone where a prior cell stripped it). Best-effort, idempotent.
+  }
+  return { originUrl };
+}
+
+/**
+ * Restore the `origin` remote URL after a replay-mode cell finishes (#253).
+ *
+ * Called from `runIssueCore`'s finally block, paired with the saved URL
+ * returned by `applyReplayRollback`. Idempotent against concurrent cells:
+ * if a sibling cell already re-added origin (via `ensureOriginRemote`), we
+ * fall through to `set-url` rather than throwing on the duplicate. No-op
+ * when the saved URL is `undefined` (a sibling stripped first).
+ */
+export async function restoreOriginRemote(opts: {
+  worktreePath: string;
+  originUrl?: string;
+}): Promise<void> {
+  if (!opts.originUrl) return;
+  try {
+    await execFile("git", [
+      "-C",
+      opts.worktreePath,
+      "remote",
+      "add",
+      "origin",
+      opts.originUrl,
+    ]);
+    return;
+  } catch {
+    // origin already exists (sibling cell restored). Fall through.
+  }
+  try {
+    await execFile("git", [
+      "-C",
+      opts.worktreePath,
+      "remote",
+      "set-url",
+      "origin",
+      opts.originUrl,
+    ]);
+  } catch {
+    // Best-effort: leaving an existing-but-different URL is preferable to
+    // throwing. The next cell's `ensureOriginRemote` will see a present
+    // origin and treat it as a no-op.
   }
 }
 

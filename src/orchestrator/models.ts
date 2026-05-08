@@ -5,8 +5,14 @@
 // Tier rationale:
 //   - triage:      haiku — per-issue scan, often 50+ issues per run; opus at
 //                  ~50× would be uneconomical and the rubric is narrow.
-//   - dispatch:    opus  — cross-issue routing reasoning; mistakes cascade
-//                  into wrong-agent assignments and burn coding-agent budget.
+//   - dispatch:    opus[1m] — cross-issue routing reasoning over the full
+//                  per-agent CLAUDE.md prose for every idle agent (~370K
+//                  tokens at scale). The 1M-context variant is required to
+//                  fit ~45 deduped agent CLAUDE.mds plus pending issue
+//                  bodies; the standard 200K window overflows. Mistakes
+//                  cascade into wrong-agent assignments and burn
+//                  coding-agent budget, so the precision-over-cost tier
+//                  matches the work.
 //   - split:       opus  — clusterer reasoning over the entire CLAUDE.md to
 //                  propose meaningful splits; quality matters more than cost.
 //   - summarizer:  sonnet — per-run, frequency-justifies-cheaper-tier; the
@@ -25,7 +31,7 @@ export const ORCHESTRATOR_MODEL_TRIAGE =
   process.env.VP_DEV_TRIAGE_MODEL ?? "claude-haiku-4-5-20251001";
 
 export const ORCHESTRATOR_MODEL_DISPATCH =
-  process.env.VP_DEV_DISPATCH_MODEL ?? "claude-opus-4-7";
+  process.env.VP_DEV_DISPATCH_MODEL ?? "claude-opus-4-7[1m]";
 
 export const ORCHESTRATOR_MODEL_SPLIT =
   process.env.VP_DEV_SPLIT_MODEL ?? "claude-opus-4-7";

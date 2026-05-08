@@ -16,7 +16,7 @@ import type { IssueSummary } from "../types.js";
 // pure-function checkDependencies tests with stubbed state resolvers.
 
 function makeSummary(id: number, title = `Issue ${id}`): IssueSummary {
-  return { id, title, labels: [], state: "open" };
+  return { id, title, labels: [], state: "open", body: "" };
 }
 
 // ---------- parseDependencyRefs ----------

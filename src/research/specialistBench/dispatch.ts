@@ -102,6 +102,7 @@ export async function runBenchDispatch(
       title: "", // pickAgents doesn't use title — Jaccard is on labels
       labels,
       state: "open",
+      body: "",
     };
     const pickResult = pickAgents({
       reg,

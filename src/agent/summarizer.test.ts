@@ -35,6 +35,7 @@ const stubIssue: IssueSummary = {
   title: "Test issue",
   labels: ["bug"],
   state: "open",
+  body: "",
 };
 
 const stubEnvelope: ResultEnvelope = {

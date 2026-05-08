@@ -229,6 +229,14 @@ export interface IssueSummary {
   title: string;
   labels: string[];
   state: "open" | "closed";
+  /**
+   * Issue body markdown. Populated by the gh fetchers (`listOpenIssues`,
+   * `getIssue`, `resolveRangeToIssues`) so the dispatcher prompt can route
+   * on prose, not just labels. Empty string when GitHub returns a null body
+   * (issues with no description). Comments are NOT included here — see
+   * `IssueDetail` for that richer shape.
+   */
+  body: string;
 }
 
 /**

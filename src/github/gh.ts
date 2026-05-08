@@ -12,10 +12,10 @@ interface GhIssueRecord {
   title: string;
   state: string;
   labels: { name: string }[];
+  body: string;
 }
 
 interface GhIssueDetailRecord extends GhIssueRecord {
-  body: string;
   comments: { author?: { login?: string }; body: string; createdAt: string }[];
 }
 
@@ -26,7 +26,6 @@ export interface IssueComment {
 }
 
 export interface IssueDetail extends IssueSummary {
-  body: string;
   comments: IssueComment[];
 }
 
@@ -43,7 +42,7 @@ export async function listOpenIssues(targetRepo: string): Promise<IssueSummary[]
       "--limit",
       "1000",
       "--json",
-      "number,title,state,labels",
+      "number,title,state,labels,body",
     ],
     { maxBuffer: 50 * 1024 * 1024 },
   );
@@ -101,9 +100,9 @@ async function fetchIssueRecord(targetRepo: string, number: number): Promise<GhI
       "--repo",
       targetRepo,
       "--json",
-      "number,title,state,labels",
+      "number,title,state,labels,body",
     ],
-    { maxBuffer: 5 * 1024 * 1024 },
+    { maxBuffer: 50 * 1024 * 1024 },
   );
   return JSON.parse(stdout) as GhIssueRecord;
 }
@@ -144,6 +143,7 @@ function toSummary(rec: GhIssueRecord): IssueSummary {
     title: rec.title,
     labels: rec.labels.map((l) => l.name),
     state,
+    body: rec.body ?? "",
   };
 }
 
@@ -166,7 +166,6 @@ export async function getIssueDetail(targetRepo: string, number: number): Promis
     const summary = toSummary(rec);
     return {
       ...summary,
-      body: rec.body ?? "",
       comments: (rec.comments ?? []).map((c) => ({
         author: c.author?.login ?? "",
         body: c.body ?? "",

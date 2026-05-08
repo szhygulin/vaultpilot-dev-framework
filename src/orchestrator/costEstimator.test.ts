@@ -17,7 +17,7 @@ import {
 import type { IssueSummary } from "../types.js";
 
 function issue(id: number, title = `Issue ${id}`): IssueSummary {
-  return { id, title, labels: [], state: "open" };
+  return { id, title, labels: [], state: "open", body: "" };
 }
 
 // Float-tolerant equality for budget arithmetic (3.6 - 1.2 - 2.4 lands on

@@ -137,6 +137,13 @@ import {
   type PoolFile,
   type TrimProposal,
 } from "./agent/trimPool.js";
+import {
+  DEFAULT_SNAPSHOT_REPO,
+  pullSnapshot,
+  pushSnapshot,
+  type ConflictPolicy,
+  type SyncSummary,
+} from "./agent/snapshotSync.js";
 import { isValidDomain } from "./util/promotionMarkers.js";
 import {
   loadAllOutcomes,
@@ -515,6 +522,39 @@ export function buildCli(): Command {
         .option("--all", "Include archived (split-parent) agents")
         .action(async (opts) => {
           await cmdAgentsStats(opts);
+        }),
+    )
+    .addCommand(
+      new Command("pull-snapshot")
+        .description(
+          "Sync per-agent CLAUDE.md files DOWN from the snapshot repo (default: szhygulin/vaultpilot-dev-agents) into local agents/. Default policy 'skip-existing' won't clobber a run-in-progress's freshly-summarized memory; --policy overwrite replaces local content under the per-file lock.",
+        )
+        .option("--repo <owner/repo>", "GitHub snapshot repo", DEFAULT_SNAPSHOT_REPO)
+        .option("--clone-dir <path>", "Local clone dir for the snapshot repo (default: .claude/agents-snapshot)")
+        .option("--policy <name>", "Conflict policy: skip-existing | overwrite", "skip-existing")
+        .option("--dry-run", "Print what would be copied without writing")
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdAgentsPullSnapshot(opts);
+        }),
+    )
+    .addCommand(
+      new Command("push-snapshot")
+        .description(
+          "Sync local per-agent CLAUDE.md files UP to the snapshot repo. Excludes synthetic curve-redo study agents (agent-916a-trim-*, agent-9180-9189) by default. Without --apply it's a dry run; with --apply it branches off origin/main, commits, pushes, and opens a PR via gh.",
+        )
+        .option("--repo <owner/repo>", "GitHub snapshot repo", DEFAULT_SNAPSHOT_REPO)
+        .option("--clone-dir <path>", "Local clone dir for the snapshot repo (default: .claude/agents-snapshot)")
+        .option("--include-synthetic", "Include synthetic curve-redo agents (default: skip them)")
+        .option(
+          "--apply",
+          "Perform the push: commit + push + open PR. Without this flag, only the diff summary is printed.",
+        )
+        .option("--branch <name>", "Branch name to push (default: refresh-snapshot-YYYY-MM-DD)")
+        .option("--message <text>", "Commit message + PR title")
+        .option("--json", "Print machine-readable JSON")
+        .action(async (opts) => {
+          await cmdAgentsPushSnapshot(opts);
         }),
     );
   program.addCommand(agentsCmd);
@@ -3382,6 +3422,138 @@ async function cmdAgentsStats(opts: AgentsStatsOpts): Promise<void> {
     String(r.medianCiCycles),
   ]);
   printTable(headers, rows);
+}
+
+interface AgentsPullSnapshotOpts {
+  repo: string;
+  cloneDir?: string;
+  policy: string;
+  dryRun?: boolean;
+  json?: boolean;
+}
+
+function summaryStats(summary: SyncSummary): {
+  added: number;
+  updated: number;
+  skipped: number;
+  unchanged: number;
+  excluded: number;
+} {
+  return {
+    added: summary.added.length,
+    updated: summary.updated.length,
+    skipped: summary.skipped.length,
+    unchanged: summary.unchanged.length,
+    excluded: summary.excluded.length,
+  };
+}
+
+async function cmdAgentsPullSnapshot(opts: AgentsPullSnapshotOpts): Promise<void> {
+  if (opts.policy !== "skip-existing" && opts.policy !== "overwrite") {
+    process.stderr.write(
+      `ERROR: --policy must be 'skip-existing' or 'overwrite', got '${opts.policy}'.\n`,
+    );
+    process.exit(2);
+  }
+  let summary: SyncSummary;
+  try {
+    summary = await pullSnapshot({
+      repo: opts.repo,
+      cloneDir: opts.cloneDir,
+      policy: opts.policy as ConflictPolicy,
+      dryRun: opts.dryRun,
+    });
+  } catch (err) {
+    process.stderr.write(`ERROR: ${(err as Error).message}\n`);
+    process.exit(1);
+  }
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          repo: opts.repo,
+          policy: opts.policy,
+          dryRun: !!opts.dryRun,
+          counts: summaryStats(summary),
+          ...summary,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
+
+  const counts = summaryStats(summary);
+  const verb = opts.dryRun ? "Would pull" : "Pulled";
+  process.stdout.write(
+    `${verb} from ${opts.repo} (policy=${opts.policy}): ` +
+      `${counts.added} added, ${counts.updated} updated, ${counts.skipped} skipped (existing), ${counts.unchanged} unchanged.\n`,
+  );
+  if (summary.added.length) process.stdout.write(`  added:   ${summary.added.join(", ")}\n`);
+  if (summary.updated.length) process.stdout.write(`  updated: ${summary.updated.join(", ")}\n`);
+  if (summary.skipped.length) process.stdout.write(`  skipped: ${summary.skipped.join(", ")}\n`);
+}
+
+interface AgentsPushSnapshotOpts {
+  repo: string;
+  cloneDir?: string;
+  includeSynthetic?: boolean;
+  apply?: boolean;
+  branch?: string;
+  message?: string;
+  json?: boolean;
+}
+
+async function cmdAgentsPushSnapshot(opts: AgentsPushSnapshotOpts): Promise<void> {
+  let result: Awaited<ReturnType<typeof pushSnapshot>>;
+  try {
+    result = await pushSnapshot({
+      repo: opts.repo,
+      cloneDir: opts.cloneDir,
+      includeSynthetic: opts.includeSynthetic,
+      apply: opts.apply,
+      branch: opts.branch,
+      message: opts.message,
+    });
+  } catch (err) {
+    process.stderr.write(`ERROR: ${(err as Error).message}\n`);
+    process.exit(1);
+  }
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          repo: opts.repo,
+          apply: !!opts.apply,
+          branch: result.branch,
+          prUrl: result.prUrl,
+          counts: summaryStats(result.summary),
+          ...result.summary,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
+
+  const counts = summaryStats(result.summary);
+  const verb = opts.apply ? "Pushed" : "Would push";
+  process.stdout.write(
+    `${verb} to ${opts.repo} (branch=${result.branch}): ` +
+      `${counts.added} added, ${counts.updated} updated, ${counts.unchanged} unchanged, ${counts.excluded} excluded as synthetic.\n`,
+  );
+  if (result.summary.added.length) process.stdout.write(`  added:    ${result.summary.added.join(", ")}\n`);
+  if (result.summary.updated.length) process.stdout.write(`  updated:  ${result.summary.updated.join(", ")}\n`);
+  if (result.summary.excluded.length) process.stdout.write(`  excluded: ${result.summary.excluded.join(", ")}\n`);
+  if (!opts.apply) {
+    process.stdout.write("\nDry run. Re-invoke with --apply to commit + push + open the PR.\n");
+  } else if (result.prUrl) {
+    process.stdout.write(`\nPR opened: ${result.prUrl}\n`);
+  }
 }
 
 interface LessonsListOpts {

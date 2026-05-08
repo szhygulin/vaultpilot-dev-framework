@@ -9,7 +9,8 @@ The four scripts here drive the four execution stages:
 | Step | Script | Output |
 |------|--------|--------|
 | 1. Pick | `pick-specialists.cjs` | `picks.tsv` |
-| 2. Dispatch (per leg) | `dispatch-specialist-redo.sh <leg>` | `logs-leg<leg>/`, `diffs-leg<leg>/` |
+| 2a. Dispatch — serial | `dispatch-specialist-redo.sh <leg>` | `logs-leg<leg>/`, `diffs-leg<leg>/` |
+| 2b. Dispatch — parallel | `dispatch-specialist-redo-parallel.sh <leg> --parallel <N>` (requires scratch clones) | same |
 | 3. Score (per leg) | `score-specialist-redo.sh <leg>` | `scores-leg<leg>/` |
 | 4. Combine + compare | `combine-and-compare.cjs` | `specialist-redo-comparison.json` |
 
@@ -53,6 +54,41 @@ node research/curve-redo-bundle/specialist-redo/combine-and-compare.cjs \
   --output research/curve-redo-data/specialist-redo/specialist-redo-comparison.json
 ```
 
+## Parallel dispatch
+
+`dispatch-specialist-redo.sh` runs cells serially (one at a time per leg). The
+parallel variant `dispatch-specialist-redo-parallel.sh` runs N cells
+concurrently, one per pre-created scratch clone. Each scratch clone has its
+own `.git/`, eliminating the `git worktree add` lock contention that breaks
+naive parallel-N against a single shared clone (smoke 2026-05-08:
+`error: could not lock config file .git/config: File exists`).
+
+```bash
+# 1. Create N scratch clones for the target repo (idempotent — safe to re-run).
+bash research/curve-redo-bundle/specialist-redo/prepare-scratch-clones.sh \
+  szhygulin/vaultpilot-mcp 4 /tmp/specialist-redo-scratch
+# → /tmp/specialist-redo-scratch/vaultpilot-mcp-{1..4}
+
+# 2. Parallel dispatch (4 cells in flight at once).
+SCRATCH_CLONES_DIR=/tmp/specialist-redo-scratch \
+  bash research/curve-redo-bundle/specialist-redo/dispatch-specialist-redo-parallel.sh 1 --parallel 4
+```
+
+Per-worker stderr lands at `$OUT_DIR/parallel-worker-<i>.log` for debugging.
+Cells distribute round-robin across slots. The serial dispatcher is unchanged
+and remains the simpler choice when wall time isn't critical.
+
+Cross-leg parallelism (leg 1 + leg 2 against different target repos
+concurrently) was already safe with the serial dispatcher — different clones,
+different `.git/`s — and works without modification by running both invocations
+in separate shells. The parallel dispatcher solves the harder
+within-leg-on-one-clone case.
+
+The parallel dispatcher includes the workaround for [#253](https://github.com/szhygulin/vaultpilot-dev-framework/issues/253)
+(`applyReplayRollback` strips `origin` from the shared `.git/config`): origin
+is re-added idempotently before each cell so subsequent cells' `git fetch
+origin main` doesn't fail.
+
 ## Defense-in-depth cost caps
 
 `dispatch-specialist-redo.sh` honors:
@@ -60,6 +96,11 @@ node research/curve-redo-bundle/specialist-redo/combine-and-compare.cjs \
 * `VP_DEV_MAX_COST_USD` — per-cell cap (default `$10`).
 * `MAX_TOTAL_COST_USD` — running-sum cap across the loop (default `$200`).
   Aborts with exit 3 when reached.
+
+`dispatch-specialist-redo-parallel.sh` honors `VP_DEV_MAX_COST_USD` per cell.
+The aggregate cap is best-effort in parallel mode (workers update independently);
+prefer per-cell caps + total-budget pre-flight estimation over a hard aggregate
+abort.
 
 ## Trim-contamination assertion
 

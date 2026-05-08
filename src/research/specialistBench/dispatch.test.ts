@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runBenchDispatch, type BenchCellSpec } from "./dispatch.js";
+import { buildBenchSpawnArgs, runBenchDispatch, type BenchCellSpec } from "./dispatch.js";
 import type { AgentRegistryFile } from "../../types.js";
 
 const FIXTURE_REGISTRY: AgentRegistryFile = {
@@ -153,6 +153,32 @@ test("runBenchDispatch: emits onEvent for pick / start / done in order", async (
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test("buildBenchSpawnArgs: includes --research-mode by default (#248)", () => {
+  // Bench dispatch fans out across specialists to score them; every cell
+  // must NOT mutate the registry. The new `--research-mode` flag (#248) is
+  // a strict superset of `--skip-summary` — it also gates the per-agent
+  // counter bumps + applyTagUpdate. Both flags should be emitted; if a
+  // future refactor drops `--research-mode` the registry would silently
+  // drift across the bench again, which is what the snapshot+restore
+  // workaround was avoiding before this issue.
+  const spec: BenchCellSpec = {
+    pickedAgentId: "agent-2a3d",
+    issueId: 156,
+    replicate: 1,
+    targetRepo: "szhygulin/vaultpilot-mcp",
+    clonePath: "/tmp/fake-clone",
+  };
+  const args = buildBenchSpawnArgs(spec);
+  assert.ok(args.includes("--research-mode"), `expected --research-mode in: ${args.join(" ")}`);
+  assert.ok(args.includes("--skip-summary"), `expected --skip-summary in: ${args.join(" ")}`);
+  assert.ok(args.includes("--dry-run"), `expected --dry-run in: ${args.join(" ")}`);
+  // The two flags coexist intentionally — --skip-summary is the long-standing
+  // documented contract; --research-mode adds the registry-mutation gate.
+  assert.equal(args[0], "run");
+  assert.equal(args[1], "vp-dev");
+  assert.equal(args[3], "spawn");
 });
 
 test("runBenchDispatch: replicates default to 3 when not specified", async () => {

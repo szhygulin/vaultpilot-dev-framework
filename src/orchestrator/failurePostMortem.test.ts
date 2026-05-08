@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   composeFailurePostMortem,
   detectPendingPostMortem,
+  detectUniformHarnessFailure,
   POST_MORTEM_SENTINEL,
+  type PendingPostMortem,
 } from "./failurePostMortem.js";
 import type { IssueComment } from "../github/gh.js";
 
@@ -187,4 +189,111 @@ test("detectPendingPostMortem: an ambient unrelated comment does NOT lift the ga
     comment("yeah this is annoying, will look later", "2026-05-05T11:00:00Z", "alice"),
   ]);
   assert.equal(result.pending, true);
+});
+
+// ---- detectUniformHarnessFailure (issue #250) ---------------------------
+
+function pending(
+  issueId: number,
+  input: Partial<PendingPostMortem["input"]> & { errorSubtype?: string } = {},
+): PendingPostMortem {
+  return {
+    issueId,
+    input: {
+      runId: "run-2026-05-08T10-01-12-536Z",
+      agentId: `agent-${issueId.toString(16).padStart(4, "0")}`,
+      errorSubtype: input.errorSubtype,
+      errorReason: input.errorReason,
+      costUsd: input.costUsd ?? 0,
+      durationMs: input.durationMs ?? 5_000,
+      partialBranchUrl: input.partialBranchUrl,
+    },
+  };
+}
+
+test("detectUniformHarnessFailure: empty queue → not suppressed", () => {
+  const v = detectUniformHarnessFailure([]);
+  assert.equal(v.suppress, false);
+  assert.equal(v.count, 0);
+});
+
+test("detectUniformHarnessFailure: single failure → not suppressed (no fanout exists)", () => {
+  // The whole point of the suppression is to silence N near-identical
+  // comments across N issues. With one issue there's no fanout — the
+  // operator wants the per-issue gate even for a $0/short-duration crash.
+  const v = detectUniformHarnessFailure([
+    pending(101, { errorSubtype: "error_during_execution" }),
+  ]);
+  assert.equal(v.suppress, false);
+  assert.equal(v.count, 1);
+});
+
+test("detectUniformHarnessFailure: uniform harness pattern (SDK init crash) → suppressed", () => {
+  // Mirrors run-2026-05-08T10-01-12-536Z: 11 SDK-init failures, $0 cost,
+  // sub-30s durations, all sharing the same errorSubtype. The whole
+  // fanout collapses into one run-level diagnostic.
+  const v = detectUniformHarnessFailure([
+    pending(101, { errorSubtype: "error_during_execution", costUsd: 0, durationMs: 8_000 }),
+    pending(102, { errorSubtype: "error_during_execution", costUsd: 0, durationMs: 7_500 }),
+    pending(103, { errorSubtype: "error_during_execution", costUsd: 0, durationMs: 9_200 }),
+  ]);
+  assert.equal(v.suppress, true);
+  assert.equal(v.count, 3);
+  assert.equal(v.sharedSubtype, "error_during_execution");
+  assert.ok(v.reason && /3 dispatched issues/.test(v.reason));
+  assert.ok(v.reason && /error_during_execution/.test(v.reason));
+});
+
+test("detectUniformHarnessFailure: mixed errorSubtypes → not suppressed (issue-side, distinct causes)", () => {
+  // Two separate failures with separate root causes → operators want
+  // both per-issue post-mortems so triage flags each correctly.
+  const v = detectUniformHarnessFailure([
+    pending(201, { errorSubtype: "error_during_execution", costUsd: 0, durationMs: 5_000 }),
+    pending(202, { errorSubtype: "error_max_turns", costUsd: 0, durationMs: 5_000 }),
+  ]);
+  assert.equal(v.suppress, false);
+});
+
+test("detectUniformHarnessFailure: any pending exceeds cost threshold → not suppressed", () => {
+  // One agent reached issue context (cost > threshold) — that's
+  // issue-side work that crashed late, the per-issue gate IS the right
+  // surface even if the other agents died at SDK-init.
+  const v = detectUniformHarnessFailure([
+    pending(301, { errorSubtype: "error_during_execution", costUsd: 0, durationMs: 5_000 }),
+    pending(302, { errorSubtype: "error_during_execution", costUsd: 0.5, durationMs: 5_000 }),
+  ]);
+  assert.equal(v.suppress, false);
+});
+
+test("detectUniformHarnessFailure: any pending exceeds duration threshold → not suppressed", () => {
+  // An agent that ran for 60s likely reached issue context even with
+  // cost not reported — keep the per-issue gate.
+  const v = detectUniformHarnessFailure([
+    pending(401, { errorSubtype: "error_during_execution", costUsd: 0, durationMs: 5_000 }),
+    pending(402, { errorSubtype: "error_during_execution", costUsd: 0, durationMs: 60_000 }),
+  ]);
+  assert.equal(v.suppress, false);
+});
+
+test("detectUniformHarnessFailure: missing errorSubtype on first pending → not suppressed", () => {
+  // No machine-readable cause to share — fall back to per-issue posts so
+  // a human reading each comment can read the free-form reason.
+  const v = detectUniformHarnessFailure([
+    pending(501, { errorReason: "no envelope emitted", costUsd: 0, durationMs: 5_000 }),
+    pending(502, { errorReason: "no envelope emitted", costUsd: 0, durationMs: 5_000 }),
+  ]);
+  assert.equal(v.suppress, false);
+});
+
+test("detectUniformHarnessFailure: error_max_turns on a long-running agent → not suppressed", () => {
+  // Classic issue-side failure: agent burned cost and turns reading the
+  // issue + editing files, then ran out. Per-issue post-mortem IS the
+  // value-add here (Pre-dispatch scope-fit check, salvage with
+  // --resume-incomplete, etc.). Two such failures don't make them
+  // harness-shaped.
+  const v = detectUniformHarnessFailure([
+    pending(601, { errorSubtype: "error_max_turns", costUsd: 4.51, durationMs: 7 * 60_000 }),
+    pending(602, { errorSubtype: "error_max_turns", costUsd: 3.20, durationMs: 6 * 60_000 }),
+  ]);
+  assert.equal(v.suppress, false);
 });

@@ -14,7 +14,11 @@ import {
   resolveTargetRepoPath,
 } from "../git/worktree.js";
 import { postIssueComment } from "../github/gh.js";
-import { composeFailurePostMortem } from "./failurePostMortem.js";
+import {
+  composeFailurePostMortem,
+  detectUniformHarnessFailure,
+  type PendingPostMortem,
+} from "./failurePostMortem.js";
 import type { Logger } from "../log/logger.js";
 import type {
   AgentRecord,
@@ -93,6 +97,14 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
   const issuesById = new Map(input.issues.map((i) => [i.id, i]));
 
   const inFlight = new Map<string, Promise<void>>();
+
+  // Issue #250: post-mortem comments are deferred until the run completes
+  // so we can detect the uniform-harness-failure pattern (every dispatched
+  // agent dying at the same SDK/orchestrator-boundary step before reaching
+  // issue content) and suppress the fanout. Issue-side failures (mixed
+  // subtypes, `error_max_turns` after real work, etc.) still get per-issue
+  // comments via `flushPendingPostMortems` below.
+  const pendingPostMortems: PendingPostMortem[] = [];
 
   // Persist the running USD total into RunState before each save so
   // `vp-dev status` (issue #131) can render the live cost-burn signal
@@ -174,6 +186,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
           budgetUsd: input.budgetUsd,
           resumeContext: input.resumeContextByIssue?.get(issue.id),
           autoPhaseFollowup: input.autoPhaseFollowup,
+          pendingPostMortems,
         }).catch(async (err) => {
           input.logger.error("agent.uncaught", {
             agentId: agent.agentId,
@@ -230,6 +243,75 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
   await Promise.allSettled(inFlight.values());
   persistCost();
   await saveRunState(input.state);
+
+  // Issue #250: post-mortem fanout decision made AFTER every dispatched
+  // issue has settled. Run in dry-run mode is a no-op (matches the
+  // pre-#250 inline-post behavior — gh calls are intercepted in dry-run).
+  if (!input.dryRun) {
+    await flushPendingPostMortems({
+      pendings: pendingPostMortems,
+      targetRepo: input.state.targetRepo,
+      runId: input.state.runId,
+      logger: input.logger,
+    });
+  }
+}
+
+/**
+ * Issue #250: drain the deferred post-mortem queue at end-of-run.
+ *
+ * If `detectUniformHarnessFailure` returns `suppress: true` (every
+ * dispatched issue failed with the same SDK/orchestrator-boundary cause
+ * before reaching issue content), log a single
+ * `orchestrator.post_mortem_fanout_suppressed` event and skip every
+ * per-issue comment — operators read the run-state JSON / `vp-dev status`
+ * block to diagnose harness-side causes, not N near-identical comments
+ * fanned out across N unrelated issues.
+ *
+ * Otherwise post each pending comment in queue order. Individual post
+ * failures log `orchestrator.post_mortem_failed` and never abort the
+ * flush — matches the pre-#250 best-effort inline post.
+ */
+async function flushPendingPostMortems(opts: {
+  pendings: ReadonlyArray<PendingPostMortem>;
+  targetRepo: string;
+  runId: string;
+  logger: Logger;
+}): Promise<void> {
+  if (opts.pendings.length === 0) return;
+  const verdict = detectUniformHarnessFailure(opts.pendings);
+  if (verdict.suppress) {
+    opts.logger.warn("orchestrator.post_mortem_fanout_suppressed", {
+      runId: opts.runId,
+      count: verdict.count,
+      sharedSubtype: verdict.sharedSubtype,
+      reason: verdict.reason,
+      issueIds: opts.pendings.map((p) => p.issueId),
+    });
+    process.stderr.write(
+      `Skipped post-mortem fanout: ${verdict.count} issues failed with shared subtype \`${verdict.sharedSubtype}\` ` +
+        `before reaching issue context — see logs/${opts.runId}.jsonl for the harness-side cause.\n`,
+    );
+    return;
+  }
+  for (const p of opts.pendings) {
+    const body = composeFailurePostMortem(p.input);
+    try {
+      await postIssueComment(opts.targetRepo, p.issueId, body);
+      opts.logger.info("orchestrator.post_mortem_posted", {
+        agentId: p.input.agentId,
+        issueId: p.issueId,
+        runId: opts.runId,
+      });
+    } catch (err) {
+      opts.logger.warn("orchestrator.post_mortem_failed", {
+        agentId: p.input.agentId,
+        issueId: p.issueId,
+        runId: opts.runId,
+        err: (err as Error).message,
+      });
+    }
+  }
 }
 
 export interface PickAgentsInput {
@@ -533,6 +615,12 @@ async function runOneIssue(opts: {
   budgetUsd?: number;
   resumeContext?: ResumeContext;
   autoPhaseFollowup?: boolean;
+  /**
+   * Issue #250: per-run accumulator of post-mortem inputs. The orchestrator
+   * decides at end-of-run whether to fan out (post N comments) or suppress
+   * (uniform-harness pattern). `runOneIssue` only pushes; never reads.
+   */
+  pendingPostMortems: PendingPostMortem[];
 }): Promise<void> {
   const result = await runIssueCore({
     agent: opts.agent,
@@ -595,36 +683,29 @@ async function runOneIssue(opts: {
   if (stateAgent) stateAgent.status = "idle";
   await saveRunState(opts.state);
 
-  // Issue #100: post a fail-fast post-mortem comment on the GitHub issue
-  // after a non-clean exit. The triage gate on the next `vp-dev run` reads
-  // this comment and skips re-dispatch until a human resolves the blocker
-  // (or `--include-non-ready` overrides). Skipped in dry-run because gh
-  // calls in dry-run runs are intercepted into echoes; failing to post
-  // logs a warning but never aborts the run.
-  if (nonCleanExit && !opts.dryRun) {
-    const body = composeFailurePostMortem({
-      runId: opts.state.runId,
-      agentId: opts.agent.agentId,
-      errorSubtype: result.errorSubtype,
-      errorReason: result.errorReason,
-      costUsd: result.costUsd,
-      durationMs: result.durationMs,
-      partialBranchUrl: result.partialBranchUrl,
+  // Issue #100: a fail-fast post-mortem comment is queued on every
+  // non-clean exit so the triage gate on the next `vp-dev run` skips
+  // re-dispatch until a human resolves the blocker (or
+  // `--include-non-ready` overrides).
+  //
+  // Issue #250: the queue is drained at end-of-run by
+  // `flushPendingPostMortems`. If every dispatched issue failed at the
+  // same SDK/orchestrator-boundary step before reaching issue content
+  // (uniform-harness pattern), the entire fanout is suppressed and the
+  // operator reads the run-state JSON / `vp-dev status` block instead of
+  // having N issues spammed with environmental-hiccup comments.
+  if (nonCleanExit) {
+    opts.pendingPostMortems.push({
+      issueId: opts.issue.id,
+      input: {
+        runId: opts.state.runId,
+        agentId: opts.agent.agentId,
+        errorSubtype: result.errorSubtype,
+        errorReason: result.errorReason,
+        costUsd: result.costUsd,
+        durationMs: result.durationMs,
+        partialBranchUrl: result.partialBranchUrl,
+      },
     });
-    try {
-      await postIssueComment(opts.state.targetRepo, opts.issue.id, body);
-      opts.logger.info("orchestrator.post_mortem_posted", {
-        agentId: opts.agent.agentId,
-        issueId: opts.issue.id,
-        runId: opts.state.runId,
-      });
-    } catch (err) {
-      opts.logger.warn("orchestrator.post_mortem_failed", {
-        agentId: opts.agent.agentId,
-        issueId: opts.issue.id,
-        runId: opts.state.runId,
-        err: (err as Error).message,
-      });
-    }
   }
 }

@@ -136,9 +136,16 @@ export async function dispatchCells(opts: DispatchOptions): Promise<DispatchResu
   });
 }
 
-async function runCell(cell: CellSpec, opts: DispatchOptions): Promise<DispatchResult> {
-  opts.onEvent?.({ kind: "start", cell, t: new Date() });
-  const logPath = path.join(opts.logsDir, `${opts.logPrefix}${cell.devAgentId}-${cell.issueId}.log`);
+/**
+ * Build the `npm run vp-dev -- spawn` argv for a single curve-study cell.
+ * Exported so unit tests can verify the per-cell flag set without spawning a
+ * real subprocess. Includes the static `--skip-summary` + `--research-mode`
+ * pair (#248) up front; optional flags (`--dry-run`, etc.) push onto the end.
+ */
+export function buildCurveStudySpawnArgs(
+  cell: CellSpec,
+  opts: DispatchOptions,
+): string[] {
   const args = [
     "run",
     "vp-dev",
@@ -153,11 +160,25 @@ async function runCell(cell: CellSpec, opts: DispatchOptions): Promise<DispatchR
     "--target-repo-path",
     cell.clonePath,
     "--skip-summary",
+    // Issue #248: curve-study cells fan out across the specialist roster
+    // (per-cell devAgentId varies). Without this flag every cell mutates
+    // the registry (`issuesHandled`, counters, lastActiveAt, applied tags),
+    // forcing the operator to snapshot+restore around the experiment.
+    // `--research-mode` suppresses every persistent registry side effect of
+    // the run; pass it alongside `--skip-summary` for a full block.
+    "--research-mode",
   ];
   if (opts.dryRun) args.push("--dry-run");
   if (opts.allowClosedIssue) args.push("--allow-closed-issue");
   if (opts.issueBodyOnly) args.push("--issue-body-only");
   if (opts.suppressTargetClaudeMd) args.push("--no-target-claude-md");
+  return args;
+}
+
+async function runCell(cell: CellSpec, opts: DispatchOptions): Promise<DispatchResult> {
+  opts.onEvent?.({ kind: "start", cell, t: new Date() });
+  const logPath = path.join(opts.logsDir, `${opts.logPrefix}${cell.devAgentId}-${cell.issueId}.log`);
+  const args = buildCurveStudySpawnArgs(cell, opts);
 
   const out = await fs.open(logPath, "w");
   const rc = await new Promise<number>((res, rej) => {

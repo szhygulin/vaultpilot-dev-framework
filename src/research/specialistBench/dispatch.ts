@@ -185,11 +185,13 @@ async function defaultFetchIssueLabels(
   return parsed.labels.map((l) => l.name);
 }
 
-async function defaultSpawnCell(
-  spec: BenchCellSpec,
-  logPath: string,
-): Promise<{ rc: number }> {
-  const args = [
+/**
+ * Build the `npm run vp-dev -- spawn` argv for a single bench cell. Exported
+ * so unit tests can verify the per-cell flag set (especially `--research-mode`,
+ * #248) without spawning a real subprocess.
+ */
+export function buildBenchSpawnArgs(spec: BenchCellSpec): string[] {
+  return [
     "run",
     "vp-dev",
     "--",
@@ -203,10 +205,24 @@ async function defaultSpawnCell(
     "--target-repo-path",
     spec.clonePath,
     "--skip-summary",
+    // Issue #248: bench dispatch fans out across specialists to score them
+    // against held-out issues — every cell would otherwise drift the
+    // registry (`issuesHandled`, counters, lastActiveAt, applied tags).
+    // `--research-mode` suppresses every persistent registry side effect of
+    // the run. Keeps `--skip-summary` explicit too because the alias
+    // implication is internal to runIssueCore.
+    "--research-mode",
     "--dry-run",
     "--no-target-claude-md",
     "--issue-body-only",
   ];
+}
+
+async function defaultSpawnCell(
+  spec: BenchCellSpec,
+  logPath: string,
+): Promise<{ rc: number }> {
+  const args = buildBenchSpawnArgs(spec);
   const out = await fs.open(logPath, "w");
   return new Promise<{ rc: number }>((resolve, reject) => {
     const child = spawn("npm", args, {

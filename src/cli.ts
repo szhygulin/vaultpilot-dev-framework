@@ -277,6 +277,14 @@ export function buildCli(): Command {
     .option("--dry-run", "Intercept comment / PR / push tools with synthetic responses")
     .option("--verbose", "Mirror a colorized event subset to stderr")
     .option("--skip-summary", "Skip summarizer + CLAUDE.md append")
+    .option(
+      "--no-registry-mutation",
+      "Issue #248: suppress every persistent side effect of the run on the per-agent record. No `issuesHandled` / `implementCount` / `pushbackCount` / `errorCount` bump, no `lastActiveAt` refresh, no `applyTagUpdate` of envelope `addTags` / `removeTags`. Implies `--skip-summary` (no CLAUDE.md append, no utility-scoring write). Used by research / calibration dispatchers (curve-redo, specialist bench) so fan-outs across many specialists don't drift the registry. Default: production-mode mutations on.",
+    )
+    .option(
+      "--research-mode",
+      "Alias for `--no-registry-mutation`. Either flag suppresses every persistent registry side effect of the run. Both flags coexist for callers that prefer the descriptive `--research-mode` over the inverted `--no-…` form.",
+    )
     .option("--inspect-paths <csv>", "Comma-separated absolute paths the agent may inspect read-only (e.g. prior worktrees)")
     .option(
       "--allow-closed-issue",
@@ -3239,6 +3247,18 @@ interface SpawnOpts {
   dryRun?: boolean;
   verbose?: boolean;
   skipSummary?: boolean;
+  /**
+   * Issue #248: commander's `--no-registry-mutation` sets
+   * `registryMutation: false`. Default is `true` (production callers mutate
+   * the registry as before). Research dispatchers pass the flag and we
+   * derive the noRegistryMutation intent below.
+   */
+  registryMutation?: boolean;
+  /**
+   * Issue #248: descriptive alias for `--no-registry-mutation`. Either flag
+   * suppresses every persistent registry side effect of the run.
+   */
+  researchMode?: boolean;
   inspectPaths?: string;
   allowClosedIssue?: boolean;
   issueBodyOnly?: boolean;
@@ -3290,6 +3310,12 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
   // ceiling is crossed mid-run.
   const budgetUsd = resolveBudgetUsd({ flag: opts.maxCostUsd, env: process.env });
   const costTracker = new RunCostTracker({ budgetUsd });
+  // Issue #248: derive `noRegistryMutation` from either flag. Commander
+  // emits `registryMutation: false` for `--no-registry-mutation`; the
+  // descriptive `--research-mode` lands as `researchMode: true`. Either
+  // form suppresses every persistent registry side effect of the run.
+  const noRegistryMutation =
+    opts.registryMutation === false || !!opts.researchMode;
   logger.info("spawn.started", {
     runId,
     agentId: agent.agentId,
@@ -3298,6 +3324,7 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
     targetRepoPath: repoPath,
     dryRun: !!opts.dryRun,
     skipSummary: !!opts.skipSummary,
+    noRegistryMutation,
     maxCostUsd: budgetUsd ?? null,
   });
 
@@ -3343,6 +3370,11 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       dryRun: !!opts.dryRun,
       logger,
       skipSummary: !!opts.skipSummary,
+      // Issue #248: forward the suppress-all-mutations intent. runIssueCore
+      // gates the per-agent counter bumps, applyTagUpdate, persisted
+      // mutateRegistry call, and (via implication) the summarizer/utility
+      // writes. Production callers leave it false and tracking is unchanged.
+      noRegistryMutation,
       inspectPaths,
       issueBodyOnly: !!opts.issueBodyOnly,
       suppressTargetClaudeMd: opts.targetClaudeMd === false,
@@ -3370,6 +3402,10 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       // #235: surface the resolved per-spawn budget so dispatch loops
       // can confirm the ceiling actually applied (vs. silently undefined).
       maxCostUsd: budgetUsd ?? null,
+      // Issue #248: surface the registry-mutation gate so dispatch loops
+      // can confirm research-mode actually suppressed the per-run drift.
+      // True = registry untouched by this run; false = production tracking.
+      noRegistryMutation,
       appendOutcome: result.appendOutcome ?? null,
       summarySkipReason: result.summarySkipReason ?? null,
     };

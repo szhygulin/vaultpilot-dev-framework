@@ -44,6 +44,22 @@ export interface RunIssueCoreInput {
   dryRun: boolean;
   logger: Logger;
   skipSummary?: boolean;
+  /**
+   * Issue #248: when `true`, suppress ALL registry side effects of the run —
+   * the per-agent counter bumps (`issuesHandled`, `implementCount`,
+   * `pushbackCount`, `errorCount`), `lastActiveAt` refresh, and
+   * `applyTagUpdate(...)` of the envelope's `addTags` / `removeTags`.
+   *
+   * Implies `skipSummary` (no CLAUDE.md append, no utility-scoring record):
+   * any persistent state the orchestrator would write on behalf of the
+   * specialist is gated off so research dispatchers (`vp-dev research
+   * bench-specialists`, curve-redo cells) can fan out across many
+   * specialists without snapshotting / restoring the registry around the
+   * run.
+   *
+   * Off by default — the production path keeps tracking who handled what.
+   */
+  noRegistryMutation?: boolean;
   inspectPaths?: string[];
   /**
    * Per-run cost accumulator threaded down from `cmdRun()`. Phase 1 of
@@ -247,6 +263,13 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
     let appendOutcome: AppendOutcome | undefined;
     let summarySkipReason: string | undefined;
 
+    // Issue #248: research/calibration dispatchers pass `noRegistryMutation`
+    // to suppress every persistent side effect of the run. Treat it as a
+    // strict superset of `skipSummary` for downstream gating — the
+    // summarizer + CLAUDE.md append + utility-scoring writes already match
+    // the "no persistent state on the specialist" intent.
+    const skipSummary = !!input.skipSummary || !!input.noRegistryMutation;
+
     // #86 Phase 2: when the per-run cost ceiling has already been crossed
     // by the time this in-flight issue finished, skip the summarizer.
     // Rationale: the orchestrator is about to mark the run aborted, and
@@ -258,7 +281,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
     const budgetExceededAtCompletion =
       input.budgetUsd !== undefined &&
       input.costTracker?.exceedsBudget(input.budgetUsd) === true;
-    if (budgetExceededAtCompletion && !input.skipSummary) {
+    if (budgetExceededAtCompletion && !skipSummary) {
       summarySkipReason =
         "budget exceeded mid-run; summarizer skipped to avoid memory poisoning";
       input.logger.info("specialization.skipped", {
@@ -269,14 +292,22 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
     }
 
     if (envelope) {
-      input.agent.issuesHandled += 1;
-      if (envelope.decision === "implement") input.agent.implementCount += 1;
-      else if (envelope.decision === "pushback") input.agent.pushbackCount += 1;
-      else input.agent.errorCount += 1;
+      // Issue #248: gate the per-agent counter bumps + `applyTagUpdate` on
+      // `noRegistryMutation`. Production callers leave the flag undefined
+      // and the registry tracks decisions as before; research dispatchers
+      // pass the flag and the in-memory `AgentRecord` stays at the values
+      // it was loaded with (the persist-side `mutateRegistry` call below
+      // is similarly gated so nothing reaches `state/agents-registry.json`).
+      if (!input.noRegistryMutation) {
+        input.agent.issuesHandled += 1;
+        if (envelope.decision === "implement") input.agent.implementCount += 1;
+        else if (envelope.decision === "pushback") input.agent.pushbackCount += 1;
+        else input.agent.errorCount += 1;
 
-      applyTagUpdate(input.agent, envelope);
+        applyTagUpdate(input.agent, envelope);
+      }
 
-      if (!input.skipSummary && !budgetExceededAtCompletion) {
+      if (!skipSummary && !budgetExceededAtCompletion) {
         // Read current CLAUDE.md size for the marginal-cost transparency line
         // injected into the summarizer prompt (#179 Phase 1, option F). Surfaces
         // the empirical accuracy-degradation cost so the LLM can choose to skip
@@ -384,13 +415,19 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
         }
       }
     } else {
-      input.agent.errorCount += 1;
+      // Issue #248: same registry-mutation gate as the envelope branch
+      // above. A no-envelope run still bumps `errorCount` in production,
+      // but research dispatchers want the in-memory `AgentRecord`
+      // untouched.
+      if (!input.noRegistryMutation) {
+        input.agent.errorCount += 1;
+      }
 
       // No envelope — the SDK or the agent crashed before emitting one. Fire
       // the failure summarizer unless the cause is an infra flake (transport
       // error, GitHub 5xx, worktree creation fail) where there's no lesson,
       // or the run is being torn down for budget reasons (#86).
-      if (!input.skipSummary && !budgetExceededAtCompletion) {
+      if (!skipSummary && !budgetExceededAtCompletion) {
         if (isInfraFlake(result.errorReason)) {
           summarySkipReason = `infra flake skipped: ${result.errorReason}`;
           input.logger.info("specialization.skipped", {
@@ -450,7 +487,7 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
     // whose heading + tags overlap the agent's pushback reasoning. Runs
     // regardless of whether maybeAppendSummary appended — the signal is
     // about which prior rule the agent applied, not the new lesson.
-    if (envelope?.decision === "pushback" && !input.skipSummary) {
+    if (envelope?.decision === "pushback" && !skipSummary) {
       await recordUtilityForPushback({
         agentId: input.agent.agentId,
         runId: input.runId,
@@ -462,17 +499,25 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
       });
     }
 
-    await mutateRegistry((reg) => {
-      const persisted = ensureAgent(reg, input.agent.agentId);
-      Object.assign(persisted, {
-        tags: input.agent.tags,
-        issuesHandled: input.agent.issuesHandled,
-        implementCount: input.agent.implementCount,
-        pushbackCount: input.agent.pushbackCount,
-        errorCount: input.agent.errorCount,
-        lastActiveAt: new Date().toISOString(),
+    // Issue #248: research/calibration dispatchers pass `noRegistryMutation`
+    // so the persisted registry — `state/agents-registry.json` — stays
+    // exactly as the run started. Skipping `mutateRegistry` here is the
+    // step that closes the loop with the in-memory `AgentRecord` gate
+    // above; without it the on-disk registry would still pick up
+    // `lastActiveAt` from `new Date().toISOString()`.
+    if (!input.noRegistryMutation) {
+      await mutateRegistry((reg) => {
+        const persisted = ensureAgent(reg, input.agent.agentId);
+        Object.assign(persisted, {
+          tags: input.agent.tags,
+          issuesHandled: input.agent.issuesHandled,
+          implementCount: input.agent.implementCount,
+          pushbackCount: input.agent.pushbackCount,
+          errorCount: input.agent.errorCount,
+          lastActiveAt: new Date().toISOString(),
+        });
       });
-    });
+    }
 
     // Orchestrator-level safety net: when the run ended in a non-clean
     // exit (per `shouldPushPartial`) AND the agent did not finish with a

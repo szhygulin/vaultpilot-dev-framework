@@ -184,3 +184,95 @@ function extractRunId(body: string): string | undefined {
   const m = /\(\s*(run-[^,)\s]+)/i.exec(body);
   return m ? m[1] : undefined;
 }
+
+// ---- Uniform-harness-failure suppression (issue #250) -------------------
+
+/**
+ * A post-mortem queued during the run, deferred until the run finishes so
+ * the orchestrator can decide whether to fan out (post N comments) or
+ * suppress (uniform-harness pattern; see `detectUniformHarnessFailure`).
+ */
+export interface PendingPostMortem {
+  /** GitHub issue number. */
+  issueId: number;
+  /** Inputs forwarded to `composeFailurePostMortem` at flush time. */
+  input: FailurePostMortemInput;
+}
+
+/**
+ * Cost threshold (USD) below which an agent run is treated as NOT having
+ * reached the issue-content read step. SDK-init failures cost $0; a single
+ * tool call typically costs ~$0.005–$0.01. Conservative: an agent that
+ * read the issue body and emitted even one tool call clears this.
+ */
+export const UNIFORM_HARNESS_COST_USD_THRESHOLD = 0.01;
+
+/**
+ * Duration threshold (ms) below which a non-clean exit is treated as
+ * "did not reach issue context". SDK-init failures land in <10s; genuine
+ * issue work takes 60–180s+. 30s is conservative on both sides.
+ */
+export const UNIFORM_HARNESS_DURATION_MS_THRESHOLD = 30_000;
+
+export interface UniformHarnessVerdict {
+  /** True when the post-mortem fanout should be suppressed. */
+  suppress: boolean;
+  /** Operator-facing reason; populated when suppress=true. */
+  reason?: string;
+  /** Shared error subtype across all dispatched issues; populated when suppress=true. */
+  sharedSubtype?: string;
+  /** Number of pending post-mortems considered. */
+  count: number;
+}
+
+/**
+ * Detect the uniform-harness-failure pattern (issue #250).
+ *
+ * Returns `suppress: true` when ALL of:
+ *   1. ≥2 dispatched issues failed (no fanout to suppress when count<2).
+ *   2. All share the same `errorSubtype` at the SDK / orchestrator boundary.
+ *   3. No agent reached issue-content read — proxy: per-pending
+ *      `costUsd < UNIFORM_HARNESS_COST_USD_THRESHOLD` AND
+ *      `durationMs < UNIFORM_HARNESS_DURATION_MS_THRESHOLD`.
+ *
+ * When the verdict is `suppress: true`, the orchestrator skips the
+ * per-issue post-mortem comment fanout and logs a single
+ * `orchestrator.post_mortem_fanout_suppressed` event so the run-state JSON
+ * surfaces the harness-side cause without flooding N issues with
+ * environmental-hiccup comments.
+ *
+ * Issue-side failure shapes (mixed subtypes, `error_max_turns` after the
+ * agent burned real cost reading + editing, partial completes) all return
+ * `suppress: false` — those genuinely benefit from the per-issue gate.
+ */
+export function detectUniformHarnessFailure(
+  pendings: ReadonlyArray<PendingPostMortem>,
+): UniformHarnessVerdict {
+  const count = pendings.length;
+  if (count < 2) return { suppress: false, count };
+
+  const sharedSubtype = pendings[0].input.errorSubtype;
+  if (!sharedSubtype) return { suppress: false, count };
+
+  const allSameSubtype = pendings.every(
+    (p) => p.input.errorSubtype === sharedSubtype,
+  );
+  if (!allSameSubtype) return { suppress: false, count };
+
+  const allUnreached = pendings.every((p) => {
+    const cost = p.input.costUsd ?? 0;
+    const dur = p.input.durationMs ?? 0;
+    return (
+      cost < UNIFORM_HARNESS_COST_USD_THRESHOLD &&
+      dur < UNIFORM_HARNESS_DURATION_MS_THRESHOLD
+    );
+  });
+  if (!allUnreached) return { suppress: false, count };
+
+  return {
+    suppress: true,
+    sharedSubtype,
+    count,
+    reason: `all ${count} dispatched issues failed at the SDK/orchestrator boundary with shared subtype \`${sharedSubtype}\` before reaching issue context — harness-side cause, see run-state JSON`,
+  };
+}

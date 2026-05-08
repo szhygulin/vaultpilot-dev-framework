@@ -1,17 +1,25 @@
-// Sync per-agent CLAUDE.md files between the local working tree (`agents/`)
-// and the snapshot repo (default: szhygulin/vaultpilot-dev-agents).
+// Sync per-agent CLAUDE.md + section-tags.json files between the local
+// working tree (`agents/`) and the snapshot repo (default:
+// szhygulin/vaultpilot-dev-agents).
 //
 // Local `agents/` is gitignored — it's the live store the orchestrator's
 // summarizer rewrites after every successful run. The snapshot repo is a
 // point-in-time mirror committed via PR. These two are kept decoupled so
 // the summarizer's writes don't fight a checked-out tree.
 //
-// pullSnapshot: clone (or refresh) the snapshot, then copy CLAUDE.mds DOWN
-// into local agents/. Default policy is `skip-existing` so a pull never
-// clobbers a run-in-progress's freshly-summarized memory; `overwrite`
-// replaces local content under the same per-file lock the summarizer uses.
+// Each agent has up to two synced files: `CLAUDE.md` (the per-agent prompt
+// memory) and `section-tags.json` (the sidecar holding per-section operator
+// metadata, post-`refactor/tags-to-sidecar`). Both files travel together so
+// pulling a fresh snapshot also brings the sidecar entries that match the
+// current sentinel set; absent sidecars (early-life agents) are tolerated.
 //
-// pushSnapshot: clone (or refresh) the snapshot, copy local CLAUDE.mds UP,
+// pullSnapshot: clone (or refresh) the snapshot, then copy each agent's
+// files DOWN into local agents/. Default policy is `skip-existing` so a
+// pull never clobbers a run-in-progress's freshly-summarized memory;
+// `overwrite` replaces local content under the same per-file lock the
+// summarizer uses.
+//
+// pushSnapshot: clone (or refresh) the snapshot, copy local files UP,
 // branch + commit + open a PR via gh. Synthetic curve-redo agents
 // (`agent-916a-trim-*`, `agent-9180`–`agent-9189`) are excluded by default
 // per the snapshot README's stated policy. Without --apply it's a dry run.
@@ -37,6 +45,17 @@ export const SYNTHETIC_AGENT_PATTERNS: readonly RegExp[] = [
 ];
 
 export type ConflictPolicy = "skip-existing" | "overwrite";
+
+/**
+ * Per-agent files synced between the local working tree and the snapshot
+ * repo. CLAUDE.md is the prompt memory; section-tags.json is the sidecar
+ * holding per-section operator metadata (post-`refactor/tags-to-sidecar`).
+ * Order matters for tests: the agent's "added/updated/unchanged" verdict
+ * derives from the highest-precedence action across files, with CLAUDE.md
+ * checked first as the canonical signal that the agent dir exists.
+ */
+export const SYNCED_AGENT_FILES = ["CLAUDE.md", "section-tags.json"] as const;
+export type SyncedAgentFile = (typeof SYNCED_AGENT_FILES)[number];
 
 export interface SyncSummary {
   /** Agents copied because they did not exist on the destination. */
@@ -87,6 +106,39 @@ export function classifyAgent(input: {
   if (input.sourceBytes.equals(input.destBytes)) return "unchanged";
   if (input.direction === "push") return "update";
   return input.policy === "overwrite" ? "update" : "skip";
+}
+
+/**
+ * Reduce per-file actions to a single per-agent verdict for SyncSummary
+ * bucketing.
+ *
+ * The verdict reflects the operator's mental model "what happened to this
+ * agent's directory?", which depends on whether the destination dir already
+ * existed (`destAgentExisted`). When the dir didn't exist, the only useful
+ * verdict is "add" — bringing in CLAUDE.md plus any optional sidecar files
+ * is a single creation event. When the dir did exist, "add"-of-a-new-file
+ * (e.g. a new sidecar landing alongside an existing CLAUDE.md) reads as an
+ * update of the agent, not as a fresh creation.
+ *
+ * Precedence within an existing-dir agent: update > skip > unchanged. "skip"
+ * wins over "unchanged" so a skip-existing pull that left a real difference
+ * untouched is still reported as skipped (tells the operator they chose to
+ * leave a divergence alone).
+ */
+export function mergeAgentActions(
+  actions: readonly SyncAction[],
+  destAgentExisted: boolean,
+): SyncAction {
+  if (!destAgentExisted) {
+    // Dir didn't exist before; per-file "skip" is unreachable here (skip
+    // requires a destBytes presence — which means the dir existed). So the
+    // only meaningful actions are "add" and "unchanged"; treat the verdict
+    // as "add" if any file was actually written.
+    return actions.includes("add") ? "add" : "unchanged";
+  }
+  if (actions.includes("update") || actions.includes("add")) return "update";
+  if (actions.includes("skip")) return "skip";
+  return "unchanged";
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -174,33 +226,49 @@ export async function pullSnapshot(opts: PullOptions = {}): Promise<SyncSummary>
   const remoteAgents = await listAgentDirs(remoteAgentsDir);
 
   for (const agentId of remoteAgents) {
-    const remoteFile = path.join(remoteAgentsDir, agentId, "CLAUDE.md");
-    const localFile = path.join(agentsRoot, agentId, "CLAUDE.md");
+    const fileActions: SyncAction[] = [];
+    let claudeMdSourcePresent = false;
+    let claudeMdDestExisted = false;
 
-    const [sourceBytes, destBytes] = await Promise.all([
-      readFileOrNull(remoteFile),
-      readFileOrNull(localFile),
-    ]);
-    if (sourceBytes === null) continue;
+    for (const fileName of SYNCED_AGENT_FILES) {
+      const remoteFile = path.join(remoteAgentsDir, agentId, fileName);
+      const localFile = path.join(agentsRoot, agentId, fileName);
 
-    const action = classifyAgent({ sourceBytes, destBytes, policy, direction: "pull" });
-    if (action === "unchanged") {
-      summary.unchanged.push(agentId);
-      continue;
-    }
-    if (action === "skip") {
-      summary.skipped.push(agentId);
-      continue;
+      const [sourceBytes, destBytes] = await Promise.all([
+        readFileOrNull(remoteFile),
+        readFileOrNull(localFile),
+      ]);
+      if (fileName === "CLAUDE.md") {
+        claudeMdSourcePresent = sourceBytes !== null;
+        claudeMdDestExisted = destBytes !== null;
+      }
+
+      // Skip files absent from the source: an early-life agent without a
+      // sidecar shouldn't drag the agent's verdict away from "unchanged" /
+      // "added". The merge precedence assumes per-file actions reflect real
+      // source-side state, so don't pollute it with absences.
+      if (sourceBytes === null) continue;
+
+      const action = classifyAgent({ sourceBytes, destBytes, policy, direction: "pull" });
+      fileActions.push(action);
+
+      if ((action === "add" || action === "update") && !dryRun) {
+        await fs.mkdir(path.dirname(localFile), { recursive: true });
+        await withFileLock(localFile, async () => {
+          await fs.writeFile(localFile, sourceBytes);
+        });
+      }
     }
 
-    if (!dryRun) {
-      await fs.mkdir(path.dirname(localFile), { recursive: true });
-      await withFileLock(localFile, async () => {
-        await fs.writeFile(localFile, sourceBytes);
-      });
-    }
-    if (action === "add") summary.added.push(agentId);
-    else summary.updated.push(agentId);
+    // Skip the agent entirely if its canonical CLAUDE.md is absent on the
+    // source — a stray sidecar without a CLAUDE.md is not a real agent.
+    if (!claudeMdSourcePresent) continue;
+
+    const merged = mergeAgentActions(fileActions, claudeMdDestExisted);
+    if (merged === "add") summary.added.push(agentId);
+    else if (merged === "update") summary.updated.push(agentId);
+    else if (merged === "skip") summary.skipped.push(agentId);
+    else summary.unchanged.push(agentId);
   }
 
   return summary;
@@ -260,26 +328,45 @@ export async function pushSnapshot(opts: PushOptions = {}): Promise<PushResult> 
       summary.excluded.push(agentId);
       continue;
     }
-    const localFile = path.join(agentsRoot, agentId, "CLAUDE.md");
-    const remoteFile = path.join(remoteAgentsDir, agentId, "CLAUDE.md");
 
-    const [sourceBytes, destBytes] = await Promise.all([
-      readFileOrNull(localFile),
-      readFileOrNull(remoteFile),
-    ]);
-    if (sourceBytes === null) continue;
+    const fileActions: SyncAction[] = [];
+    let claudeMdSourcePresent = false;
+    let claudeMdDestExisted = false;
 
-    const action = classifyAgent({ sourceBytes, destBytes, policy: "overwrite", direction: "push" });
-    if (action === "unchanged") {
-      summary.unchanged.push(agentId);
-      continue;
+    for (const fileName of SYNCED_AGENT_FILES) {
+      const localFile = path.join(agentsRoot, agentId, fileName);
+      const remoteFile = path.join(remoteAgentsDir, agentId, fileName);
+
+      const [sourceBytes, destBytes] = await Promise.all([
+        readFileOrNull(localFile),
+        readFileOrNull(remoteFile),
+      ]);
+      if (fileName === "CLAUDE.md") {
+        claudeMdSourcePresent = sourceBytes !== null;
+        claudeMdDestExisted = destBytes !== null;
+      }
+
+      // Same source-absent skip as pull — keeps the per-agent verdict tied
+      // to files that actually exist locally.
+      if (sourceBytes === null) continue;
+
+      const action = classifyAgent({ sourceBytes, destBytes, policy: "overwrite", direction: "push" });
+      fileActions.push(action);
+
+      if ((action === "add" || action === "update") && apply) {
+        await fs.mkdir(path.dirname(remoteFile), { recursive: true });
+        await fs.writeFile(remoteFile, sourceBytes);
+      }
     }
-    if (apply) {
-      await fs.mkdir(path.dirname(remoteFile), { recursive: true });
-      await fs.writeFile(remoteFile, sourceBytes);
-    }
-    if (action === "add") summary.added.push(agentId);
-    else if (action === "update") summary.updated.push(agentId);
+
+    // Skip if local CLAUDE.md is missing — same convention as pull.
+    if (!claudeMdSourcePresent) continue;
+
+    const merged = mergeAgentActions(fileActions, claudeMdDestExisted);
+    if (merged === "add") summary.added.push(agentId);
+    else if (merged === "update") summary.updated.push(agentId);
+    else if (merged === "unchanged") summary.unchanged.push(agentId);
+    // "skip" is unreachable for push (direction=push always returns add/update/unchanged), so we don't bucket it.
   }
 
   if (!apply) return { summary, branch };

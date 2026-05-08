@@ -6,8 +6,10 @@ import path from "node:path";
 import {
   classifyAgent,
   isSynthetic,
+  mergeAgentActions,
   pullSnapshot,
   pushSnapshot,
+  SYNCED_AGENT_FILES,
   SYNTHETIC_AGENT_PATTERNS,
 } from "./snapshotSync.js";
 
@@ -32,9 +34,23 @@ async function writeAgent(root: string, id: string, body: string): Promise<void>
   await fs.writeFile(path.join(dir, "CLAUDE.md"), body, "utf-8");
 }
 
+async function writeSidecar(root: string, id: string, body: string): Promise<void> {
+  const dir = path.join(root, id);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "section-tags.json"), body, "utf-8");
+}
+
 async function readAgent(root: string, id: string): Promise<string | null> {
   try {
     return await fs.readFile(path.join(root, id, "CLAUDE.md"), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+async function readSidecar(root: string, id: string): Promise<string | null> {
+  try {
+    return await fs.readFile(path.join(root, id, "section-tags.json"), "utf-8");
   } catch {
     return null;
   }
@@ -278,5 +294,257 @@ describe("pushSnapshot", () => {
     assert.deepEqual(result.summary.added, []);
     assert.deepEqual(result.summary.excluded, []);
     assert.match(result.branch, /^refresh-snapshot-\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("mergeAgentActions", () => {
+  it("dest didn't exist + any add → add (fresh agent dir)", () => {
+    assert.equal(mergeAgentActions(["add", "add"], false), "add");
+    assert.equal(mergeAgentActions(["add"], false), "add");
+  });
+
+  it("dest didn't exist + only unchanged → unchanged (degenerate case)", () => {
+    assert.equal(mergeAgentActions(["unchanged"], false), "unchanged");
+  });
+
+  it("dest existed + any add → update (sidecar landed alongside existing CLAUDE.md)", () => {
+    assert.equal(mergeAgentActions(["unchanged", "add"], true), "update");
+    assert.equal(mergeAgentActions(["add"], true), "update");
+  });
+
+  it("dest existed + any update → update", () => {
+    assert.equal(mergeAgentActions(["update", "unchanged"], true), "update");
+    assert.equal(mergeAgentActions(["unchanged", "update"], true), "update");
+  });
+
+  it("dest existed + skip beats unchanged", () => {
+    assert.equal(mergeAgentActions(["skip", "unchanged"], true), "skip");
+  });
+
+  it("dest existed + every file unchanged → unchanged", () => {
+    assert.equal(mergeAgentActions(["unchanged", "unchanged"], true), "unchanged");
+  });
+
+  it("exposes the synced filename set", () => {
+    assert.deepEqual([...SYNCED_AGENT_FILES], ["CLAUDE.md", "section-tags.json"]);
+  });
+});
+
+describe("pullSnapshot — section-tags.json sidecar", () => {
+  it("copies the sidecar alongside CLAUDE.md when adding a new agent", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "remote-body");
+    await writeSidecar(remoteAgentsDir, "agent-aaaa", '{"version":1,"sections":{}}');
+
+    const summary = await pullSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(summary.added, ["agent-aaaa"]);
+    assert.equal(await readAgent(localAgentsDir, "agent-aaaa"), "remote-body");
+    assert.equal(await readSidecar(localAgentsDir, "agent-aaaa"), '{"version":1,"sections":{}}');
+  });
+
+  it("tolerates a missing sidecar on the source (early-life agent)", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "remote-body");
+    // No sidecar on remote.
+
+    const summary = await pullSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(summary.added, ["agent-aaaa"]);
+    assert.equal(await readAgent(localAgentsDir, "agent-aaaa"), "remote-body");
+    assert.equal(await readSidecar(localAgentsDir, "agent-aaaa"), null);
+  });
+
+  it("overwrites both files under policy=overwrite", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "remote-body");
+    await writeSidecar(remoteAgentsDir, "agent-aaaa", '{"v":"remote"}');
+    await writeAgent(localAgentsDir, "agent-aaaa", "local-body");
+    await writeSidecar(localAgentsDir, "agent-aaaa", '{"v":"local"}');
+
+    const summary = await pullSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      policy: "overwrite",
+      skipFetch: true,
+    });
+
+    assert.deepEqual(summary.updated, ["agent-aaaa"]);
+    assert.equal(await readAgent(localAgentsDir, "agent-aaaa"), "remote-body");
+    assert.equal(await readSidecar(localAgentsDir, "agent-aaaa"), '{"v":"remote"}');
+  });
+
+  it("under skip-existing leaves both files alone when both differ", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "remote-body");
+    await writeSidecar(remoteAgentsDir, "agent-aaaa", '{"v":"remote"}');
+    await writeAgent(localAgentsDir, "agent-aaaa", "local-body");
+    await writeSidecar(localAgentsDir, "agent-aaaa", '{"v":"local"}');
+
+    const summary = await pullSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(summary.skipped, ["agent-aaaa"]);
+    assert.equal(await readAgent(localAgentsDir, "agent-aaaa"), "local-body");
+    assert.equal(await readSidecar(localAgentsDir, "agent-aaaa"), '{"v":"local"}');
+  });
+
+  it("reports updated when only the sidecar diverges (CLAUDE.md unchanged)", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "shared-body");
+    await writeSidecar(remoteAgentsDir, "agent-aaaa", '{"v":"remote"}');
+    await writeAgent(localAgentsDir, "agent-aaaa", "shared-body");
+    await writeSidecar(localAgentsDir, "agent-aaaa", '{"v":"local"}');
+
+    const summary = await pullSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      policy: "overwrite",
+      skipFetch: true,
+    });
+
+    assert.deepEqual(summary.updated, ["agent-aaaa"]);
+    assert.equal(await readSidecar(localAgentsDir, "agent-aaaa"), '{"v":"remote"}');
+  });
+
+  it("dry-run does not write the sidecar", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "remote-body");
+    await writeSidecar(remoteAgentsDir, "agent-aaaa", '{"v":"remote"}');
+
+    const summary = await pullSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      dryRun: true,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(summary.added, ["agent-aaaa"]);
+    assert.equal(await readAgent(localAgentsDir, "agent-aaaa"), null);
+    assert.equal(await readSidecar(localAgentsDir, "agent-aaaa"), null);
+  });
+});
+
+describe("pushSnapshot — section-tags.json sidecar", () => {
+  // Push tests use apply=false to avoid needing a real git clone — the
+  // existing pushSnapshot suite uses the same convention. A separate
+  // apply=true test covers the actual remote write under git.
+
+  it("counts the sidecar in the per-agent verdict when adding a fresh agent", async () => {
+    const { cloneDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(localAgentsDir, "agent-aaaa", "local-body");
+    await writeSidecar(localAgentsDir, "agent-aaaa", '{"v":"local"}');
+
+    const result = await pushSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      apply: false,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(result.summary.added, ["agent-aaaa"]);
+  });
+
+  it("tolerates a missing local sidecar (early-life agent)", async () => {
+    const { cloneDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(localAgentsDir, "agent-aaaa", "local-body");
+    // No sidecar locally.
+
+    const result = await pushSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      apply: false,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(result.summary.added, ["agent-aaaa"]);
+  });
+
+  it("reports updated when only the sidecar diverges", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "shared-body");
+    await writeSidecar(remoteAgentsDir, "agent-aaaa", '{"v":"remote"}');
+    await writeAgent(localAgentsDir, "agent-aaaa", "shared-body");
+    await writeSidecar(localAgentsDir, "agent-aaaa", '{"v":"local"}');
+
+    const result = await pushSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      apply: false,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(result.summary.updated, ["agent-aaaa"]);
+  });
+
+  it("reports unchanged when both files are byte-identical", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    await writeAgent(remoteAgentsDir, "agent-aaaa", "shared-body");
+    await writeSidecar(remoteAgentsDir, "agent-aaaa", '{"v":"shared"}');
+    await writeAgent(localAgentsDir, "agent-aaaa", "shared-body");
+    await writeSidecar(localAgentsDir, "agent-aaaa", '{"v":"shared"}');
+
+    const result = await pushSnapshot({
+      cloneDir,
+      agentsRoot: localAgentsDir,
+      apply: false,
+      skipFetch: true,
+    });
+
+    assert.deepEqual(result.summary.unchanged, ["agent-aaaa"]);
+  });
+
+  it("writes the sidecar to clone under apply=true (git-initialized clone)", async () => {
+    const { cloneDir, remoteAgentsDir, localAgentsDir } = await makeTempLayout();
+    // Initialize the clone as a git repo with a base commit so apply=true's
+    // commit step has something to work against. The push step inside
+    // pushSnapshot is gated by skipFetch=true so we won't hit the network.
+    await fs.mkdir(remoteAgentsDir, { recursive: true });
+    const { execFile: execFileCb } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileP = promisify(execFileCb);
+    await execFileP("git", ["init", "-q", "-b", "main"], { cwd: cloneDir });
+    await execFileP("git", ["config", "user.email", "test@local"], { cwd: cloneDir });
+    await execFileP("git", ["config", "user.name", "Test"], { cwd: cloneDir });
+    await fs.writeFile(path.join(cloneDir, "README.md"), "seed", "utf-8");
+    await execFileP("git", ["add", "-A"], { cwd: cloneDir });
+    await execFileP("git", ["commit", "-q", "-m", "seed"], { cwd: cloneDir });
+
+    await writeAgent(localAgentsDir, "agent-aaaa", "local-body");
+    await writeSidecar(localAgentsDir, "agent-aaaa", '{"v":"local"}');
+
+    // apply=true would also try `git push` and `gh pr create`; bypass that
+    // path by stopping after the file write. We can't easily stub gh, so
+    // assert by intercepting before the git operations: pushSnapshot only
+    // runs the file copy synchronously when apply=true, and the failure is
+    // at `git push`. Catch and inspect.
+    let writeReached = false;
+    try {
+      await pushSnapshot({
+        cloneDir,
+        agentsRoot: localAgentsDir,
+        apply: true,
+        skipFetch: true,
+      });
+      writeReached = true;
+    } catch {
+      // git push to non-existent remote will fail; that's fine for this test.
+      writeReached = true;
+    }
+    assert.equal(writeReached, true);
+    // The remote file was written before the git operations failed.
+    assert.equal(await readAgent(remoteAgentsDir, "agent-aaaa"), "local-body");
+    assert.equal(await readSidecar(remoteAgentsDir, "agent-aaaa"), '{"v":"local"}');
   });
 });

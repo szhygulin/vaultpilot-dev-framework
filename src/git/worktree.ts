@@ -75,9 +75,37 @@ export async function resolveTargetRepoPath(
   }
   const name = targetRepo.split("/").pop() ?? targetRepo;
   const home = process.env.HOME ?? "/home";
-  const conventional = path.resolve(home, "dev", name);
-  await fs.access(conventional);
-  return conventional;
+  // Two-path fallback (issue #254): the documented convention is
+  // `$HOME/dev/<repo-name>`, but this repo (and any operator using a
+  // grouped `$HOME/dev/<group>/<repo-name>` layout with back-compat
+  // symlinks) may have only the grouped path on disk. After the
+  // 2026-05-08 vaultpilot-development-agents → vaultpilot-dev-framework
+  // rename, the outer convention symlink for the new name was missing,
+  // so dispatch failed at ENOENT until the operator created it manually.
+  // Try the flat path first (preserves the documented default for
+  // external clones following the simpler convention) then fall back
+  // to the grouped path; the first that exists wins.
+  const candidates = [
+    path.resolve(home, "dev", name),
+    path.resolve(home, "dev", "vaultpilot", name),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // try next candidate
+    }
+  }
+  // Surface the same ENOENT shape callers have always handled, but with
+  // both probed paths in the message so the fix is obvious.
+  const err = new Error(
+    `ENOENT: no clone for ${targetRepo} at ${candidates.join(" nor ")}. ` +
+      `Clone it (gh repo clone ${targetRepo}) before dispatching, or pass ` +
+      `--target-repo-path explicitly.`,
+  ) as NodeJS.ErrnoException;
+  err.code = "ENOENT";
+  throw err;
 }
 
 /**

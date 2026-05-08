@@ -1,5 +1,5 @@
 {
-  "name": "vaultpilot-development-agents",
+  "name": "vaultpilot-dev-framework",
   "version": "0.1.0",
   "description": "LLM-driven development session: sonnet orchestrator dispatches issues to N parallel opus coding agents.",
   "type": "module",

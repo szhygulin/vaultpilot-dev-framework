@@ -8,7 +8,7 @@ import { aggregateLogsDir, extractEnvelope } from "./aggregate.js";
 test("extractEnvelope: finds the last top-level JSON object after npm chatter", () => {
   const text =
     [
-      "> vaultpilot-development-agents@0.1.0 vp-dev",
+      "> vaultpilot-dev-framework@0.1.0 vp-dev",
       "> node dist/bin/vp-dev.js spawn ...",
       "[12:00:01] some chatter",
       "{",
@@ -30,7 +30,7 @@ test("extractEnvelope: finds the last top-level JSON object after npm chatter", 
 
 test("extractEnvelope: spawn-stub log without envelope returns null", () => {
   const text =
-    "> vaultpilot-development-agents@0.1.0 vp-dev\n> node dist/bin/vp-dev.js spawn ...\n";
+    "> vaultpilot-dev-framework@0.1.0 vp-dev\n> node dist/bin/vp-dev.js spawn ...\n";
   assert.equal(extractEnvelope(text), null);
 });
 

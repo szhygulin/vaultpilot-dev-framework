@@ -133,7 +133,7 @@ These post-push checks are the verification-ceremony anti-pattern — they cost 
 3. Push the branch.
 4. Skip \`gh pr create\` and go straight to the envelope with \`decision: "error"\`, putting the failing-test name and last error line into \`reason\`.
 
-The orchestrator's recovery pass (PR [#92](https://github.com/szhygulin/vaultpilot-development-agents/pull/92)) salvages the partial branch — a known-incomplete attempt with a clean \`error\` envelope is strictly better than running out of turns mid-debug with no envelope at all.
+The orchestrator's recovery pass (PR [#92](https://github.com/szhygulin/vaultpilot-dev-framework/pull/92)) salvages the partial branch — a known-incomplete attempt with a clean \`error\` envelope is strictly better than running out of turns mid-debug with no envelope at all.
 
 **Investigative-coding signal.** If you find yourself re-reading the same source file twice during the closing third of your turns, that's a tell that the change map wasn't complete before you started editing. Stop reading; make the smallest additional edit that compiles + passes tests; ship. Save the "I should have planned more" insight for a memory tag, not for more reads on this run.
 ${v.autoPhaseFollowup ? `

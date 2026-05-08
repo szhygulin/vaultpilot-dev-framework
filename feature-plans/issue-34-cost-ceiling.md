@@ -1,6 +1,6 @@
 # Plan: hard cost ceiling per run with graceful abort
 
-Tracks [#34](https://github.com/szhygulin/vaultpilot-development-agents/issues/34).
+Tracks [#34](https://github.com/szhygulin/vaultpilot-dev-framework/issues/34).
 
 ## Context
 

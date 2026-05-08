@@ -64,10 +64,10 @@ and unanimous-implement issues (565/574/649) drag mean Q down because B
 Three latent score-loop bugs surfaced during the leg-1 run, all fixed before
 final results:
 
-- [#223](https://github.com/szhygulin/vaultpilot-development-agents/pull/223) — `captureWorktreeDiff` honors `baseSha` so committed agent work isn't dropped.
-- [#224](https://github.com/szhygulin/vaultpilot-development-agents/pull/224) — `runIssueCore` defaults `baseSha` to pre-agent worktree HEAD when caller omits `--replay-base-sha` (open-issue cells).
-- [#228](https://github.com/szhygulin/vaultpilot-development-agents/pull/228) — `testRunner` resolves relative `--diff-path` against process cwd, writes a vitest `--config` override so `include` doesn't filter hidden tests, plus README Step 2.5 (one-time `npm ci` per source clone) and Step 4 `node_modules` symlink.
-- [#229](https://github.com/szhygulin/vaultpilot-development-agents/pull/229) — `testRunner` runs `npm ci` automatically when `package.json` is present and `node_modules` is missing (safety net for the symlink path in #228).
+- [#223](https://github.com/szhygulin/vaultpilot-dev-framework/pull/223) — `captureWorktreeDiff` honors `baseSha` so committed agent work isn't dropped.
+- [#224](https://github.com/szhygulin/vaultpilot-dev-framework/pull/224) — `runIssueCore` defaults `baseSha` to pre-agent worktree HEAD when caller omits `--replay-base-sha` (open-issue cells).
+- [#228](https://github.com/szhygulin/vaultpilot-dev-framework/pull/228) — `testRunner` resolves relative `--diff-path` against process cwd, writes a vitest `--config` override so `include` doesn't filter hidden tests, plus README Step 2.5 (one-time `npm ci` per source clone) and Step 4 `node_modules` symlink.
+- [#229](https://github.com/szhygulin/vaultpilot-dev-framework/pull/229) — `testRunner` runs `npm ci` automatically when `package.json` is present and `node_modules` is missing (safety net for the symlink path in #228).
 
 Without #224 + #228 the leg would have produced 0 non-empty diffs — same
 failure mode as the 2026-05-07 morning run that consumed $25 and zero PR-grade
@@ -96,7 +96,7 @@ errors as `errored` against the full Test Files count.
 
 ## Next steps
 
-- Leg 2 dispatch on `szhygulin/vaultpilot-development-agents` (node-test, 7
+- Leg 2 dispatch on `szhygulin/vaultpilot-dev-framework` (node-test, 7
   issues × 18 trims = 126 cells, ~$140 + ~$60 judge).
 - `combine-legs.cjs` aggregates both legs and runs the linear-log default fit
   per the curve-study regression methodology in `CLAUDE.md`.

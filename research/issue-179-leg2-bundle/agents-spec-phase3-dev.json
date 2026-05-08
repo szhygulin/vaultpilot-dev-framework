@@ -2,7 +2,7 @@
   {
     "devAgentId": "agent-916a-trim-6000-s8026",
     "sizeBytes": 5935,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s8026-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s8026-vaultpilot-dev-framework",
     "targetBytes": 6000,
     "seed": 8026,
     "selectedIds": [
@@ -40,12 +40,12 @@
       "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-6000-s1008029",
     "sizeBytes": 5975,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s1008029-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s1008029-vaultpilot-dev-framework",
     "targetBytes": 6000,
     "seed": 1008029,
     "selectedIds": [
@@ -83,12 +83,12 @@
       "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-6000-s2008032",
     "sizeBytes": 5978,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s2008032-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-6000-s2008032-vaultpilot-dev-framework",
     "targetBytes": 6000,
     "seed": 2008032,
     "selectedIds": [
@@ -126,12 +126,12 @@
       "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-14000-s16026",
     "sizeBytes": 13935,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s16026-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s16026-vaultpilot-dev-framework",
     "targetBytes": 14000,
     "seed": 16026,
     "selectedIds": [
@@ -169,12 +169,12 @@
       "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
       "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-14000-s1016029",
     "sizeBytes": 13964,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s1016029-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s1016029-vaultpilot-dev-framework",
     "targetBytes": 14000,
     "seed": 1016029,
     "selectedIds": [
@@ -212,12 +212,12 @@
       "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-14000-s2016032",
     "sizeBytes": 13777,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s2016032-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-14000-s2016032-vaultpilot-dev-framework",
     "targetBytes": 14000,
     "seed": 2016032,
     "selectedIds": [
@@ -255,12 +255,12 @@
       "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-22000-s24026",
     "sizeBytes": 21873,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s24026-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s24026-vaultpilot-dev-framework",
     "targetBytes": 22000,
     "seed": 24026,
     "selectedIds": [
@@ -298,12 +298,12 @@
       "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
       "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-22000-s1024029",
     "sizeBytes": 21918,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s1024029-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s1024029-vaultpilot-dev-framework",
     "targetBytes": 22000,
     "seed": 1024029,
     "selectedIds": [
@@ -341,12 +341,12 @@
       "calibrate-heading-max-to-the-llm-s-observed-synthesis-output-distribution-not-single-item-intuition",
       "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-22000-s2024032",
     "sizeBytes": 21976,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s2024032-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-22000-s2024032-vaultpilot-dev-framework",
     "targetBytes": 22000,
     "seed": 2024032,
     "selectedIds": [
@@ -384,12 +384,12 @@
       "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-35000-s37026",
     "sizeBytes": 34556,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s37026-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s37026-vaultpilot-dev-framework",
     "targetBytes": 35000,
     "seed": 37026,
     "selectedIds": [
@@ -427,12 +427,12 @@
       "cross-cutting-features-need-a-layer-chain-audit-and-phase-split-along-the-data-layer-integratio",
       "issues-listing-multiple-competing-mechanisms-without-selection-need-design-clarification-before-dispatch"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-35000-s1037029",
     "sizeBytes": 34192,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s1037029-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s1037029-vaultpilot-dev-framework",
     "targetBytes": 35000,
     "seed": 1037029,
     "selectedIds": [
@@ -470,12 +470,12 @@
       "diagnose-claude-md-growth-shape-before-choosing-splitter-vs-compactor",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-35000-s2037032",
     "sizeBytes": 34786,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s2037032-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-35000-s2037032-vaultpilot-dev-framework",
     "targetBytes": 35000,
     "seed": 2037032,
     "selectedIds": [
@@ -513,12 +513,12 @@
       "fail-soft-wiring-for-state-collection-hooks-added-to-critical-run-paths",
       "research-study-execution-issues-are-operator-agent-seam-mismatches-push-back-with-a-phase-split"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-50000-s52026",
     "sizeBytes": 49745,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s52026-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s52026-vaultpilot-dev-framework",
     "targetBytes": 50000,
     "seed": 52026,
     "selectedIds": [
@@ -556,12 +556,12 @@
       "advisory-prose-security-findings-with-no-named-mcp-tool-surface-are-architectural-residual-risk",
       "skill-md-content-changes-require-a-coordinated-mcp-side-expected-skill-sha256-bump"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-50000-s1052029",
     "sizeBytes": 49010,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s1052029-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s1052029-vaultpilot-dev-framework",
     "targetBytes": 50000,
     "seed": 1052029,
     "selectedIds": [
@@ -599,12 +599,12 @@
       "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body",
       "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-50000-s2052032",
     "sizeBytes": 49726,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s2052032-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-50000-s2052032-vaultpilot-dev-framework",
     "targetBytes": 50000,
     "seed": 2052032,
     "selectedIds": [
@@ -642,12 +642,12 @@
       "operator-ad-hoc-scripts-against-raw-state-log-files-are-a-cli-ux-gap-to-fill-natively",
       "verify-the-authoritative-type-file-before-editing-the-path-named-in-an-issue-body"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-58000-s60026",
     "sizeBytes": 56247,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s60026-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s60026-vaultpilot-dev-framework",
     "targetBytes": 58000,
     "seed": 60026,
     "selectedIds": [
@@ -685,12 +685,12 @@
     "droppedIds": [
       "documentation-style-concise-non-redundant-sharp"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-58000-s1060029",
     "sizeBytes": 56493,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s1060029-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s1060029-vaultpilot-dev-framework",
     "targetBytes": 58000,
     "seed": 1060029,
     "selectedIds": [
@@ -728,12 +728,12 @@
     "droppedIds": [
       "verify-phase-dependency-infrastructure-in-code-before-implementing-a-later-phase-issue"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   },
   {
     "devAgentId": "agent-916a-trim-58000-s2060032",
     "sizeBytes": 56680,
-    "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s2060032-vaultpilot-development-agents",
+    "clonePath": "/tmp/study-clones/agent-916a-trim-58000-s2060032-vaultpilot-dev-framework",
     "targetBytes": 58000,
     "seed": 2060032,
     "selectedIds": [
@@ -771,6 +771,6 @@
     "droppedIds": [
       "thread-originating-agent-identity-end-to-end-in-resume-and-salvage-workflows"
     ],
-    "repo": "vaultpilot-development-agents"
+    "repo": "vaultpilot-dev-framework"
   }
 ]

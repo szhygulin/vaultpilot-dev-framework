@@ -2,7 +2,7 @@
 
 ## Context
 
-The just-merged curve-redo run ([leg-1 results PR #230](https://github.com/szhygulin/vaultpilot-development-agents/pull/230)) measured A+B quality across **18 fixed `agent-916a-trim-*` agents** (one parent, trimmed CLAUDE.md at 6 sizes × 3 seeds) on the 13-issue corpus. Per-trim mean Q was nearly flat (range 63.6–76.7 across 6 sizes), suggesting CLAUDE.md size alone isn't the dominant lever.
+The just-merged curve-redo run ([leg-1 results PR #230](https://github.com/szhygulin/vaultpilot-dev-framework/pull/230)) measured A+B quality across **18 fixed `agent-916a-trim-*` agents** (one parent, trimmed CLAUDE.md at 6 sizes × 3 seeds) on the 13-issue corpus. Per-trim mean Q was nearly flat (range 63.6–76.7 across 6 sizes), suggesting CLAUDE.md size alone isn't the dominant lever.
 
 This follow-up tests an orthogonal hypothesis: **orchestrator-picked specialists outperform fixed trim agents** because (a) their evolved per-agent CLAUDE.md encodes domain-specific lessons, and (b) the picker's tag-vs-label Jaccard match supplies issue-specific expertise. Same A+B formula, same isolation contract (no target / no user-global CLAUDE.md), K=3 replicates per (agent, issue) to absorb LLM stochasticity. Direct comparison against the merged trim-baseline tarballs.
 
@@ -14,12 +14,12 @@ Hypothesis: per-issue mean Q (specialist arm) > per-issue mean Q (trim arm), pai
 - **Dispatch**: Thin shell loop per `research/curve-redo-data/dispatch-leg1.sh`, NOT `vp-dev research bench-specialists` — the bench command's `runBenchDispatch` (`src/research/specialistBench/dispatch.ts:188-209`) hardcodes argv and doesn't plumb the `--no-target-claude-md` / `--capture-diff-path` / `--model` / `--replay-base-sha` flags.
 - **Replicates**: same agent for all 3 replicates (deterministic pick). Runs sequentially on the same per-agent clone to avoid worktree races; agents in parallel up to 4-wide.
 - **Cell ID**: `bench-r{N}-<agentId>-<issueId>` — the `bench-r{N}-` prefix follows `specialistBench/dispatch.ts:145`'s convention so the existing aggregator can group replicates.
-- **Score path**: reuses leg-1 testRunner + reasoningJudge end-to-end (PRs [#228](https://github.com/szhygulin/vaultpilot-development-agents/pull/228) + [#229](https://github.com/szhygulin/vaultpilot-development-agents/pull/229) already merged). Symlinked `node_modules` from canonical clones; `npm ci` auto-runs as safety net.
+- **Score path**: reuses leg-1 testRunner + reasoningJudge end-to-end (PRs [#228](https://github.com/szhygulin/vaultpilot-dev-framework/pull/228) + [#229](https://github.com/szhygulin/vaultpilot-dev-framework/pull/229) already merged). Symlinked `node_modules` from canonical clones; `npm ci` auto-runs as safety net.
 - **Comparator**: new `combine-and-compare.cjs` that reuses `pairByIssue` from `src/research/specialistBench/aggregate.ts:135-176`, swapping its heuristic `qualityFromDecision` for A+B-formula values via existing `samplesFromCellScores` (mirroring `research/curve-redo-bundle/combine-legs.cjs:51-73`).
 
 ## File layout
 
-All under `/Users/s/dev/vaultpilot/vaultpilot-development-agents/`:
+All under `/Users/s/dev/vaultpilot/vaultpilot-dev-framework/`:
 
 ```
 research/curve-redo-bundle/                    (committed)

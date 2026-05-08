@@ -1,6 +1,6 @@
 # Plan: pre-dispatch issue triage to filter not-ready issues
 
-Tracks [#35](https://github.com/szhygulin/vaultpilot-development-agents/issues/35).
+Tracks [#35](https://github.com/szhygulin/vaultpilot-dev-framework/issues/35).
 
 ## Context
 

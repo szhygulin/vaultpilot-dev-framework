@@ -1,6 +1,6 @@
 # Plan: failure-driven learning — extend summarizer to fire on terminal failure
 
-Tracks [#32](https://github.com/szhygulin/vaultpilot-development-agents/issues/32).
+Tracks [#32](https://github.com/szhygulin/vaultpilot-dev-framework/issues/32).
 
 ## Context
 

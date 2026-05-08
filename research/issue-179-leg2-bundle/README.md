@@ -1,6 +1,6 @@
 # #179 phase 3 leg 2 — handoff bundle
 
-Self-contained kit for running the **dev-agents leg** of the phase 3 randomized curve study (`vaultpilot-development-agents` issues × 18 trim agents = 126 cells). Leg 1 (vp-mcp, 108 cells) is already done; combining both gives K=13 cells/agent, the variance-reduction target the ROADMAP "K=13 follow-up" bullet describes.
+Self-contained kit for running the **dev-agents leg** of the phase 3 randomized curve study (`vaultpilot-dev-framework` issues × 18 trim agents = 126 cells). Leg 1 (vp-mcp, 108 cells) is already done; combining both gives K=13 cells/agent, the variance-reduction target the ROADMAP "K=13 follow-up" bullet describes.
 
 ## Bundle contents
 
@@ -24,8 +24,8 @@ distilled per-cell summary that drove the curve.)
 
 - A clone of this repo at `$REPO`. Branch `chore/issue-179-leg2-bundle` (this branch) or any branch that has the bundle file.
 - `npm ci && npm run build` succeeds (linear-log default, regex fix, etc. are all on `main`).
-- Local clone of `szhygulin/vaultpilot-development-agents` at `$HOME/dev/vaultpilot-development-agents` (or anywhere — only used as a clone source, not edited).
-- `gh auth status` clean — read access for `szhygulin/vaultpilot-development-agents` issues.
+- Local clone of `szhygulin/vaultpilot-dev-framework` at `$HOME/dev/vaultpilot-dev-framework` (or anywhere — only used as a clone source, not edited).
+- `gh auth status` clean — read access for `szhygulin/vaultpilot-dev-framework` issues.
 - `~13 GB` free at `/tmp` (18 fresh clones × ~720 MB inflated, or ~360 MB if cloning shallowly via `--no-local`).
 - Anthropic API key in env (`ANTHROPIC_API_KEY`).
 
@@ -82,7 +82,7 @@ jq -r '.[].clonePath' research/issue-179-data/agents-spec-phase3-dev.json > /tmp
 wc -l /tmp/leg2-clone-paths.txt  # expect 18
 
 # Clone source = local working tree of the target repo (fast, no network)
-DEV_AGENTS_SRC=$HOME/dev/vaultpilot-development-agents
+DEV_AGENTS_SRC=$HOME/dev/vaultpilot-dev-framework
 
 # Clone all 18, 8-way parallel
 xargs -a /tmp/leg2-clone-paths.txt -P 8 -I{} git clone --no-local "$DEV_AGENTS_SRC" {}
@@ -101,7 +101,7 @@ mkdir -p research/issue-179-data/logs-dev
 
 VP_DEV_MAX_COST_USD=15 node dist/bin/vp-dev.js research curve-study \
   --agents-spec research/issue-179-data/agents-spec-phase3-dev.json \
-  --target-repo szhygulin/vaultpilot-development-agents \
+  --target-repo szhygulin/vaultpilot-dev-framework \
   --issues 172,173,179,180,181,185,186 \
   --parallelism 8 \
   --no-target-claude-md --issue-body-only \
@@ -120,7 +120,7 @@ jq '[.[0]]' research/issue-179-data/agents-spec-phase3-dev.json > /tmp/agents-sp
 mkdir -p research/issue-179-data/logs-smoke-leg2
 VP_DEV_MAX_COST_USD=15 node dist/bin/vp-dev.js research curve-study \
   --agents-spec /tmp/agents-spec-smoke.json \
-  --target-repo szhygulin/vaultpilot-development-agents \
+  --target-repo szhygulin/vaultpilot-dev-framework \
   --issues 172 \
   --parallelism 1 \
   --no-target-claude-md --issue-body-only \
@@ -173,7 +173,7 @@ If p ≥ 0.05, **don't merge**. Either escalate to K=18+ (re-dispatch the same a
 # (no CLI command exists — edit state/agents-registry.json by hand or with jq)
 
 # Delete clones (~360 MB)
-rm -rf /tmp/study-clones/agent-916a-trim-*-vaultpilot-development-agents
+rm -rf /tmp/study-clones/agent-916a-trim-*-vaultpilot-dev-framework
 
 # Optionally delete the local trim files + logs (gitignored, takes ~1.5 MB)
 rm -rf research/issue-179-data/trims-phase3 research/issue-179-data/logs-dev
@@ -181,7 +181,7 @@ rm -rf research/issue-179-data/trims-phase3 research/issue-179-data/logs-dev
 
 ## Notes on harness state
 
-- `--curve-form linear-log` is now the default per [PR #189](https://github.com/szhygulin/vaultpilot-development-agents/pull/189). Pass it explicitly above so the dispatch is reproducible if the default is ever changed back.
-- `aggregate.ts` regex was widened to `agent-[a-z0-9-]+` in [PR #188](https://github.com/szhygulin/vaultpilot-development-agents/pull/188). Without that fix, every leg-2 cell would aggregate to 0 cells. Verify your branch is downstream of `52a5190` (the merge-commit for #189, which includes #188) before dispatching.
+- `--curve-form linear-log` is now the default per [PR #189](https://github.com/szhygulin/vaultpilot-dev-framework/pull/189). Pass it explicitly above so the dispatch is reproducible if the default is ever changed back.
+- `aggregate.ts` regex was widened to `agent-[a-z0-9-]+` in [PR #188](https://github.com/szhygulin/vaultpilot-dev-framework/pull/188). Without that fix, every leg-2 cell would aggregate to 0 cells. Verify your branch is downstream of `52a5190` (the merge-commit for #189, which includes #188) before dispatching.
 - Per-cell budget cap: `VP_DEV_MAX_COST_USD=15` env var (curve-study has no `--max-cost-usd` flag; this is the only knob). Run-wide cap: `--max-total-cost-usd 1500`.
 - The `--issue-body-only` and `--no-target-claude-md` flags are CRITICAL — without them, effective context size differs from the per-agent CLAUDE.md size we're varying, and the curve becomes uninterpretable.

@@ -79,11 +79,13 @@ test("evaluateLocalClaudeUtilityGate: empty local CLAUDE.md (cost=0) lets throug
 });
 
 test("evaluateLocalClaudeUtilityGate: high utility passes mid-size cost at default ratio 2.0", () => {
-  // At ~25 KB the costScore is ~0.36 (per the curve). With ratio=2.0,
-  // threshold ≈ 0.72. utility=0.85 passes.
+  // At projectedBytes=10_500 (currentLocalClaudeMdBytes=10_000 +
+  // candidateBytes=500) the post-redo quadratic-raw curve gives
+  // costScore ≈ 0.36. With ratio=2.0, threshold ≈ 0.72. utility=0.85
+  // passes.
   const r = evaluateLocalClaudeUtilityGate({
     utility: 0.85,
-    currentLocalClaudeMdBytes: 25_000,
+    currentLocalClaudeMdBytes: 10_000,
     candidateBytes: 500,
   });
   assert.equal(r.decision, "let-through");
@@ -93,7 +95,7 @@ test("evaluateLocalClaudeUtilityGate: 0.5 utility skipped at mid-size with defau
   // Same costScore ≈ 0.36, threshold ≈ 0.72; utility=0.5 < 0.72 → skip.
   const r = evaluateLocalClaudeUtilityGate({
     utility: 0.5,
-    currentLocalClaudeMdBytes: 25_000,
+    currentLocalClaudeMdBytes: 10_000,
     candidateBytes: 500,
   });
   assert.equal(r.decision, "skip");
@@ -104,7 +106,7 @@ test("evaluateLocalClaudeUtilityGate: ratio override drops the bar", () => {
   // threshold = 0.36 → utility 0.5 passes.
   const r = evaluateLocalClaudeUtilityGate({
     utility: 0.5,
-    currentLocalClaudeMdBytes: 25_000,
+    currentLocalClaudeMdBytes: 10_000,
     candidateBytes: 500,
     ratio: 1.0,
   });

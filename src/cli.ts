@@ -692,8 +692,8 @@ export function buildCli(): Command {
         )
         .option(
           "--curve-form <form>",
-          "Regression form: linear-log (y ~ a + b·log(x)) | linear-raw (y ~ a + b·x) | poly2-log (y ~ a + b·log(x) + c·log(x)²) | poly2-raw (y ~ a + b·x + c·x²). Default linear-log per #179 leg-1 finding (linear-log beat poly2-raw on accuracy p=0.097 vs 0.111 and token-cost p=0.176 vs 0.404 at n=18).",
-          "linear-log",
+          "Regression form: linear-log (y ~ a + b·log(x)) | linear-raw (y ~ a + b·x) | poly2-log (y ~ a + b·log(x) + c·log(x)²) | poly2-raw (y ~ a + b·x + c·x²). Default poly2-raw per #179 curve-redo finding (combined-leg dataset is non-monotone in log(bytes); poly2-raw clears accuracy F-test at p=0.030 R²adj=0.29, where linear-log gives p=0.737 R²≈0).",
+          "poly2-raw",
         )
         .option(
           "--cell-scores-dir <path>",

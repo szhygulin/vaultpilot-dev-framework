@@ -781,6 +781,22 @@ export function evaluatePredictedUtilityGate(
     return { kind: "let-through", reason: "no-utility" };
   }
   const currentBytes = input.currentClaudeMdBytes ?? 0;
+  // Empty CLAUDE.md → gate is fully open (the gate exists to protect
+  // existing context, not the first append). Pre-redo this fell out for
+  // free because the linear-log curve extrapolated near 1.0 at small
+  // bytes; the post-redo quadratic-raw curve extrapolates upward outside
+  // its calibration range so the invariant has to be explicit.
+  if (currentBytes <= 0) {
+    input.logger.info("specialization.utility_gate", {
+      agentId: input.agentId,
+      issueId: input.issueId,
+      decision: "let-through",
+      reason: "utility-passes-gate",
+      costScore: 0,
+      threshold: 0,
+    });
+    return { kind: "let-through", reason: "utility-passes-gate" };
+  }
   const sentinelOverhead = 200;
   const projectedBytes =
     currentBytes + input.headingLength + input.bodyLength + sentinelOverhead;

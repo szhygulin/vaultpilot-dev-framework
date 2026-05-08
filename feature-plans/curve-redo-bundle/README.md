@@ -284,20 +284,22 @@ node feature-plans/curve-redo-bundle/combine-legs.cjs \
   --output feature-plans/curve-redo-bundle/curve-redo-combined.json
 ```
 
-Output prints headline stats:
+Output prints headline stats. Actual 2026-05-08 run on the merged tarballs (2 envelope-parse-fail cells dropped from the 234 dispatched):
 
 ```
-Combined 234 cells (leg1=108, leg2=126) → ...curve-redo-combined.json
-Score coverage: judge=234/234, test=234/234
-ACCURACY:   n=18, R²=0.xxxx, F(1,16)=x.xx, p=x.xxe-xx
-TOKEN COST: n=18, R²=0.xxxx, F(1,16)=x.xx, p=x.xxe-xx
+Combined 232 cells (leg1=107, leg2=125) → ...curve-redo-combined.json
+Score coverage: judge=232/232, test=232/232
+ACCURACY:   n=18, R²=0.3729, F(2,15)=4.46, p=3.022e-2
+TOKEN COST: n=18, R²=0.2593, F(2,15)=2.63, p=1.052e-1
 ```
 
-### Step 7 — hand-merge into `src/util/contextCostCurve.ts` (only if p < 0.05)
+The combiner's regression form is **quadratic-raw** (degree 2, identity transform) post-redo. The original linear-log default failed the merge gate (accuracy p=0.737, token cost p=0.495) because the combined dataset is non-monotone in log(bytes); see [`curve-redo-combined-results.md`](curve-redo-combined-results.md) for the model-sweep that picked quad-raw.
 
-If the accuracy fit clears significance, hand-merge `accuracy.samples` from `curve-redo-combined.json` into `ACCURACY_DEGRADATION_SAMPLES`. Same for `tokenCost.samples` → `TOKEN_COST_SAMPLES`. Update the provenance comment to name the run date, model (Sonnet 4.6), and 0–200 quality formula.
+### Step 7 — hand-merge into `src/util/contextCostCurve.ts`
 
-If p ≥ 0.05 on accuracy: name what failed (judge variance? test apply rate? pushback-class issues dragging mean?) in a `feature-plans/curve-redo-results.md` writeup. Don't merge degenerate samples.
+If the accuracy fit clears significance, hand-merge `accuracy.samples` from `curve-redo-combined.json` into `ACCURACY_DEGRADATION_SAMPLES` and `tokenCost.samples` → `TOKEN_COST_SAMPLES`. Bump `CONTEXT_COST_REGRESSION_DEGREE` and `CONTEXT_COST_REGRESSION_X_TRANSFORM` to match the combiner's chosen form (current default: degree 2, identity). Update the provenance comment to name the run date, model (Sonnet 4.6), 0–200 quality formula, and chosen curve form.
+
+If p ≥ 0.05 on accuracy under every form tried: name what failed (judge variance? test apply rate? pushback-class issues dragging mean?) in `curve-redo-combined-results.md`. Don't merge degenerate samples.
 
 ### Step 8 — cleanup
 

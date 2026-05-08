@@ -10,3 +10,4 @@ dist/
 # Curve-study research outputs — local-only. Methodology writeups
 # (feature-plans/issue-179-*.md outside this dir) are tracked.
 /feature-plans/issue-179-data/
+/feature-plans/curve-redo-data/

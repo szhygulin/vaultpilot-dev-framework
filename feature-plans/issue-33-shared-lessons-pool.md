@@ -1,6 +1,6 @@
 # Plan: cross-agent shared lessons pool with curated promotion
 
-Tracks [#33](https://github.com/szhygulin/vaultpilot-development-agents/issues/33).
+Tracks [#33](https://github.com/szhygulin/vaultpilot-dev-framework/issues/33).
 
 ## Context
 

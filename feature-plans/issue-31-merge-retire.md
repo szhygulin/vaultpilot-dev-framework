@@ -1,6 +1,6 @@
 # Plan: counterpart to split — merge / retire stale or overlapping agents
 
-Tracks [#31](https://github.com/szhygulin/vaultpilot-development-agents/issues/31).
+Tracks [#31](https://github.com/szhygulin/vaultpilot-dev-framework/issues/31).
 
 ## Context
 

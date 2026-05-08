@@ -67,7 +67,7 @@
     },
     {
       "issueId": 157,
-      "repo": "szhygulin/vaultpilot-development-agents",
+      "repo": "szhygulin/vaultpilot-dev-framework",
       "framework": "node-test",
       "leg": 2,
       "decisionClass": "implement",
@@ -78,7 +78,7 @@
     },
     {
       "issueId": 168,
-      "repo": "szhygulin/vaultpilot-development-agents",
+      "repo": "szhygulin/vaultpilot-dev-framework",
       "framework": "node-test",
       "leg": 2,
       "decisionClass": "implement",
@@ -90,7 +90,7 @@
     },
     {
       "issueId": 172,
-      "repo": "szhygulin/vaultpilot-development-agents",
+      "repo": "szhygulin/vaultpilot-dev-framework",
       "framework": "node-test",
       "leg": 2,
       "decisionClass": "implement",
@@ -102,7 +102,7 @@
     },
     {
       "issueId": 178,
-      "repo": "szhygulin/vaultpilot-development-agents",
+      "repo": "szhygulin/vaultpilot-dev-framework",
       "framework": "node-test",
       "leg": 2,
       "decisionClass": "implement",
@@ -114,7 +114,7 @@
     },
     {
       "issueId": 180,
-      "repo": "szhygulin/vaultpilot-development-agents",
+      "repo": "szhygulin/vaultpilot-dev-framework",
       "framework": "node-test",
       "leg": 2,
       "decisionClass": "implement",
@@ -126,7 +126,7 @@
     },
     {
       "issueId": 185,
-      "repo": "szhygulin/vaultpilot-development-agents",
+      "repo": "szhygulin/vaultpilot-dev-framework",
       "framework": "node-test",
       "leg": 2,
       "decisionClass": "implement",
@@ -138,7 +138,7 @@
     },
     {
       "issueId": 186,
-      "repo": "szhygulin/vaultpilot-development-agents",
+      "repo": "szhygulin/vaultpilot-dev-framework",
       "framework": "node-test",
       "leg": 2,
       "decisionClass": "implement",

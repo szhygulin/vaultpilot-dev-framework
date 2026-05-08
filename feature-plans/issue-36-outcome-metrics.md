@@ -1,6 +1,6 @@
 # Plan: outcome metrics — merge rate, rework cycles, cost-per-merge per agent
 
-Tracks [#36](https://github.com/szhygulin/vaultpilot-development-agents/issues/36).
+Tracks [#36](https://github.com/szhygulin/vaultpilot-dev-framework/issues/36).
 
 ## Context
 

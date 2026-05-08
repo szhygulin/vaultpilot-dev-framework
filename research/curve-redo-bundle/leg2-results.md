@@ -1,7 +1,7 @@
 # Curve-redo leg 2 — results
 
 Run date: 2026-05-07. Coding cells: Sonnet 4.6. Reasoning judge: Opus 4.7 (K=3 medians).
-Target repo: `szhygulin/vaultpilot-development-agents` (node-test). Issues: 7 leg-2 ids × 18 trims = 126 cells.
+Target repo: `szhygulin/vaultpilot-dev-framework` (node-test). Issues: 7 leg-2 ids × 18 trims = 126 cells.
 
 Tarball: [`research/curve-redo-bundle/leg2-results.tar.gz`](leg2-results.tar.gz) (839 KB,
 gitignored at runtime under `research/curve-redo-data/`). Bundle layout per
@@ -72,8 +72,8 @@ gets balanced coverage of both decision modes.
 Two harness bugs surfaced during the leg-2 smoke and were fixed before the
 production run:
 
-- [#227](https://github.com/szhygulin/vaultpilot-development-agents/pull/227) — `applyReplayRollback` strips the `origin` remote so larger trim CLAUDE.mds carrying a "sync to main before work" rule can't run `git rebase origin/main` and undo the rollback. Smoke evidence: a 58 KB-trim cell's captured diff dropped from 1433 files (rebase-contaminated) to 2 files (agent's actual edits) on the same issue.
-- [#229](https://github.com/szhygulin/vaultpilot-development-agents/pull/229) — `runHiddenTests` runs `npm ci` in cell clones (skipped when `node_modules` exists or `package.json` is absent) so hidden tests that import from the source tree can resolve project deps. Smoke evidence: B-score went from 0/100 (every test `ERR_MODULE_NOT_FOUND` on `zod`) to real signal (18/100 on the smoke cell).
+- [#227](https://github.com/szhygulin/vaultpilot-dev-framework/pull/227) — `applyReplayRollback` strips the `origin` remote so larger trim CLAUDE.mds carrying a "sync to main before work" rule can't run `git rebase origin/main` and undo the rollback. Smoke evidence: a 58 KB-trim cell's captured diff dropped from 1433 files (rebase-contaminated) to 2 files (agent's actual edits) on the same issue.
+- [#229](https://github.com/szhygulin/vaultpilot-dev-framework/pull/229) — `runHiddenTests` runs `npm ci` in cell clones (skipped when `node_modules` exists or `package.json` is absent) so hidden tests that import from the source tree can resolve project deps. Smoke evidence: B-score went from 0/100 (every test `ERR_MODULE_NOT_FOUND` on `zod`) to real signal (18/100 on the smoke cell).
 
 Operational caveat (not a code fix): #227's blanket `git remote remove origin`
 also breaks the orchestrator's createWorktree step on subsequent cells reusing

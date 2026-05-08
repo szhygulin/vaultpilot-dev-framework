@@ -3302,7 +3302,9 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
   });
 
   try {
-    await fetchOriginMain(repoPath);
+    // Pass `targetRepo` so `fetchOriginMain` defensively re-adds origin
+    // if a prior replay-mode cell left it stripped (issue #253).
+    await fetchOriginMain(repoPath, opts.targetRepo);
     await pruneWorktrees(repoPath);
     const sweep = await pruneStaleAgentBranches(repoPath, opts.targetRepo, logger);
     if (sweep.unprunable.length > 0) {

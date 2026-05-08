@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { applyReplayRollback, captureWorktreeDiff, readWorktreeHead } from "./replay.js";
+import {
+  applyReplayRollback,
+  captureWorktreeDiff,
+  readWorktreeHead,
+  restoreOriginRemote,
+} from "./replay.js";
 
 const execFile = promisify(execFileCb);
 
@@ -60,7 +65,10 @@ test("applyReplayRollback: strips the `origin` remote so an agent-side rebase to
     // something to strip. The URL points at the same dir for fetchability.
     await execFile("git", ["-C", repoRoot, "remote", "add", "origin", repoRoot]);
     await execFile("git", ["-C", repoRoot, "fetch", "-q", "origin"]);
-    await applyReplayRollback({ worktreePath: repoRoot, baseSha: seedSha });
+    const result = await applyReplayRollback({ worktreePath: repoRoot, baseSha: seedSha });
+    // The pre-strip URL is captured in the return value (issue #253) so
+    // the caller can restore it after the agent finishes.
+    assert.equal(result.originUrl, repoRoot);
     // Verify origin is gone — `git remote get-url origin` should error.
     await assert.rejects(
       execFile("git", ["-C", repoRoot, "remote", "get-url", "origin"]),
@@ -71,6 +79,70 @@ test("applyReplayRollback: strips the `origin` remote so an agent-side rebase to
     await assert.rejects(
       execFile("git", ["-C", repoRoot, "rebase", "origin/main"]),
       /invalid upstream|unknown revision|fatal/,
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("applyReplayRollback: returns originUrl=undefined when origin was already absent (sibling-stripped)", async () => {
+  const { repoRoot, seedSha, cleanup } = await makeFixtureRepo();
+  try {
+    // Fixture has no origin from `makeFixtureRepo`. Issue #253 race: a
+    // sibling cell stripped first, so the saved URL window closes empty.
+    const result = await applyReplayRollback({ worktreePath: repoRoot, baseSha: seedSha });
+    assert.equal(result.originUrl, undefined);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("restoreOriginRemote: re-adds origin from the saved URL after a replay-mode strip (#253)", async () => {
+  const { repoRoot, seedSha, cleanup } = await makeFixtureRepo();
+  try {
+    await execFile("git", ["-C", repoRoot, "remote", "add", "origin", repoRoot]);
+    const { originUrl } = await applyReplayRollback({
+      worktreePath: repoRoot,
+      baseSha: seedSha,
+    });
+    // Confirm the strip happened.
+    await assert.rejects(
+      execFile("git", ["-C", repoRoot, "remote", "get-url", "origin"]),
+      /No such remote|fatal/,
+    );
+    await restoreOriginRemote({ worktreePath: repoRoot, originUrl });
+    const { stdout } = await execFile("git", ["-C", repoRoot, "remote", "get-url", "origin"]);
+    assert.equal(stdout.trim(), repoRoot);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("restoreOriginRemote: idempotent against a sibling cell that already re-added origin", async () => {
+  const { repoRoot, cleanup } = await makeFixtureRepo();
+  try {
+    // Pre-condition: origin already exists (sibling cell's
+    // `ensureOriginRemote` got there first).
+    await execFile("git", ["-C", repoRoot, "remote", "add", "origin", repoRoot]);
+    // Restore should not throw on the duplicate-add — it falls through to
+    // `set-url`. Verify the URL ends up as the saved URL.
+    const altUrl = `${repoRoot}-alt`;
+    await restoreOriginRemote({ worktreePath: repoRoot, originUrl: altUrl });
+    const { stdout } = await execFile("git", ["-C", repoRoot, "remote", "get-url", "origin"]);
+    assert.equal(stdout.trim(), altUrl);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("restoreOriginRemote: no-op when originUrl is undefined", async () => {
+  const { repoRoot, cleanup } = await makeFixtureRepo();
+  try {
+    // No origin to start, no URL to restore. Must not throw.
+    await restoreOriginRemote({ worktreePath: repoRoot, originUrl: undefined });
+    await assert.rejects(
+      execFile("git", ["-C", repoRoot, "remote", "get-url", "origin"]),
+      /No such remote|fatal/,
     );
   } finally {
     await cleanup();

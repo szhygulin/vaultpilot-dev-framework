@@ -86,7 +86,9 @@ export interface OrchestratorInput {
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
   const repoPath = await resolveTargetRepoPath(input.state.targetRepo, input.targetRepoPath);
-  await fetchOriginMain(repoPath);
+  // Pass `targetRepo` so `fetchOriginMain` can defensively re-add origin
+  // if a prior replay-mode run left it stripped (issue #253).
+  await fetchOriginMain(repoPath, input.state.targetRepo);
 
   const issuesById = new Map(input.issues.map((i) => [i.id, i]));
 

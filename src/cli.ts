@@ -297,6 +297,10 @@ export function buildCli(): Command {
       "--capture-diff-path <path>",
       "Curve-redo replay mode: after the agent finishes, write the worktree's diff (modified + newly-staged tracked files) to this path so downstream test-runner / reasoning-judge phases can score it.",
     )
+    .option(
+      "--max-cost-usd <usd>",
+      "Per-spawn cost ceiling in USD (e.g. 10.0). Forwarded to runIssueCore as the SDK's `maxBudgetUsd` query option so the coding agent hard-stops with `error_max_budget_usd` once cumulative cost crosses this value. Env fallback: VP_DEV_MAX_COST_USD. Mirrors `vp-dev run --max-cost-usd` so per-cell dispatch loops (curve-redo, calibration, batch) can defend in depth against a single runaway agent (#235).",
+    )
     .action(async (opts) => {
       await cmdSpawn(opts);
     });
@@ -3241,6 +3245,13 @@ interface SpawnOpts {
   replayBaseSha?: string;
   /** Curve-redo: optional path to write the post-run worktree diff. */
   captureDiffPath?: string;
+  /**
+   * Per-spawn cost ceiling in USD (#235). Plumbed through `resolveBudgetUsd`
+   * and a `RunCostTracker` into `runIssueCore` so the SDK's `maxBudgetUsd`
+   * query option fires `error_max_budget_usd` once the agent's cumulative
+   * cost crosses this value. Env fallback: VP_DEV_MAX_COST_USD.
+   */
+  maxCostUsd?: string;
 }
 
 async function cmdSpawn(opts: SpawnOpts): Promise<void> {
@@ -3264,6 +3275,16 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
   const runId = `spawn-${new Date().toISOString().replace(/[:.]/g, "-")}-issue-${opts.issue}`;
   const logger = new Logger({ runId, verbose: !!opts.verbose });
   await logger.open();
+  // #235: resolve per-spawn cost ceiling from `--max-cost-usd` flag with
+  // VP_DEV_MAX_COST_USD env fallback. Mirrors `cmdRun` so per-cell dispatch
+  // loops (curve-redo, calibration, batch) get a real per-spawn brake — not
+  // just the wallclock turn budget. The tracker is forwarded into
+  // `runIssueCore` so `runCodingAgent` can derive a per-query
+  // `maxBudgetUsd` via `tracker.remainingBudget()`; `budgetUsd` itself is
+  // forwarded so the summarizer-skip guard in runIssueCore fires when the
+  // ceiling is crossed mid-run.
+  const budgetUsd = resolveBudgetUsd({ flag: opts.maxCostUsd, env: process.env });
+  const costTracker = new RunCostTracker({ budgetUsd });
   logger.info("spawn.started", {
     runId,
     agentId: agent.agentId,
@@ -3272,6 +3293,7 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
     targetRepoPath: repoPath,
     dryRun: !!opts.dryRun,
     skipSummary: !!opts.skipSummary,
+    maxCostUsd: budgetUsd ?? null,
   });
 
   try {
@@ -3321,6 +3343,12 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       suppressTargetClaudeMd: opts.targetClaudeMd === false,
       model: opts.model,
       replayMode,
+      // #235: thread the per-spawn budget into the SDK's maxBudgetUsd path.
+      // Both fields are honored independently by runIssueCore: costTracker
+      // is consulted by runCodingAgent for `remainingBudget()`, and
+      // budgetUsd guards the post-run summarizer skip.
+      costTracker,
+      budgetUsd,
     });
 
     const out = {
@@ -3334,6 +3362,9 @@ async function cmdSpawn(opts: SpawnOpts): Promise<void> {
       parseError: result.parseError ?? null,
       durationMs: result.durationMs,
       costUsd: result.costUsd ?? null,
+      // #235: surface the resolved per-spawn budget so dispatch loops
+      // can confirm the ceiling actually applied (vs. silently undefined).
+      maxCostUsd: budgetUsd ?? null,
       appendOutcome: result.appendOutcome ?? null,
       summarySkipReason: result.summarySkipReason ?? null,
     };

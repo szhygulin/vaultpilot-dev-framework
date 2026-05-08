@@ -1,17 +1,24 @@
 // Sentinel comment helpers for per-agent CLAUDE.md.
 //
 // Format written by `appendBlock` in src/agent/specialization.ts:
-//   <!-- run:<runId> issue:#<N> outcome:<X> ts:<ISO> [tags:t1,t2] -->
+//   <!-- run:<runId> issue:#<N> outcome:<X> ts:<ISO> -->
 //
-// Pure functions only — file I/O lives in `specialization.ts`. Tested in
-// `sentinels.test.ts` (node --test glob picks up `dist/src/util/*.test.js`).
-
+// Tags used to be embedded in this header (`tags:t1,t2`); they now live in
+// the per-agent `agents/<id>/section-tags.json` sidecar so that ~150 bytes
+// of operator-only metadata per section don't load into the agent's prompt
+// context. The parser still tolerates legacy `tags:` so un-migrated
+// CLAUDE.mds continue to parse, but the header type doesn't expose them —
+// callers that need the tag set go through `src/state/sectionTags.ts`.
+//
 // `issue:#(\d+(?:\+#\d+)*)` so `outcome:compacted` blocks (issue #162) —
 // which embed multiple source IDs as `issue:#100+#101+#102` — are still
 // located by the expiry walker. Without this, locateSentinels skips the
 // compacted line, the previous block silently absorbs the compacted
 // block's bytes as part of its body, and dropping the previous block on
 // expiry takes the compacted block out as collateral damage.
+//
+// Pure functions only — file I/O lives in `specialization.ts`. Tested in
+// `sentinels.test.ts` (node --test glob picks up `dist/src/util/*.test.js`).
 const SENTINEL_RE =
   /^<!--\s+run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:([\w-]+)\s+ts:(\S+?)(?:\s+tags:(\S+))?\s+-->$/;
 
@@ -24,22 +31,17 @@ export interface SentinelHeader {
   issueIds?: number[];
   outcome: string;
   ts: string;
-  tags: string[];
 }
 
 export function parseSentinelHeader(line: string): SentinelHeader | null {
   const m = line.match(SENTINEL_RE);
   if (!m) return null;
-  const tagsRaw = m[5];
-  const tags =
-    tagsRaw && tagsRaw.length > 0 ? tagsRaw.split(",").filter(Boolean) : [];
   const issueIds = m[2].split("+").map((tok) => Number(tok.replace(/^#/, "")));
   const header: SentinelHeader = {
     runId: m[1],
     issueId: issueIds[0],
     outcome: m[3],
     ts: m[4],
-    tags,
   };
   // Only set when the sentinel encodes multiple IDs — keeps the
   // single-ID shape deep-equal-comparable to the pre-#162 record shape.
@@ -47,19 +49,27 @@ export function parseSentinelHeader(line: string): SentinelHeader | null {
   return header;
 }
 
+/**
+ * Extract legacy `tags:t1,t2` from a sentinel line, if present. Used by the
+ * one-shot migration to populate `section-tags.json` from un-migrated
+ * CLAUDE.mds. Returns [] for lines that don't match the sentinel shape or
+ * have no legacy tags.
+ */
+export function extractLegacySentinelTags(line: string): string[] {
+  const m = line.match(SENTINEL_RE);
+  if (!m) return [];
+  const raw = m[5];
+  if (!raw) return [];
+  return raw.split(",").filter(Boolean);
+}
+
 export function formatSentinelHeader(input: {
   runId: string;
   issueId: number;
   outcome: string;
   ts: string;
-  tags?: string[];
 }): string {
-  const base = `<!-- run:${input.runId} issue:#${input.issueId} outcome:${input.outcome} ts:${input.ts}`;
-  const tagsPart =
-    input.tags && input.tags.length > 0
-      ? ` tags:${[...input.tags].sort().join(",")}`
-      : "";
-  return `${base}${tagsPart} -->`;
+  return `<!-- run:${input.runId} issue:#${input.issueId} outcome:${input.outcome} ts:${input.ts} -->`;
 }
 
 interface SentinelLocation {
@@ -141,8 +151,10 @@ function tagsOverlap(
  * `policy.supersededBy` satisfy the policy's tag-overlap rule, drop the
  * candidate.
  *
- * Conservative on missing tags: a candidate with `tags: []` is never
- * dropped, and successors with `tags: []` never count toward supersession.
+ * Tags are passed alongside via `tagsByIndex` (parallel to `headers`) — the
+ * caller resolves them from the sidecar (`src/state/sectionTags.ts`).
+ * Conservative on missing tags: a candidate with empty tags is never
+ * dropped, and successors with empty tags never count toward supersession.
  * Idempotent: re-applying on already-pruned content drops nothing.
  *
  * Out-of-order writes are not a concern — blocks accumulate by file
@@ -150,6 +162,7 @@ function tagsOverlap(
  */
 export function decideExpiryWithPolicies(
   headers: SentinelHeader[],
+  tagsByIndex: string[][],
   policies: ExpiryPolicy[],
 ): ExpireDecision {
   const drop: number[] = [];
@@ -161,16 +174,18 @@ export function decideExpiryWithPolicies(
     const policy = policyByKind.get(h.outcome);
     if (!policy) continue;
     if (!Number.isFinite(policy.k) || policy.k <= 0) continue;
-    if (h.tags.length === 0) continue; // legacy / no fingerprint — keep
+    const candidateTagList = tagsByIndex[i] ?? [];
+    if (candidateTagList.length === 0) continue;
 
-    const candidateTags = new Set(h.tags);
+    const candidateTags = new Set(candidateTagList);
     const allowedSuccessors = new Set(policy.supersededBy);
     let overlaps = 0;
     for (let j = i + 1; j < headers.length; j++) {
       const succ = headers[j];
       if (!allowedSuccessors.has(succ.outcome)) continue;
-      if (succ.tags.length === 0) continue;
-      if (tagsOverlap(candidateTags, succ.tags, policy.overlap)) overlaps += 1;
+      const succTags = tagsByIndex[j] ?? [];
+      if (succTags.length === 0) continue;
+      if (tagsOverlap(candidateTags, succTags, policy.overlap)) overlaps += 1;
       if (overlaps >= policy.k) break;
     }
     if (overlaps >= policy.k) drop.push(i);
@@ -182,13 +197,14 @@ export function decideExpiryWithPolicies(
  * Backward-compatible wrapper: decide which `outcome:failure-lesson`
  * blocks to drop using the legacy single-K rule (any-shared-tag overlap
  * against `outcome:implement` successors). Equivalent to
- * `decideExpiryWithPolicies(headers, [failure-lesson policy])`.
+ * `decideExpiryWithPolicies(headers, tagsByIndex, [failure-lesson policy])`.
  */
 export function decideExpiry(
   headers: SentinelHeader[],
+  tagsByIndex: string[][],
   k: number,
 ): ExpireDecision {
-  return decideExpiryWithPolicies(headers, [
+  return decideExpiryWithPolicies(headers, tagsByIndex, [
     {
       kind: "failure-lesson",
       k,
@@ -207,19 +223,22 @@ export interface ExpireResult {
  * Walk content, drop expired sentinel blocks per the supplied policies,
  * return the rewritten content. Idempotent — re-applying on already-pruned
  * content with the same policies drops nothing.
+ *
+ * `getTags(header)` resolves each header's tag list from the caller-owned
+ * sidecar; sentinels.ts stays storage-agnostic.
  */
 export function expireSentinelsInContent(
   content: string,
   policies: ExpiryPolicy[],
+  getTags: (header: SentinelHeader) => string[],
 ): ExpireResult {
   const lines = content.split("\n");
   const located = locateSentinels(lines);
   if (located.length === 0) return { content, droppedHeaders: [] };
 
-  const decision = decideExpiryWithPolicies(
-    located.map((l) => l.header),
-    policies,
-  );
+  const headers = located.map((l) => l.header);
+  const tagsByIndex = headers.map((h) => getTags(h));
+  const decision = decideExpiryWithPolicies(headers, tagsByIndex, policies);
   if (decision.drop.length === 0) return { content, droppedHeaders: [] };
 
   const dropSet = new Set(decision.drop);
@@ -304,15 +323,20 @@ export function dropSentinelsByStableId(
 export function expireFailureLessonsInContent(
   content: string,
   k: number,
+  getTags: (header: SentinelHeader) => string[],
 ): ExpireResult {
-  return expireSentinelsInContent(content, [
-    {
-      kind: "failure-lesson",
-      k,
-      supersededBy: ["implement"],
-      overlap: { mode: "any-shared-tag" },
-    },
-  ]);
+  return expireSentinelsInContent(
+    content,
+    [
+      {
+        kind: "failure-lesson",
+        k,
+        supersededBy: ["implement"],
+        overlap: { mode: "any-shared-tag" },
+      },
+    ],
+    getTags,
+  );
 }
 
 /**

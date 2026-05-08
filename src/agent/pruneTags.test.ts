@@ -6,68 +6,102 @@ import {
   computePruneTagsProposalHash,
   type PruneTagsProposal,
 } from "./pruneTags.js";
+import { deriveStableSectionId } from "../state/lessonUtility.js";
 
-// Build a minimal CLAUDE.md fixture with N sentinels carrying the supplied
-// tag arrays.
-function buildClaudeMd(sentinels: { runId: string; issueId: number; tags: string[] }[]): string {
+interface SentinelSpec {
+  runId: string;
+  issueId: number;
+  tags: string[];
+}
+
+// Build a tagless CLAUDE.md (sentinels emit no `tags:` post-refactor) plus a
+// parallel `sectionTagsByStableId` map keyed by `deriveStableSectionId(runId,
+// [issueId])`. Mirrors how the production code reads tags from the sidecar.
+function buildFixture(sentinels: SentinelSpec[]): {
+  claudeMd: string;
+  sectionTagsByStableId: Record<string, string[]>;
+} {
   const lines: string[] = ["# Seed", ""];
+  const sectionTagsByStableId: Record<string, string[]> = {};
   for (const s of sentinels) {
-    const tagsPart = s.tags.length > 0 ? ` tags:${[...s.tags].sort().join(",")}` : "";
     lines.push(
-      `<!-- run:${s.runId} issue:#${s.issueId} outcome:implement ts:2026-05-07T00:00:00Z${tagsPart} -->`,
+      `<!-- run:${s.runId} issue:#${s.issueId} outcome:implement ts:2026-05-07T00:00:00Z -->`,
     );
     lines.push(`## Lesson ${s.issueId}`);
     lines.push("body");
     lines.push("");
+    if (s.tags.length > 0) {
+      const id = deriveStableSectionId(s.runId, [s.issueId]);
+      sectionTagsByStableId[id] = [...s.tags].sort();
+    }
   }
-  return lines.join("\n");
+  return { claudeMd: lines.join("\n"), sectionTagsByStableId };
 }
 
 describe("parseSectionTagsUnion", () => {
   it("returns empty union and zero count for an empty file", () => {
-    const { union, sectionCount } = parseSectionTagsUnion("");
+    const { union, sectionCount } = parseSectionTagsUnion("", {});
     assert.equal(union.size, 0);
     assert.equal(sectionCount, 0);
   });
 
   it("returns empty union and zero count when no sentinels present", () => {
     const md = "# Seed\n\nSome prose. No sentinels here.\n";
-    const { union, sectionCount } = parseSectionTagsUnion(md);
+    const { union, sectionCount } = parseSectionTagsUnion(md, {});
     assert.equal(union.size, 0);
     assert.equal(sectionCount, 0);
   });
 
-  it("collects tags across multiple sentinels", () => {
-    const md = buildClaudeMd([
+  it("collects tags from the sidecar across multiple sentinels", () => {
+    const { claudeMd, sectionTagsByStableId } = buildFixture([
       { runId: "r1", issueId: 100, tags: ["alpha", "beta"] },
       { runId: "r2", issueId: 101, tags: ["beta", "gamma"] },
     ]);
-    const { union, sectionCount } = parseSectionTagsUnion(md);
+    const { union, sectionCount } = parseSectionTagsUnion(claudeMd, sectionTagsByStableId);
     assert.equal(sectionCount, 2);
     assert.deepEqual([...union].sort(), ["alpha", "beta", "gamma"]);
   });
 
-  it("counts sentinels without tags but contributes nothing to union (legacy)", () => {
-    const md = buildClaudeMd([
-      { runId: "r1", issueId: 100, tags: [] },
+  it("counts sentinels missing from sidecar but contributes nothing to union", () => {
+    const { claudeMd, sectionTagsByStableId } = buildFixture([
+      { runId: "r1", issueId: 100, tags: [] }, // no sidecar entry
       { runId: "r2", issueId: 101, tags: ["delta"] },
     ]);
-    const { union, sectionCount } = parseSectionTagsUnion(md);
+    const { union, sectionCount } = parseSectionTagsUnion(claudeMd, sectionTagsByStableId);
     assert.equal(sectionCount, 2);
     assert.deepEqual([...union], ["delta"]);
   });
 
-  it("handles multi-issue (compacted) sentinels without crashing", () => {
+  it("handles multi-issue (compacted) sentinels", () => {
+    const compactedStableId = deriveStableSectionId("r1", [100, 101, 102]);
     const md = [
       "# Seed",
       "",
-      "<!-- run:r1 issue:#100+#101+#102 outcome:compacted ts:2026-05-07T00:00:00Z tags:zeta,eta -->",
+      "<!-- run:r1 issue:#100+#101+#102 outcome:compacted ts:2026-05-07T00:00:00Z -->",
       "## Compacted lesson",
       "body",
     ].join("\n");
-    const { union, sectionCount } = parseSectionTagsUnion(md);
+    const sidecar = { [compactedStableId]: ["eta", "zeta"] };
+    const { union, sectionCount } = parseSectionTagsUnion(md, sidecar);
     assert.equal(sectionCount, 1);
     assert.deepEqual([...union].sort(), ["eta", "zeta"]);
+  });
+
+  it("legacy `tags:` in sentinel is silently ignored — sidecar wins", () => {
+    // Existing pre-migration CLAUDE.md still parses; only the sidecar
+    // contributes to the union. Migration cleans the legacy `tags:` later.
+    const md = [
+      "# Seed",
+      "",
+      "<!-- run:r1 issue:#100 outcome:implement ts:2026-05-07T00:00:00Z tags:legacy,one -->",
+      "## Lesson",
+      "body",
+    ].join("\n");
+    const stableId = deriveStableSectionId("r1", [100]);
+    const sidecar = { [stableId]: ["sidecar-tag"] };
+    const { union, sectionCount } = parseSectionTagsUnion(md, sidecar);
+    assert.equal(sectionCount, 1);
+    assert.deepEqual([...union], ["sidecar-tag"]);
   });
 });
 
@@ -110,10 +144,11 @@ describe("proposePruneTags (Phase 1 only)", () => {
   // Lazy import to avoid pulling the SDK at module load.
   async function propose(args: {
     tags: string[];
-    sentinels: { runId: string; issueId: number; tags: string[] }[];
+    sentinels: SentinelSpec[];
     noGeneralize?: boolean;
   }) {
     const { proposePruneTags } = await import("./pruneTags.js");
+    const { claudeMd, sectionTagsByStableId } = buildFixture(args.sentinels);
     return proposePruneTags({
       agent: {
         agentId: "agent-test",
@@ -125,7 +160,8 @@ describe("proposePruneTags (Phase 1 only)", () => {
         errorCount: 0,
         lastActiveAt: "2026-01-01T00:00:00Z",
       },
-      claudeMd: buildClaudeMd(args.sentinels),
+      claudeMd,
+      sectionTagsByStableId,
       noGeneralize: args.noGeneralize ?? true,
     });
   }
@@ -138,10 +174,7 @@ describe("proposePruneTags (Phase 1 only)", () => {
     assert.match(p.notes ?? "", /No attributable sections/);
   });
 
-  it("sections present but no tag provenance (post-split children, pre-#142): tags untouched", async () => {
-    // Sentinels with empty tags array — exactly the shape post-split
-    // children carry from split.ts:458 (no `tags:` field on materialized
-    // sentinels) AND pre-#142 legacy sentinels.
+  it("sections present but no tag provenance (sidecar empty / legacy children): tags untouched", async () => {
     const p = await propose({
       tags: ["alpha", "beta", "gamma"],
       sentinels: [
@@ -167,7 +200,6 @@ describe("proposePruneTags (Phase 1 only)", () => {
   });
 
   it("floor protection: registry of only orphans + general -> ['general']", async () => {
-    // Section has tags but none match the registry.
     const p = await propose({
       tags: ["unrelated", "general"],
       sentinels: [{ runId: "r1", issueId: 1, tags: ["alpha"] }],
@@ -200,7 +232,6 @@ describe("proposePruneTags (Phase 1 only)", () => {
   it("idempotent: re-running on a registry already equal to lesson-backed surfaces zero orphans", async () => {
     const sentinels = [{ runId: "r1", issueId: 1, tags: ["alpha", "beta"] }];
     const first = await propose({ tags: ["alpha", "beta", "orphan"], sentinels });
-    // Imagine apply happened: tags now equal first.finalTags.
     const second = await propose({ tags: first.finalTags, sentinels });
     assert.deepEqual(second.orphanTags, []);
     assert.deepEqual(second.finalTags, first.finalTags);

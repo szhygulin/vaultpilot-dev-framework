@@ -454,6 +454,18 @@ export function buildCli(): Command {
         }),
     )
     .addCommand(
+      new Command("migrate-tags-to-sidecar")
+        .description(
+          "Move legacy `tags:t1,t2` from sentinel headers in `agents/<id>/CLAUDE.md` into the per-agent `agents/<id>/section-tags.json` sidecar. Idempotent — re-running is a no-op once an agent's CLAUDE.md is clean. Use `--all` to walk every agent under `agents/`, or pass an explicit `<agentId>`.",
+        )
+        .argument("[agentId]", "Single agent to migrate (omit if --all)")
+        .option("--all", "Migrate every directory under `agents/` that has a CLAUDE.md")
+        .option("--json", "Print machine-readable JSON")
+        .action(async (agentId, opts) => {
+          await cmdAgentsMigrateTagsToSidecar(agentId, opts);
+        }),
+    )
+    .addCommand(
       new Command("audit-lessons")
         .description(
           "Score every section of an agent's CLAUDE.md by intrinsic quality (in vacuum — no run history, no comparison across sections). Per-section sonnet calls rate each lesson on the same 0-1 scale as write-time predictedUtility. Advisory only (Phase 1); destructive --apply / --confirm deferred. Combine with `vp-dev agents prune-lessons` for the historical-reinforcement signal.",
@@ -2861,12 +2873,16 @@ async function cmdAgentsPruneTags(
     // empty string flows through proposePruneTags' zero-section branch
   }
 
+  const { readSectionTags } = await import("./state/sectionTags.js");
+  const sidecar = await readSectionTags(agentId);
+
   // Commander wires --no-generalize to `generalize: false` (default true).
   const noGeneralize = opts.generalize === false;
 
   const proposal = await proposePruneTags({
     agent,
     claudeMd,
+    sectionTagsByStableId: sidecar.sections,
     noGeneralize,
   });
 
@@ -2900,6 +2916,63 @@ async function cmdAgentsPruneTags(
     `\nConfirm token: ${token} (15-min TTL, written to state/prune-tags-confirm-${token}.json)\n` +
       `Apply with:    vp-dev agents prune-tags ${agentId} --confirm ${token}\n`,
   );
+}
+
+interface AgentsMigrateTagsToSidecarOpts {
+  all?: boolean;
+  json?: boolean;
+}
+
+async function cmdAgentsMigrateTagsToSidecar(
+  agentId: string | undefined,
+  opts: AgentsMigrateTagsToSidecarOpts,
+): Promise<void> {
+  const { migrateAgentTagsToSidecar, migrateAllAgentsTagsToSidecar } = await import(
+    "./agent/migrateTagsToSidecar.js"
+  );
+
+  if (!opts.all && !agentId) {
+    process.stderr.write(
+      "ERROR: pass <agentId> or --all to migrate-tags-to-sidecar.\n",
+    );
+    process.exit(2);
+  }
+  if (opts.all && agentId) {
+    process.stderr.write(
+      "ERROR: --all and <agentId> are mutually exclusive.\n",
+    );
+    process.exit(2);
+  }
+
+  const results = opts.all
+    ? await migrateAllAgentsTagsToSidecar()
+    : [await migrateAgentTagsToSidecar(agentId as string)];
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(results, null, 2) + "\n");
+    return;
+  }
+
+  if (results.length === 0) {
+    process.stdout.write("No agents found under agents/.\n");
+    return;
+  }
+
+  let totalRewritten = 0;
+  let totalSentinels = 0;
+  for (const r of results) {
+    if (r.claudeMdRewritten) totalRewritten++;
+    totalSentinels += r.legacySentinelsFound;
+    const status = r.claudeMdRewritten
+      ? `migrated ${r.legacySentinelsFound} sentinel(s) -> ${r.stableIdsWritten} sidecar entries (${r.bytesBefore} -> ${r.bytesAfter} bytes)`
+      : "no legacy `tags:` found (already clean or no CLAUDE.md)";
+    process.stdout.write(`${r.agentId}: ${status}\n`);
+  }
+  if (results.length > 1) {
+    process.stdout.write(
+      `\n${totalRewritten}/${results.length} agents migrated; ${totalSentinels} legacy sentinels stripped.\n`,
+    );
+  }
 }
 
 interface AgentsAuditLessonsOpts {

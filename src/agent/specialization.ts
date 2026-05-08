@@ -8,6 +8,12 @@ import {
   type ExpiryPolicy,
   type SentinelHeader,
 } from "../util/sentinels.js";
+import {
+  dropSectionTagsEntries,
+  readSectionTags,
+  stableIdForHeader,
+  writeSectionTagsEntry,
+} from "../state/sectionTags.js";
 
 export const AGENTS_ROOT = path.resolve(process.cwd(), "agents");
 export const SOFT_CAP_BYTES = 64 * 1024;
@@ -124,11 +130,11 @@ export interface AppendBlockInput {
   targetRepoPath: string;
   /**
    * Tags this issue contributed to the agent's evolving topical
-   * fingerprint (= envelope.memoryUpdate.addTags). Embedded into the
-   * sentinel header as `tags:t1,t2` so future expiry passes can detect
-   * whether subsequent successes are topically related to a stored
-   * failure-lesson. Optional for back-compat; sentinels written without
-   * tags are treated conservatively (never expired) by `expireFailureLessons`.
+   * fingerprint (= envelope.memoryUpdate.addTags). Stored in the sidecar
+   * `agents/<id>/section-tags.json` keyed by stable section ID so the
+   * agent's CLAUDE.md stays free of operator-only metadata. Conservative
+   * on missing tags: a section with empty tags is never expired by
+   * `expireFailureLessons` / `expireSentinels`.
    */
   tags?: string[];
 }
@@ -157,7 +163,6 @@ export async function appendBlock(input: AppendBlockInput): Promise<AppendOutcom
       issueId: input.issueId,
       outcome: input.outcome,
       ts,
-      tags: input.tags,
     });
     const block = [
       "",
@@ -172,6 +177,16 @@ export async function appendBlock(input: AppendBlockInput): Promise<AppendOutcom
     const tmp = `${filePath}.tmp.${process.pid}`;
     await fs.writeFile(tmp, next);
     await fs.rename(tmp, filePath);
+
+    if (input.tags && input.tags.length > 0) {
+      const stableId = stableIdForHeader({
+        runId: input.runId,
+        issueId: input.issueId,
+        outcome: input.outcome,
+        ts,
+      });
+      await writeSectionTagsEntry(input.agentId, stableId, input.tags);
+    }
 
     const totalBytes = Buffer.byteLength(next, "utf-8");
     return {
@@ -189,8 +204,8 @@ export type ExpireOutcome =
 /**
  * Walk the agent's CLAUDE.md and drop sentinel blocks per the supplied
  * policies. Idempotent — re-running on the same content with the same
- * policies is a no-op. Conservative on legacy sentinels with no `tags:`
- * field: those are never expired.
+ * policies is a no-op. Conservative on sections whose sidecar entry is
+ * missing or empty: those are never expired.
  *
  * Wired from `runIssueCore` after a successful implement run, matching
  * the issue's "summarizer rewrites the file after a successful run"
@@ -211,12 +226,19 @@ export async function expireSentinels(
       // forkClaudeMd / appendBlock's job.
       return { kind: "no-op" };
     }
-    const result = expireSentinelsInContent(current, policies);
+    const sidecar = await readSectionTags(agentId);
+    const getTags = (h: SentinelHeader): string[] =>
+      sidecar.sections[stableIdForHeader(h)] ?? [];
+    const result = expireSentinelsInContent(current, policies, getTags);
     if (result.droppedHeaders.length === 0) return { kind: "no-op" };
 
     const tmp = `${filePath}.tmp.${process.pid}`;
     await fs.writeFile(tmp, result.content);
     await fs.rename(tmp, filePath);
+
+    const droppedStableIds = result.droppedHeaders.map(stableIdForHeader);
+    await dropSectionTagsEntries(agentId, droppedStableIds);
+
     return {
       kind: "expired",
       dropped: result.droppedHeaders,

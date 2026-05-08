@@ -9,8 +9,9 @@
 ## Per-agent workdir is `agents/<agent-id>/`
 Each coding agent dispatched by the orchestrator runs in its own `agents/<agent-id>/` sandbox. Cross-agent writes corrupt parallel runs.
 - `agents/`, `state/`, `logs/`, `dist/` are all gitignored — local state only. Never push agent transcripts, registry entries, run logs, or compiled output to `origin`.
-- `agents/<agent-id>/CLAUDE.md` is the per-agent memory; `agents/<agent-id>/` may also carry transcripts, summaries, and per-issue artifacts. Boundaries between agents matter: `agent-90e4/` must not write into `agent-51e5/` even if they're operating on the same target repo.
+- `agents/<agent-id>/CLAUDE.md` is the per-agent memory; `agents/<agent-id>/section-tags.json` is the per-section tags sidecar (operator-only metadata, kept out of the agent's prompt context); `agents/<agent-id>/` may also carry transcripts, summaries, and per-issue artifacts. Boundaries between agents matter: `agent-90e4/` must not write into `agent-51e5/` even if they're operating on the same target repo.
 - If a one-off debug run needs scratch files, put them under the per-agent dir or under `claude-work/` (gitignored cross-project). Never the repo root.
+- **Sentinel-tag sidecar (post-`refactor/tags-to-sidecar`)**: `appendBlock` writes section tags to `agents/<id>/section-tags.json` keyed by `deriveStableSectionId(runId, issueIds)`. The sentinel header is now `<!-- run:R issue:#N outcome:O ts:T -->` (no `tags:`). Pre-existing CLAUDE.mds with legacy `tags:` parse fine but should be migrated once via `vp-dev agents migrate-tags-to-sidecar --all` to keep operator-only metadata out of the agent's context.
 
 ## Three-layer push-protection for the target repo is load-bearing
 The orchestrator dispatches coding agents against a `--target-repo` (any GitHub repo with a local clone). Three independent layers prevent an agent from pushing to the target's `main`:

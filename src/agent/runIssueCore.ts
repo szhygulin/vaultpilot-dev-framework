@@ -13,6 +13,7 @@ import { isInfraFlake, summarizeFailureRun, summarizeRun, type SummarizerOutput 
 import { resolveExpiryPolicies } from "../util/sentinels.js";
 import {
   BYTE_BUDGET_WARNING_THRESHOLD,
+  accuracyDegradationFactor,
   normalizedAccuracyFactor,
 } from "../util/contextCostCurve.js";
 import {
@@ -645,6 +646,32 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
     // Fall through to the normal append path — dedup is advisory.
   }
 
+  // Read once, share with both gates below.
+  const currentBytesForGate = await fs
+    .readFile(agentClaudeMdPath(args.agent.agentId), "utf-8")
+    .then((s) => Buffer.byteLength(s, "utf-8"))
+    .catch(() => 0);
+
+  // Cost-forecast hard gate (#199 Phase 2 option A): refuse the append when
+  // the predicted accuracy-degradation increase from adding this lesson
+  // exceeds the configured threshold. Independent of `predictedUtility` —
+  // treats cost alone as enough to refuse. Default threshold is +Infinity
+  // (gate disabled) so behavior is unchanged until the operator opts in via
+  // `VP_DEV_COST_FORECAST_THRESHOLD` (single number) once the K=13 corpus
+  // characterizes a defensible threshold. Always logs the decision so the
+  // (currentBytes, deltaFactor, decision) distribution can be analyzed.
+  const costForecastGate = evaluateCostForecastGate({
+    agentId: args.agent.agentId,
+    issueId: args.issue.id,
+    headingLength: args.summary.heading.length,
+    bodyLength: args.summary.body.length,
+    currentClaudeMdBytes: currentBytesForGate,
+    logger: args.logger,
+  });
+  if (costForecastGate.kind === "skip") {
+    return { summarySkipReason: costForecastGate.reason };
+  }
+
   // Predicted-utility soft gate (#179 Phase 2 option B, half-ready-curve probe):
   // if the LLM emitted a `predictedUtility` value, compare it to the cost
   // score derived from `normalizedAccuracyFactor` at the post-append byte
@@ -652,10 +679,6 @@ async function maybeAppendSummary(args: AppendArgs): Promise<{
   // operator can analyze the (utility, cost, decision) distribution post-hoc.
   // Missing predictedUtility = no signal to act on; let through (back-compat
   // with summarizer responses pre-this-change).
-  const currentBytesForGate = await fs
-    .readFile(agentClaudeMdPath(args.agent.agentId), "utf-8")
-    .then((s) => Buffer.byteLength(s, "utf-8"))
-    .catch(() => 0);
   const utilityGate = evaluatePredictedUtilityGate({
     predictedUtility: args.summary.predictedUtility,
     agentId: args.agent.agentId,
@@ -820,6 +843,121 @@ export function evaluatePredictedUtilityGate(
   });
   if (decision === "skip") return { kind: "skip", reason: "low-predicted-utility" };
   return { kind: "let-through", reason: "utility-passes-gate" };
+}
+
+// Cost-forecast hard gate (#199 Phase 2 option A). Refuses an append when
+// the projected jump in `accuracyDegradationFactor(currentBytes + addedBytes)`
+// over `accuracyDegradationFactor(currentBytes)` exceeds the threshold —
+// independent of `predictedUtility`. Default threshold is `+Infinity` (gate
+// disabled): the cost curve is calibrated post-redo (#179 phase 3) but the
+// "how much delta is too much" number is itself a separate study, so the
+// wiring ships with no behavioral change until an operator sets a real
+// number via `VP_DEV_COST_FORECAST_THRESHOLD`.
+
+export const DEFAULT_COST_FORECAST_THRESHOLD = Infinity;
+
+export function resolveCostForecastThreshold(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.VP_DEV_COST_FORECAST_THRESHOLD;
+  if (raw == null || raw === "") return DEFAULT_COST_FORECAST_THRESHOLD;
+  const n = Number(raw);
+  // Reject non-finite values (NaN, -Infinity) and negatives — both yield
+  // pathological gate behavior. `Infinity` from the env (operator literally
+  // passes "Infinity") is allowed and means "disabled," matching the
+  // default. Invalid input falls back to the default.
+  if (raw === "Infinity") return Infinity;
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_COST_FORECAST_THRESHOLD;
+  return n;
+}
+
+export interface CostForecastGateInput {
+  agentId: string;
+  issueId: number;
+  headingLength: number;
+  bodyLength: number;
+  /**
+   * Current byte size of the agent's CLAUDE.md. Caller reads it once and
+   * passes it in (mirrors {@link UtilityGateInput.currentClaudeMdBytes}).
+   * Undefined or 0 = treat as fresh / empty file → deltaFactor=0 → gate
+   * never fires (the gate exists to protect existing context, not the
+   * first append; matches the utility-gate's same-conditions invariant).
+   */
+  currentClaudeMdBytes?: number;
+  logger: Logger;
+  /** Override env-resolved threshold for tests. */
+  threshold?: number;
+}
+
+export type CostForecastGateResult =
+  | { kind: "let-through"; reason: "empty-claude-md" | "below-threshold" }
+  | { kind: "skip"; reason: "cost-forecast-exceeds-threshold" };
+
+/**
+ * Decide whether the projected accuracy-degradation increase from adding the
+ * lesson exceeds the operator-set hard threshold. Always logs the decision
+ * (including currentBytes, projectedBytes, currentFactor, projectedFactor,
+ * deltaFactor, and threshold) so post-hoc analysis can characterize the
+ * delta-factor distribution and tune the threshold.
+ *
+ * Pure function (no I/O) so tests can exercise the gate logic directly.
+ *
+ * Algorithm (matches issue #199 body verbatim):
+ *
+ *   projectedBytes = currentBytes + headingLength + bodyLength + sentinelOverhead
+ *   projectedFactor = accuracyDegradationFactor(projectedBytes)
+ *   currentFactor   = accuracyDegradationFactor(currentBytes)
+ *   deltaFactor     = projectedFactor - currentFactor
+ *   if deltaFactor > threshold: skip
+ *
+ * Note `deltaFactor` may be negative (the calibrated curve is non-monotone
+ * in raw bytes after the post-redo quadratic-raw fit). A negative delta means
+ * the next byte band is empirically *cheaper* per the curve — the gate
+ * naturally lets those through, since `negative > anyRealThreshold` is false.
+ */
+export function evaluateCostForecastGate(
+  input: CostForecastGateInput,
+): CostForecastGateResult {
+  const threshold = input.threshold ?? resolveCostForecastThreshold();
+  const currentBytes = input.currentClaudeMdBytes ?? 0;
+
+  // Empty CLAUDE.md → gate is fully open. Same invariant as the utility
+  // gate: protect existing context, not the first append.
+  if (currentBytes <= 0) {
+    input.logger.info("specialization.cost_forecast_gate", {
+      agentId: input.agentId,
+      issueId: input.issueId,
+      decision: "let-through",
+      reason: "empty-claude-md",
+      threshold,
+    });
+    return { kind: "let-through", reason: "empty-claude-md" };
+  }
+
+  const sentinelOverhead = 200;
+  const projectedBytes =
+    currentBytes + input.headingLength + input.bodyLength + sentinelOverhead;
+  const currentFactor = accuracyDegradationFactor(currentBytes);
+  const projectedFactor = accuracyDegradationFactor(projectedBytes);
+  const deltaFactor = projectedFactor - currentFactor;
+  const decision = deltaFactor > threshold ? "skip" : "let-through";
+
+  input.logger.info("specialization.cost_forecast_gate", {
+    agentId: input.agentId,
+    issueId: input.issueId,
+    decision,
+    currentBytes,
+    projectedBytes,
+    currentFactor,
+    projectedFactor,
+    deltaFactor,
+    threshold,
+  });
+
+  if (decision === "skip") {
+    return { kind: "skip", reason: "cost-forecast-exceeds-threshold" };
+  }
+  return { kind: "let-through", reason: "below-threshold" };
 }
 
 // Issue #178 (Phase 1 of #177): per-section utility-scoring data collection.

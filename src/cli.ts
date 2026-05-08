@@ -121,6 +121,11 @@ import {
   type LessonTier,
 } from "./agent/sharedLessons.js";
 import {
+  appendBodyJaccardLogLine,
+  computeBodyJaccardScore,
+  loadComparandClaudeMd,
+} from "./agent/bodyJaccardLog.js";
+import {
   evaluateLocalClaudeUtilityGate,
   type LocalClaudeUtilityGateResult,
 } from "./agent/localClaudeQueue.js";
@@ -3706,6 +3711,33 @@ async function cmdLessonsReview(opts: LessonsReviewOpts): Promise<void> {
   // a split, and we still want to surface it. The boundary that matters is
   // the human-review gate, not the agent's lifecycle status.
   const pending = await collectPendingCandidates(reg.agents);
+
+  // Phase A instrumentation for #201: log one body-Jaccard observation per
+  // pending candidate so Phase B threshold tuning has data to fit against.
+  // Fail-soft per CLAUDE.md "Fail-soft wiring for state-collection hooks":
+  // a logging error must not abort review — wrap each emit individually.
+  const logTs = new Date().toISOString();
+  for (const p of pending) {
+    try {
+      const claudeMd = await loadComparandClaudeMd(tier, p.candidate.domain);
+      const score = computeBodyJaccardScore({
+        candidateBody: p.candidate.body,
+        claudeMd,
+      });
+      await appendBodyJaccardLogLine({
+        ts: logTs,
+        event: "lesson.body_jaccard",
+        candidateAgentId: p.agentId,
+        candidateDomain: p.candidate.domain,
+        tier,
+        ...score,
+      });
+    } catch (err) {
+      process.stderr.write(
+        `warn: body-Jaccard log emit failed for ${p.agentId} -> ${p.candidate.domain}: ${(err as Error).message}\n`,
+      );
+    }
+  }
 
   if (opts.json) {
     process.stdout.write(

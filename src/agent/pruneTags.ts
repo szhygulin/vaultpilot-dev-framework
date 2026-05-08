@@ -29,6 +29,7 @@ import { claudeBinPath } from "./sdkBinary.js";
 import { mutateRegistry } from "../state/registry.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { parseSentinelHeader } from "../util/sentinels.js";
+import { deriveStableSectionId } from "../state/lessonUtility.js";
 import { ORCHESTRATOR_MODEL_SPLIT } from "../orchestrator/models.js";
 import type { AgentRecord } from "../types.js";
 
@@ -108,14 +109,16 @@ function clampClusterFields(json: unknown): unknown {
 }
 
 /**
- * Parse a CLAUDE.md and return the union of all `tags:` provenance fields
- * across `<!-- run:... -->` sentinel comments, plus the count of sentinels
- * found. Sentinels written before tag-provenance landed (per #142) lack a
- * `tags:` field; they contribute nothing to the union but still count
- * toward the section total.
+ * Walk a CLAUDE.md to count `<!-- run:... -->` sentinels, and union the
+ * tag arrays for those sentinels from the per-agent sidecar
+ * (`agents/<id>/section-tags.json`). Sections whose stable IDs are absent
+ * from the sidecar contribute nothing to the union but still count toward
+ * the section total — same conservative posture as the legacy in-sentinel
+ * `tags:` reader.
  */
 export function parseSectionTagsUnion(
   claudeMd: string,
+  sectionTagsByStableId: Record<string, string[]>,
 ): { union: Set<string>; sectionCount: number } {
   const union = new Set<string>();
   let sectionCount = 0;
@@ -123,7 +126,13 @@ export function parseSectionTagsUnion(
     const header = parseSentinelHeader(line.trim());
     if (!header) continue;
     sectionCount++;
-    for (const t of header.tags) union.add(t);
+    const ids = header.issueIds && header.issueIds.length > 0
+      ? header.issueIds
+      : [header.issueId];
+    const stableId = deriveStableSectionId(header.runId, ids);
+    const tags = sectionTagsByStableId[stableId];
+    if (!tags) continue;
+    for (const t of tags) union.add(t);
   }
   return { union, sectionCount };
 }
@@ -147,6 +156,12 @@ export interface ProposePruneTagsInput {
   agent: AgentRecord;
   /** The agent's current CLAUDE.md content (or "" if missing). */
   claudeMd: string;
+  /**
+   * Stable-id → tags map from the agent's `section-tags.json` sidecar.
+   * Pass `{}` for agents with no sidecar yet (fresh / un-migrated); they
+   * surface as zero-section-tags-union and the empty-result paths handle it.
+   */
+  sectionTagsByStableId: Record<string, string[]>;
   /** When true, skip Phase 2 (LLM generalization); orphan-drop only. */
   noGeneralize?: boolean;
 }
@@ -160,7 +175,10 @@ export async function proposePruneTags(
   input: ProposePruneTagsInput,
 ): Promise<PruneTagsProposal> {
   const registryTagsBefore = [...new Set(input.agent.tags)].sort();
-  const { union: sectionTagsUnion, sectionCount } = parseSectionTagsUnion(input.claudeMd);
+  const { union: sectionTagsUnion, sectionCount } = parseSectionTagsUnion(
+    input.claudeMd,
+    input.sectionTagsByStableId,
+  );
   const sectionTagsSorted = [...sectionTagsUnion].sort();
 
   const registrySet = new Set(registryTagsBefore);

@@ -370,7 +370,7 @@ const STOP_WORDS = new Set([
   "to", "was", "were", "will", "with", "the", "but", "if", "not", "no", "so",
 ]);
 
-function tokenize(text: string): Set<string> {
+export function tokenize(text: string): Set<string> {
   const out = new Set<string>();
   for (const raw of text.toLowerCase().split(/[^a-z0-9-]+/)) {
     if (raw.length < 3) continue;
@@ -380,7 +380,7 @@ function tokenize(text: string): Set<string> {
   return out;
 }
 
-function jaccard(a: Set<string>, b: Set<string>): number {
+export function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;
   let intersect = 0;
   for (const t of a) if (b.has(t)) intersect++;

@@ -70,18 +70,19 @@ test("evaluatePredictedUtilityGate: low utility at mid-size CLAUDE.md is skipped
 });
 
 test("evaluatePredictedUtilityGate: ratio override raises the bar (no signal at high ratio)", () => {
-  // At currentClaudeMdBytes=25_000 the costScore is ~0.36. Utility=0.5
-  // passes with ratio=1.0 (threshold ≈ 0.36) but fails with ratio=10
-  // (threshold ≈ 3.6, well above utility).
+  // At currentClaudeMdBytes=5_000 (projectedBytes=5_750 after heading +
+  // body + sentinel) the post-redo quadratic-raw curve gives costScore
+  // ≈ 0.25. Utility=0.5 passes with ratio=1.0 (threshold ≈ 0.25) but
+  // fails with ratio=10 (threshold ≈ 2.5, well above utility).
   const passInput = input({
     predictedUtility: 0.5,
-    currentClaudeMdBytes: 25_000,
+    currentClaudeMdBytes: 5_000,
     ratio: 1.0,
   });
   assert.equal(evaluatePredictedUtilityGate(passInput).kind, "let-through");
   const failInput = input({
     predictedUtility: 0.5,
-    currentClaudeMdBytes: 25_000,
+    currentClaudeMdBytes: 5_000,
     ratio: 10,
   });
   assert.equal(evaluatePredictedUtilityGate(failInput).kind, "skip");

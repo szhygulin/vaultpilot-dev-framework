@@ -70,6 +70,18 @@ export function evaluateLocalClaudeUtilityGate(
   input: LocalClaudeUtilityGateInput,
 ): LocalClaudeUtilityGateResult {
   const ratio = input.ratio ?? resolveLocalClaudeUtilityRatio();
+  // Empty queue → gate fully open. Same rationale as the predicted-utility
+  // gate in runIssueCore: protects existing context, not the first append.
+  // Pre-redo this fell out of the linear-log curve's near-1 extrapolation
+  // at small bytes; the post-redo quadratic-raw curve extrapolates upward
+  // outside its calibration range, so the empty-file invariant must be
+  // explicit.
+  if (input.currentLocalClaudeMdBytes <= 0) {
+    if (input.utility === undefined) {
+      return { decision: "no-utility", costScore: 0, threshold: 0, ratio };
+    }
+    return { decision: "let-through", costScore: 0, threshold: 0, ratio };
+  }
   const projectedBytes = input.currentLocalClaudeMdBytes + input.candidateBytes;
   const factor = normalizedAccuracyFactor(projectedBytes);
   const costScore = Number.isFinite(factor)

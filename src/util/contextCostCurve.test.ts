@@ -31,11 +31,11 @@ test("DEFAULT_COST_WEIGHTS: sum to 1.0 and accuracy weight = 0.75", () => {
   assert.ok(Math.abs(DEFAULT_COST_WEIGHTS.accuracy + DEFAULT_COST_WEIGHTS.cost - 1) < 1e-9);
 });
 
-test("getAccuracyDegradationRegression / getTokenCostRegression: both fit linear-log with finite F p-values", () => {
+test("getAccuracyDegradationRegression / getTokenCostRegression: both fit quadratic-raw with finite F p-values", () => {
   resetContextCostCurveCache();
   for (const reg of [getAccuracyDegradationRegression(), getTokenCostRegression()]) {
-    assert.equal(reg.degree, 1);
-    assert.equal(reg.xTransform, "log");
+    assert.equal(reg.degree, 2);
+    assert.equal(reg.xTransform, "identity");
     assert.ok(Number.isFinite(reg.significance.fPValue));
   }
 });

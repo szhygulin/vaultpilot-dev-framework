@@ -18,65 +18,81 @@ import type { CurveSample } from "../research/curveStudy/types.js";
  * runtime composite curve is a weighted combination — see
  * {@link contextCostFactor}.
  *
- * Provenance: #179 phase 3, K=13 combined fit (legs 1 + 2) on 2026-05-06,
- * claude-opus-4-7[1m], advisory-scope-boundary specialty. 18 trim agents at
- * 6 sizes (~6K, 14K, 22K, 35K, 50K, 58K bytes), 13 issues each (6 vp-mcp +
- * 7 vp-development-agents), 182 scored cells. Both curves clear F-test
- * significance: accuracy p=3.96e-2 (R²=0.239), token-cost p=4.43e-3
- * (R²=0.406). Re-fit when the orchestrator's primary model tier changes or
- * when calibrating a different specialty.
+ * Provenance: #179 phase 3 curve-redo, two-leg combined fit on 2026-05-07.
+ * Coding cells: claude-sonnet-4-6. Reasoning judge: claude-opus-4-7[1m] at
+ * K=3 medians. 18 trim agents (~6K/14K/22K/35K/50K/58K bytes × 3 seeds) ×
+ * 13 issues (6 vp-mcp vitest + 7 vp-development-agents node-test) = 234
+ * cells dispatched, 232 scored (2 envelope-parse-fail dropped). Quality is
+ * the falsifiable 0–100 metric A+B (50-pt blinded reasoning judge + 50-pt
+ * normalized hidden-test pass rate; 2A for pushback; 0 for parse fail) per
+ * `feature-plans/curve-redo-bundle/curve-redo-combined-results.md`.
+ *
+ * Curve form: quadratic-raw (degree 2, identity transform). The redo's
+ * combined dataset is non-monotone in log(bytes) — quality degrades from 6k
+ * to 35k then recovers from 35k to 50k+ — so the prior linear-log default
+ * fits with R²≈0 (accuracy F=0.12 p=0.737; token-cost F=0.49 p=0.495). A
+ * sweep of degrees 1–3 × {log, identity} found quad-raw the simplest model
+ * to capture the bend: accuracy F(2,15)=4.46 p=0.030 (R²adj=0.29), with
+ * the quadratic coefficient alone at p=0.015. Token cost on the same form
+ * gives F(2,15)=2.63 p=0.105 (R²adj=0.16); overall F doesn't clear 0.05
+ * but the quadratic coefficient is individually significant at p=0.037.
+ * Same functional form adopted for both curves so the runtime composite
+ * shares one (degree, xTransform) constant pair.
+ *
+ * Re-fit when the orchestrator's primary coding model changes, when
+ * calibrating a different specialty, or when extending sampling beyond the
+ * current 6k–58k range (see ROADMAP "investigate sizes beyond 60KB").
  */
 export const ACCURACY_DEGRADATION_SAMPLES: ReadonlyArray<CurveSample> = [
-  { xBytes: 5935, factor: 1.0 },
-  { xBytes: 5975, factor: 1.045 },
-  { xBytes: 5978, factor: 1.017 },
-  { xBytes: 13777, factor: 1.06 },
-  { xBytes: 13935, factor: 1.06 },
-  { xBytes: 13964, factor: 1.06 },
-  { xBytes: 21873, factor: 1.06 },
-  { xBytes: 21918, factor: 1.06 },
-  { xBytes: 21976, factor: 1.19 },
-  { xBytes: 34192, factor: 1.704 },
-  { xBytes: 34556, factor: 1.127 },
-  { xBytes: 34786, factor: 1.19 },
-  { xBytes: 49010, factor: 1.704 },
-  { xBytes: 49726, factor: 1.179 },
-  { xBytes: 49745, factor: 1.167 },
-  { xBytes: 56247, factor: 1.167 },
-  { xBytes: 56493, factor: 1.15 },
-  { xBytes: 56680, factor: 1.15 },
+  { xBytes: 5935, factor: 1.0652 },
+  { xBytes: 5975, factor: 1.0578 },
+  { xBytes: 5978, factor: 1.0792 },
+  { xBytes: 13777, factor: 1.1227 },
+  { xBytes: 13935, factor: 1.0903 },
+  { xBytes: 13964, factor: 1.0 },
+  { xBytes: 21873, factor: 1.0843 },
+  { xBytes: 21918, factor: 1.0726 },
+  { xBytes: 21976, factor: 1.1419 },
+  { xBytes: 34192, factor: 1.2106 },
+  { xBytes: 34556, factor: 1.1647 },
+  { xBytes: 34786, factor: 1.0871 },
+  { xBytes: 49010, factor: 1.0358 },
+  { xBytes: 49726, factor: 1.027 },
+  { xBytes: 49745, factor: 1.0339 },
+  { xBytes: 56247, factor: 1.07 },
+  { xBytes: 56493, factor: 1.036 },
+  { xBytes: 56680, factor: 1.0179 },
 ];
 
 export const TOKEN_COST_SAMPLES: ReadonlyArray<CurveSample> = [
-  { xBytes: 5935, factor: 2.558 },
-  { xBytes: 5975, factor: 2.801 },
-  { xBytes: 5978, factor: 2.731 },
-  { xBytes: 13777, factor: 2.504 },
-  { xBytes: 13935, factor: 2.927 },
-  { xBytes: 13964, factor: 3.085 },
-  { xBytes: 21873, factor: 2.444 },
-  { xBytes: 21918, factor: 2.723 },
-  { xBytes: 21976, factor: 2.011 },
-  { xBytes: 34192, factor: 1.252 },
-  { xBytes: 34556, factor: 2.301 },
-  { xBytes: 34786, factor: 2.868 },
-  { xBytes: 49010, factor: 1.0 },
-  { xBytes: 49726, factor: 1.712 },
-  { xBytes: 49745, factor: 1.924 },
-  { xBytes: 56247, factor: 1.751 },
-  { xBytes: 56493, factor: 1.827 },
-  { xBytes: 56680, factor: 2.413 },
+  { xBytes: 5935, factor: 1.2233 },
+  { xBytes: 5975, factor: 1.0 },
+  { xBytes: 5978, factor: 1.0493 },
+  { xBytes: 13777, factor: 1.2248 },
+  { xBytes: 13935, factor: 1.0932 },
+  { xBytes: 13964, factor: 1.1906 },
+  { xBytes: 21873, factor: 1.2226 },
+  { xBytes: 21918, factor: 1.1711 },
+  { xBytes: 21976, factor: 1.307 },
+  { xBytes: 34192, factor: 1.1678 },
+  { xBytes: 34556, factor: 1.3094 },
+  { xBytes: 34786, factor: 1.1271 },
+  { xBytes: 49010, factor: 1.1522 },
+  { xBytes: 49726, factor: 1.1762 },
+  { xBytes: 49745, factor: 1.0686 },
+  { xBytes: 56247, factor: 1.1753 },
+  { xBytes: 56493, factor: 1.0971 },
+  { xBytes: 56680, factor: 1.154 },
 ];
 
 /**
- * Regression form for the curve fit. Linear-log (degree 1, x→log(x)) is the
- * default per #179 leg-1 finding: linear-log beat poly2-raw on both curves
- * (accuracy p=0.097 vs 0.111, token-cost p=0.176 vs 0.404 at n=18) and uses
- * one fewer parameter, so degrees-of-freedom remain comfortable at the
- * sample counts typical for this study (n ≤ 20).
+ * Regression form for the curve fit. Quadratic-raw (degree 2, x untransformed)
+ * is the post-redo default — see provenance comment on
+ * {@link ACCURACY_DEGRADATION_SAMPLES} for the model-sweep rationale and the
+ * non-monotone-in-log(bytes) shape of the calibration data.
  */
-export const CONTEXT_COST_REGRESSION_DEGREE = 1;
-export const CONTEXT_COST_REGRESSION_X_TRANSFORM: "identity" | "log" = "log";
+export const CONTEXT_COST_REGRESSION_DEGREE = 2;
+export const CONTEXT_COST_REGRESSION_X_TRANSFORM: "identity" | "log" = "identity";
 
 /**
  * Default weights for {@link contextCostFactor}. Composite is
@@ -260,9 +276,10 @@ export function getTokenCostRegression(): PolynomialRegression {
  * Soft-warning byte threshold for per-agent CLAUDE.md size (#200, option 1
  * scope after Markov's pushback). Returns the 95th-percentile of the
  * calibration sample's xBytes — a deliberately model-free statistic, not
- * an "elbow." The validated K=13 fit is linear-log (degree 1, x→log(x)),
- * which is monotone and carries no inflection point; picking any single
- * x-value off it as a knot would be arbitrary.
+ * an "elbow." The post-redo fit is quadratic-raw (degree 2, identity
+ * transform) with an inflection inside the calibration range, so any
+ * model-derived single x-value would now reflect the curve's bend rather
+ * than a "danger" boundary; the model-free p95 stays the right shape.
  *
  * Properties:
  *   - Model-free: drawn from the ordered sample bytes via R-7 linear

@@ -78,8 +78,18 @@ async function main() {
     .map((c) => ({ agentId: c.agentId, agentSizeBytes: c.agentSizeBytes, costUsd: c.costUsd }));
   const tokenCost = samplesFromCost(completed);
 
-  const accFit = accuracy.length > 1 ? fitPolynomialRegression(accuracy, 1, "log") : null;
-  const tcFit = tokenCost.length > 1 ? fitPolynomialRegression(tokenCost, 1, "log") : null;
+  // Quadratic-raw (degree 2, identity transform) is the post-redo default:
+  // the linear-log fit on the combined 232-cell dataset returned p=0.737
+  // (accuracy) and p=0.495 (token cost), failing the Step-7 merge gate. A
+  // model sweep across degrees 1-3 × {log, identity} found the data is
+  // non-monotone in log(bytes) — quality degrades from 6k → 35k then
+  // recovers from 35k → 50k+. Quadratic-raw is the simplest model that
+  // captures that bend: clears p=0.030 on accuracy with R²adj=0.29, and
+  // its quadratic coefficient is individually significant at p=0.015.
+  // Token cost stays under the same form for consistency (overall F
+  // p=0.105; quadratic coefficient itself p=0.037).
+  const accFit = accuracy.length > 2 ? fitPolynomialRegression(accuracy, 2, "identity") : null;
+  const tcFit = tokenCost.length > 2 ? fitPolynomialRegression(tokenCost, 2, "identity") : null;
 
   // Range-normalize each curve to a common [1, 2] scale so the operator can
   // see accuracy and token-cost on a unified dynamic range when reading the

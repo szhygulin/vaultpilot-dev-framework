@@ -72,6 +72,7 @@ import {
   type IncompleteBranchInfo,
 } from "./git/incompleteBranches.js";
 import { agentClaudeMdPath, forkClaudeMd } from "./agent/specialization.js";
+import { preflightSdkBinary } from "./agent/sdkBinary.js";
 import { promises as fs } from "node:fs";
 import { runIssueCore } from "./agent/runIssueCore.js";
 import {
@@ -958,6 +959,19 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     process.stderr.write(
       "INFO: ANTHROPIC_API_KEY is not set; falling back to Claude Code OAuth credentials at ~/.claude/credentials.json.\n",
     );
+  }
+
+  // Issue #245: detect a libc/SDK-binary mismatch BEFORE the approval gate
+  // (and before runResume's dispatch path). On a glibc host without
+  // VP_DEV_CLAUDE_BIN set, the SDK picks the musl-linked binary and every
+  // dispatched agent crashes in <2s with the misleading "native binary not
+  // found" error; triage's post-mortem gate then refuses to re-dispatch the
+  // affected issues without --include-non-ready. Catching the mismatch once
+  // here trades a fast fail for N agent failures + a triage gate.
+  const sdkPreflight = preflightSdkBinary();
+  if (!sdkPreflight.ok) {
+    console.error(`ERROR: ${sdkPreflight.reason}\n\n${sdkPreflight.hint}`);
+    process.exit(2);
   }
 
   if (opts.resume) {

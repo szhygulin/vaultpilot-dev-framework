@@ -25,7 +25,7 @@ import type { CurveSample } from "../research/curveStudy/types.js";
  * cells dispatched, 232 scored (2 envelope-parse-fail dropped). Quality is
  * the falsifiable 0–100 metric A+B (50-pt blinded reasoning judge + 50-pt
  * normalized hidden-test pass rate; 2A for pushback; 0 for parse fail) per
- * `feature-plans/curve-redo-bundle/curve-redo-combined-results.md`.
+ * `research/curve-redo-bundle/curve-redo-combined-results.md`.
  *
  * Curve form: quadratic-raw (degree 2, identity transform). The redo's
  * combined dataset is non-monotone in log(bytes) — quality degrades from 6k

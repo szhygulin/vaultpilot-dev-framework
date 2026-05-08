@@ -759,7 +759,7 @@ export function buildCli(): Command {
         )
         .requiredOption(
           "--control-logs-dirs <list>",
-          "Comma-separated directories holding experiment-1 control cells (e.g. feature-plans/issue-179-data/logs-mcp,feature-plans/issue-179-data/logs-dev).",
+          "Comma-separated directories holding experiment-1 control cells (e.g. research/issue-179-data/logs-mcp,research/issue-179-data/logs-dev).",
         )
         .option(
           "--replicates <n>",
@@ -767,8 +767,8 @@ export function buildCli(): Command {
           parsePositive,
           3,
         )
-        .option("--logs-dir <path>", "Where treatment-arm logs land", "feature-plans/issue-179-data/logs-bench")
-        .option("--output <path>", "Where to write the JSON output", "feature-plans/issue-179-data/bench-specialists.json")
+        .option("--logs-dir <path>", "Where treatment-arm logs land", "research/issue-179-data/logs-bench")
+        .option("--output <path>", "Where to write the JSON output", "research/issue-179-data/bench-specialists.json")
         .option(
           "--max-cost-usd <usd>",
           "Cumulative cap; aborts further dispatches when reached.",
@@ -800,7 +800,7 @@ export function buildCli(): Command {
         )
         .requiredOption(
           "--out-dir <path>",
-          "Where the .test.ts files land (e.g. feature-plans/curve-redo-tests/<issueId>/). Created if missing.",
+          "Where the .test.ts files land (e.g. research/curve-redo-bundle/curve-redo-tests/<issueId>/). Created if missing.",
         )
         .option(
           "--batch-count <n>",

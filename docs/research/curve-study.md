@@ -175,4 +175,4 @@ Methodology + results from the inaugural pilot are at:
 - `feature-plans/issue-179-results.md` — vp-mcp pilot per-cell results + open scoring rubrics.
 - `feature-plans/issue-179-results-phase2.md` — smoke-test phase 2 results + null-quality finding.
 
-Raw cell envelopes, logs, and per-agent CLAUDE.md trims from the inaugural runs are preserved in git history (commits on the `study/issue-179-pilot` branch through 2026-05-06) but are intentionally not in the working tree — they're machine-generated artifacts that don't belong in source. Phase-3+ research output lives under the gitignored `feature-plans/issue-179-data/` path.
+Raw cell envelopes, logs, and per-agent CLAUDE.md trims from the inaugural runs are preserved in git history (commits on the `study/issue-179-pilot` branch through 2026-05-06) but are intentionally not in the working tree — they're machine-generated artifacts that don't belong in source. Phase-3+ research output lives under the gitignored `research/issue-179-data/` path.

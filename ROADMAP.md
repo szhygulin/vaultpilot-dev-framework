@@ -107,8 +107,8 @@ Plus tooling:
      --parent agent-916a \
      --sizes 6000,14000,22000,35000,50000,58000 \
      --replicates 3 \
-     --output-dir feature-plans/issue-179-data/trims-phase3/ \
-     --output-spec feature-plans/issue-179-data/agents-spec-phase3.json \
+     --output-dir research/issue-179-data/trims-phase3/ \
+     --output-spec research/issue-179-data/agents-spec-phase3.json \
      --seed-base 2026 \
      --clone-base /tmp/study-clones/{agentId}-{repo} \
      --repos vaultpilot-mcp,vaultpilot-development-agents
@@ -116,8 +116,8 @@ Plus tooling:
 3. **Register the 18 dev-agents** automatically:
    ```bash
    vp-dev research register-trims \
-     --agents-spec feature-plans/issue-179-data/agents-spec-phase3.json \
-     --trims-dir feature-plans/issue-179-data/trims-phase3/ \
+     --agents-spec research/issue-179-data/agents-spec-phase3.json \
+     --trims-dir research/issue-179-data/trims-phase3/ \
      --tags-from agent-916a
    ```
 4. **Set up 36 dedicated clones**: 18 of vp-mcp at `/tmp/study-clones/<agentId>-vaultpilot-mcp/` + 18 of dev-agents at `/tmp/study-clones/<agentId>-vaultpilot-development-agents/`. Total ~1.4 GB disk.
@@ -133,7 +133,7 @@ Plus tooling:
    ```
    → 144 cells (8 issues × 18 agents).
 6. **Dispatch (dev-agents leg)**: same agents, different clone paths, different issues (`172,173,179,180,181,185,186,<control-3>,<control-4>`). → 162 cells (9 issues × 18 agents).
-7. **Aggregate** into `feature-plans/issue-179-data/cells.json` with `phase: "phase3-randomized"`.
+7. **Aggregate** into `research/issue-179-data/cells.json` with `phase: "phase3-randomized"`.
 8. **Score + fit** both curves (`accuracyDegradationFactor` and `tokenCostFactor`) on the 306-cell dataset. Compute F-test p-values; if either curve has p < 0.05, hand-merge into `ACCURACY_DEGRADATION_SAMPLES` / `TOKEN_COST_SAMPLES`.
 9. **Synthesized-control agreement scoring**: for the 4 control issues × 18 agents = 72 cells, compare each agent's proposed scope/disposition against the operator's predetermined disposition. Score 0/1 per cell. Two of four controls expect "implement" with a recorded file list; two expect "pushback" with a recorded reason.
 10. **Cleanup**: deregister the 18 study agents, delete clones, delete trim files (or move to archive). Or `--keep` if a phase 4 follow-up is planned.
@@ -148,7 +148,7 @@ Plus tooling:
 
 **Future**
 
-- **Investigate sizes beyond 60KB** (curve-redo follow-up, 2026-05-08): the post-redo combined fit (`feature-plans/curve-redo-bundle/curve-redo-combined-results.md`) is quadratic-raw with an inflection inside the calibration range — quality degrades from 6k → 35k then **recovers** from 35k → 50k–58k (best bucket Q=0.969 at 50k, vs worst Q=0.867 at 35k). The 58k upper bound is the sample edge, so we don't know whether the curve keeps improving, plateaus, or bends back down past the SOFT_CAP_BYTES (64 KiB) boundary. A targeted leg-3 at sizes {65k, 75k, 90k, 110k} × 3 seeds × the same 13 issues (≈234 cells, ≈$200 cells + judge) would close the right-tail extrapolation. Hypothesis to test: the recovery is real (more rules → more guidance) until a second degradation regime begins where context overload dominates again — meaning the quad-raw form is correct in shape but the calibration domain is too narrow.
+- **Investigate sizes beyond 60KB** (curve-redo follow-up, 2026-05-08): the post-redo combined fit (`research/curve-redo-bundle/curve-redo-combined-results.md`) is quadratic-raw with an inflection inside the calibration range — quality degrades from 6k → 35k then **recovers** from 35k → 50k–58k (best bucket Q=0.969 at 50k, vs worst Q=0.867 at 35k). The 58k upper bound is the sample edge, so we don't know whether the curve keeps improving, plateaus, or bends back down past the SOFT_CAP_BYTES (64 KiB) boundary. A targeted leg-3 at sizes {65k, 75k, 90k, 110k} × 3 seeds × the same 13 issues (≈234 cells, ≈$200 cells + judge) would close the right-tail extrapolation. Hypothesis to test: the recovery is real (more rules → more guidance) until a second degradation regime begins where context overload dominates again — meaning the quad-raw form is correct in shape but the calibration domain is too narrow.
 - **K=13 follow-up** (variance reduction without changing curve shape): phase 3's K=3 produces a coarse y-axis grid because each agent only sees 6 issues — quality scores cluster on a tiny set of distinct ratios (leg 1 saw 16/18 agents at q ∈ {0.667, 0.733}, only 2 at 0.45). Scaling to K=13 (or running both legs on every agent so each agent sees 13 issues) makes the y-axis effectively continuous. Cheaper than running the full leg 2 if that fails to clear p — re-dispatch the same 18 agents against an additional ~7 fresh issues per repo. Past data 2026-05-06: leg 1 (vp-mcp, K=6/agent, linear-log) gave accuracy p=0.097 with the two `s10*029` outliers in; leave-them-out drops p to 2.76e-4 (R²=0.62). K=13 dilutes outlier leverage from 1/3 to 1/13 of each size's cells, so the same signal should clear p<0.05 organically. Within-agent K is the single biggest leverage on variance.
 - **Phase 4** (if phase 3 produces a significant fit): harder issue set (curated cross-repo selection rather than "all open"), larger K (5–7), wider size range (4KB–80KB).
 - **Phase 5** (if phase 3 quality signal is still flat): switch the y-variable to `tokenCostFactor` only (drop the quality dimension), accept that quality is unmeasurable at the model+specialty's current capability ceiling for this issue class.

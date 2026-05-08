@@ -5,7 +5,7 @@
 // per-agent means, write the combined output.
 //
 // Usage:
-//   node feature-plans/curve-redo-bundle/combine-legs.js \
+//   node research/curve-redo-bundle/combine-legs.js \
 //     --leg1-logs <dir> --leg1-scores <dir> \
 //     --leg2-logs <dir> --leg2-scores <dir> \
 //     --agents-spec <path> \

@@ -25,8 +25,8 @@
 #     --dry-print    print the spawn commands without executing
 #
 # Required environment / file layout (relative to repo root):
-#   feature-plans/curve-redo-bundle/corpus.json
-#   $OUT_DIR/picks.tsv                          (default OUT_DIR=feature-plans/curve-redo-data/specialist-redo)
+#   research/curve-redo-bundle/corpus.json
+#   $OUT_DIR/picks.tsv                          (default OUT_DIR=research/curve-redo-data/specialist-redo)
 #   $OUT_DIR/logs-leg<leg>/                     (created)
 #   $OUT_DIR/diffs-leg<leg>/                    (created)
 #
@@ -47,8 +47,8 @@ if [[ "$LEG" != "1" && "$LEG" != "2" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-OUT_DIR="${OUT_DIR:-$REPO_ROOT/feature-plans/curve-redo-data/specialist-redo}"
-CORPUS="$REPO_ROOT/feature-plans/curve-redo-bundle/corpus.json"
+OUT_DIR="${OUT_DIR:-$REPO_ROOT/research/curve-redo-data/specialist-redo}"
+CORPUS="$REPO_ROOT/research/curve-redo-bundle/corpus.json"
 PICKS="$OUT_DIR/picks.tsv"
 LOGS_DIR="$OUT_DIR/logs-leg${LEG}"
 DIFFS_DIR="$OUT_DIR/diffs-leg${LEG}"

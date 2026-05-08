@@ -7,7 +7,8 @@ dist/
 /agents/
 /logs/
 
-# Curve-study research outputs — local-only. Methodology writeups
-# (feature-plans/issue-179-*.md outside this dir) are tracked.
-/feature-plans/issue-179-data/
-/feature-plans/curve-redo-data/
+# Curve-study research outputs — local-only raw data. Tracked siblings
+# under research/ (committed bundles) and feature-plans/ (methodology
+# writeups, issue-179-*.md) stay versioned.
+/research/issue-179-data/
+/research/curve-redo-data/

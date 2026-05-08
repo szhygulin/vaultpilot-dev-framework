@@ -33,12 +33,12 @@ if [[ "$LEG" != "1" && "$LEG" != "2" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-OUT_DIR="${OUT_DIR:-$REPO_ROOT/feature-plans/curve-redo-data/specialist-redo}"
-CORPUS="$REPO_ROOT/feature-plans/curve-redo-bundle/corpus.json"
+OUT_DIR="${OUT_DIR:-$REPO_ROOT/research/curve-redo-data/specialist-redo}"
+CORPUS="$REPO_ROOT/research/curve-redo-bundle/corpus.json"
 LOGS_DIR="$OUT_DIR/logs-leg${LEG}"
 DIFFS_DIR="$OUT_DIR/diffs-leg${LEG}"
 SCORES_DIR="$OUT_DIR/scores-leg${LEG}"
-TESTS_BASE="${TESTS_BASE:-$REPO_ROOT/feature-plans/curve-redo-bundle/curve-redo-tests}"
+TESTS_BASE="${TESTS_BASE:-$REPO_ROOT/research/curve-redo-bundle/curve-redo-tests}"
 SCORE_CLONES_DIR="${SCORE_CLONES_DIR:-$OUT_DIR/score-clones-leg${LEG}}"
 
 JUDGE_K="${JUDGE_K:-3}"

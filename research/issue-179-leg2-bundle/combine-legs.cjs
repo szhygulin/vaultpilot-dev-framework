@@ -3,7 +3,7 @@
 // curves on it, write the combined output. Run this after both legs finish.
 //
 // Usage:
-//   node feature-plans/issue-179-leg2-bundle/combine-legs.js \
+//   node research/issue-179-leg2-bundle/combine-legs.js \
 //     <leg1-logs-dir> <leg2-logs-dir> <agents-spec.json> <output.json>
 //
 // The agents-spec is used only for the agentId → sizeBytes map; either

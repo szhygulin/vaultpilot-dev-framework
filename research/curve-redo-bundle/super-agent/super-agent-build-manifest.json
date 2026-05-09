@@ -1,0 +1,130 @@
+{
+  "agentId": "agent-super",
+  "builtAt": "2026-05-09T05:42:15.897Z",
+  "runId": "merge-super-2026-05-09T05-42-15-897Z",
+  "minClusterSize": 3,
+  "contributors": [
+    {
+      "agentId": "agent-d0eb",
+      "count": 5
+    },
+    {
+      "agentId": "agent-ef41",
+      "count": 5
+    },
+    {
+      "agentId": "agent-200f",
+      "count": 0
+    },
+    {
+      "agentId": "agent-8a23",
+      "count": 1
+    },
+    {
+      "agentId": "agent-bf46",
+      "count": 2
+    },
+    {
+      "agentId": "agent-41bd",
+      "count": 6
+    },
+    {
+      "agentId": "agent-9a77",
+      "count": 7
+    },
+    {
+      "agentId": "agent-98b3",
+      "count": 6
+    },
+    {
+      "agentId": "agent-da91",
+      "count": 4
+    },
+    {
+      "agentId": "agent-f8b0",
+      "count": 3
+    },
+    {
+      "agentId": "agent-a642",
+      "count": 4
+    },
+    {
+      "agentId": "agent-fe90",
+      "count": 14
+    },
+    {
+      "agentId": "agent-92ff",
+      "count": 17
+    },
+    {
+      "agentId": "agent-02ce",
+      "count": 6
+    },
+    {
+      "agentId": "agent-219e",
+      "count": 4
+    },
+    {
+      "agentId": "agent-5421",
+      "count": 7
+    },
+    {
+      "agentId": "agent-2a3d",
+      "count": 6
+    },
+    {
+      "agentId": "agent-5acc",
+      "count": 5
+    },
+    {
+      "agentId": "agent-de1b",
+      "count": 4
+    },
+    {
+      "agentId": "agent-6337",
+      "count": 3
+    },
+    {
+      "agentId": "agent-956b",
+      "count": 4
+    },
+    {
+      "agentId": "agent-b7b8",
+      "count": 5
+    },
+    {
+      "agentId": "agent-aa6e",
+      "count": 3
+    },
+    {
+      "agentId": "agent-94b0",
+      "count": 1
+    },
+    {
+      "agentId": "agent-7089",
+      "count": 0
+    },
+    {
+      "agentId": "agent-a9a6",
+      "count": 0
+    },
+    {
+      "agentId": "agent-abd6",
+      "count": 0
+    }
+  ],
+  "contributorCount": 27,
+  "eligibleCount": 47,
+  "inputBytesRaw": 716861,
+  "pooledBytes": 208675,
+  "pooledSectionCount": 122,
+  "proposal": {
+    "clusterCount": 0,
+    "unclusteredCount": 122,
+    "estimatedBytesSaved": 0,
+    "warningCount": 0,
+    "notes": "SKIP_MERGE=1: raw pool (no Opus dedup)."
+  },
+  "renderedBytes": 209042,
+  "retentionPct": 100.17587157062418
+}

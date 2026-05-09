@@ -25,14 +25,25 @@ Each agent that will dispatch a leg must:
    npm ci && npm run build
    ```
 
-3. **Regenerate `legs.json`** (deterministic; rewrites the leg→trim mapping but does not re-mint trims if registry already has them, does not re-clone if `/tmp/study-clones/<agent>-<repo>/.git` exists).
+3. **Restore the agent-super CLAUDE.md from the tracked snapshot** if `agents/agent-super/CLAUDE.md` is missing (fresh host or wiped `agents/`). The snapshot is the canonical Phase A output (~$15-25 Opus call to regenerate from scratch).
+   ```bash
+   if [ ! -s agents/agent-super/CLAUDE.md ]; then
+     mkdir -p agents/agent-super
+     cp research/curve-redo-bundle/super-agent/agent-super.CLAUDE.md agents/agent-super/CLAUDE.md
+     cp research/curve-redo-bundle/super-agent/super-agent-build-manifest.json agents/agent-super/super-agent-build-manifest.json
+   fi
+   ```
+
+   On a host that already has `agents/` populated by a prior agent on the same machine (e.g. the leg-1 dispatcher's host, where `agents/` symlinks to the main worktree), skip — the existing CLAUDE.md is byte-identical to the snapshot.
+
+4. **Regenerate trims + `legs.json`** (deterministic from agent-super CLAUDE.md + seedBase=19; rewrites the leg→trim mapping but does not re-mint trims if registry already has them, does not re-clone if `/tmp/study-clones/<agent>-<repo>/.git` exists).
    ```bash
    node research/curve-redo-bundle/super-agent/build-super-trims.cjs
    ```
 
-   The `agents/` and `state/` directories are gitignored and shared across worktrees via symlink (each worktree symlinks `agents → /Users/s/dev/vaultpilot/vaultpilot-dev-framework/agents` and `state → /Users/s/dev/vaultpilot/vaultpilot-dev-framework/state`). The 36 trim CLAUDE.mds and registry entries minted by the leg-1 agent are visible from every parallel agent. Skip step 3's regeneration if `research/curve-redo-data/super-agent/legs.json` already exists in this worktree (the gitignored data dir may already be populated by a prior agent on the same host).
+   The `agents/` and `state/` directories are gitignored and shared across worktrees on the same host via symlink (each worktree symlinks `agents → /Users/s/dev/vaultpilot/vaultpilot-dev-framework/agents` and `state → /Users/s/dev/vaultpilot/vaultpilot-dev-framework/state`). The 36 trim CLAUDE.mds and registry entries minted by the leg-1 agent are visible from every parallel agent on the same host. Skip step 4 if `research/curve-redo-data/super-agent/legs.json` already exists in this worktree.
 
-4. **Launch the leg.**
+5. **Launch the leg.**
    ```bash
    bash research/curve-redo-bundle/super-agent/launch-leg-parallel.sh <N>
    ```

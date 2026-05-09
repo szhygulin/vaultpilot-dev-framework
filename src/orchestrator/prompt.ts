@@ -38,6 +38,36 @@ export interface TickPromptInput {
 }
 
 /**
+ * Issue #268: split prompt into a cache-stable prefix and a volatile
+ * suffix. The prefix carries the routing rule + per-agent CLAUDE.md prose
+ * (changes only when the summarizer fires after a successful run); the
+ * suffix carries pending issues, cap, prior-attempt errors, and the
+ * --prefer-agent override. Wiring this through `query({ systemPrompt:
+ * [prefix, SYSTEM_PROMPT_DYNAMIC_BOUNDARY], prompt: suffix, ... })` makes
+ * the prefix eligible for Anthropic prompt-cache hits across:
+ *
+ *  - Validation-retry within a single dispatch (errors-only delta).
+ *  - Cross-tick within a run when the idle agent set is unchanged.
+ *
+ * The 5-min cache TTL means the typical sub-minute tick spacing wins
+ * back ~90% of cache-stable input cost on hit.
+ */
+export interface TickPromptParts {
+  /**
+   * The cache-stable prefix. Identical between consecutive calls when
+   * idle agents and cap are stable, even if pending issues / errors /
+   * prefer-agent change.
+   */
+  cacheStablePrefix: string;
+  /**
+   * The volatile suffix. Always rebuilt; carries pending-issue list,
+   * --prefer-agent override, prior-attempt error block, and the
+   * JSON-shape directive.
+   */
+  volatileSuffix: string;
+}
+
+/**
  * Soft cap on assembled prompt byte size. ~2.5 MB ≈ 700K tokens at the
  * ~3.5 chars/token rule of thumb — comfortably under Opus 4.7's 1M-context
  * window even after orchestrator-side framing overhead. When the assembled
@@ -58,7 +88,7 @@ export const PROMPT_BYTE_BUDGET = 2_500_000;
  */
 const ISSUE_BODY_MAX_CHARS = 6000;
 
-export async function buildTickPrompt(input: TickPromptInput): Promise<string> {
+export async function buildTickPrompt(input: TickPromptInput): Promise<TickPromptParts> {
   const seed = await readSeedClaudeMd(input.targetRepoPath);
   const fullProseBlocks = await Promise.all(
     input.idleAgents.map((agent) => renderAgentBlock(agent, input.targetRepoPath, seed)),
@@ -114,32 +144,49 @@ export async function buildTickPrompt(input: TickPromptInput): Promise<string> {
     ? `\n\nOVERRIDE: the run was launched with --prefer-agent ${input.preferAgentId}. Assign that agent to one of the pending issues — natural fit does not matter. Picking any other assignment for ${input.preferAgentId} when it is idle will fail validation.`
     : "";
 
+  // Issue #268: routing rule rewritten to be cap-agnostic (cap appears
+  // only in the volatile suffix). Cap text moved to the suffix means the
+  // prefix stays byte-identical across ticks even when cap shrinks (e.g.
+  // an agent goes busy mid-run), which preserves cross-tick cache hits.
   const routingRule = isTwoPhaseRoutingEnabled()
     ? `Routing rule (two-phase, prose-aware):
 - Phase A — specialists first. For each issue, read each agent's CLAUDE.md sections and pick the agent whose past lessons, past-incident citations, and accumulated domain coverage best match the issue body. Tags (Jaccard >= ${SPECIALIST_THRESHOLD}) are a sanity check; PROSE BEATS TAGS — an agent whose CLAUDE.md describes "glibc-vs-musl SDK loader" is a stronger fit for a glibc preflight issue than one merely tagged \`linux\`.
 - Phase B — fall back to a general agent (tags include "general", <=3 tags total, OR whose CLAUDE.md is mostly the seed with little accumulated specialization). Generals pick up issues with no clear specialist match.
 - Each agent gets at most ONE issue per tick. Each issue is assigned to at most ONE agent.
-- Emit AT MOST ${input.cap} assignment${input.cap === 1 ? "" : "s"}. Leaving slots empty is acceptable when no specialist OR general agent fits. If a specialist OR general agent IS available for an unmatched issue, you must assign it.`
+- The cap on assignments per tick is provided in the pending-issues block below. Leaving slots empty is acceptable when no specialist OR general agent fits. If a specialist OR general agent IS available for an unmatched issue, you must assign it.`
     : `Routing rule (prose-aware):
 - For each issue, read each agent's CLAUDE.md sections and pick the agent whose past lessons, past-incident citations, and accumulated domain coverage best match the issue body. Tags are a sanity check; PROSE BEATS TAGS.
 - Brand-new general agents (mostly the seed CLAUDE.md, few accumulated sections) should pick up issues with no obvious specialist match.
 - Each agent gets at most ONE issue per tick. Each issue is assigned to at most ONE agent.
-- Emit EXACTLY ${input.cap} assignment${input.cap === 1 ? "" : "s"}. The cap reflects how many idle-agent x pending-issue pairs are available — leaving slots empty wastes parallelism. If the prose match is weak, still assign — even a weak prose match beats waiting another tick.`;
+- The cap on assignments per tick is provided in the pending-issues block below. Aim to fill the cap — empty slots waste parallelism. If the prose match is weak, still assign — even a weak prose match beats waiting another tick.`;
 
-  return `You are the dispatcher for vp-dev. You assign idle agents to pending issues for ONE scheduling tick. Decide based on the prose below — each agent's accumulated CLAUDE.md sections reveal real expertise far more accurately than a tag list.
+  // Cache-stable prefix: preamble + routing rule + idle-agent prose.
+  // Identical across the validation-retry round-trip and across ticks
+  // when the idle agent set is unchanged.
+  const cacheStablePrefix = `You are the dispatcher for vp-dev. You assign idle agents to pending issues for ONE scheduling tick. Decide based on the prose below — each agent's accumulated CLAUDE.md sections reveal real expertise far more accurately than a tag list.
 
 ${routingRule}
 
 # Idle agents (${input.idleAgents.length})
 
-${renderedBlocks.join("\n\n")}
+${renderedBlocks.join("\n\n")}`;
 
-# Pending issues (${input.pendingIssues.length}, cap=${input.cap})
+  // Volatile suffix: pending issues, cap, prefer-agent override, prior
+  // errors, output format directive. Rebuilt every call.
+  const capDirective = isTwoPhaseRoutingEnabled()
+    ? `Emit AT MOST ${input.cap} assignment${input.cap === 1 ? "" : "s"}.`
+    : `Emit EXACTLY ${input.cap} assignment${input.cap === 1 ? "" : "s"}.`;
 
-${issueBlocks.join("\n\n")}${preferBlock}${errorBlock}
+  const volatileSuffix = `# Pending issues (${input.pendingIssues.length}, cap=${input.cap})
+
+${issueBlocks.join("\n\n")}
+
+${capDirective}${preferBlock}${errorBlock}
 
 Output ONLY valid JSON in this exact shape, no prose, no markdown:
 {"assignments":[{"agentId":"<id>","issueId":<number>}, ...]}`;
+
+  return { cacheStablePrefix, volatileSuffix };
 }
 
 async function renderAgentBlock(

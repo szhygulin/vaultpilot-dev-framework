@@ -1,4 +1,7 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+} from "@anthropic-ai/claude-agent-sdk";
 import { buildTickPrompt } from "./prompt.js";
 import { claudeBinPath } from "../agent/sdkBinary.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
@@ -120,7 +123,7 @@ async function tryProposeWithLLM(opts: {
   preferAgentId?: string;
   targetRepoPath: string;
 }): Promise<ProposeOutcome> {
-  const prompt = await buildTickPrompt({
+  const { cacheStablePrefix, volatileSuffix } = await buildTickPrompt({
     pendingIssues: opts.pendingIssues,
     idleAgents: opts.idleAgents,
     cap: opts.cap,
@@ -131,11 +134,29 @@ async function tryProposeWithLLM(opts: {
   });
 
   let raw = "";
+  // Issue #268: capture cache hit/miss telemetry from the SDK usage block.
+  // `cache_creation_input_tokens` is the cost of *writing* the cache prefix
+  // (full input price); `cache_read_input_tokens` is the *cached read*
+  // (~10% of input price). Logging both lets post-hoc audits see when the
+  // dispatcher prefix is paying off.
+  let cacheCreationInputTokens = 0;
+  let cacheReadInputTokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
   try {
     const stream = query({
-      prompt,
+      // Issue #268: split into a cacheable system-prompt prefix and a
+      // volatile user-message suffix. The Agent SDK's `string[]`
+      // `systemPrompt` mode applies prompt-cache breakpoints at
+      // `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`; blocks before the marker are
+      // eligible for cross-call cache hits, blocks after are not.
+      // Within the same dispatch call's validation-retry round-trip the
+      // cacheable prefix is byte-identical (only `errorsFromPrior` in
+      // the suffix changes), so attempt 2 reads the prefix from cache.
+      prompt: volatileSuffix,
       options: {
         model: ORCHESTRATOR_MODEL,
+        systemPrompt: [cacheStablePrefix, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
         tools: [],
         permissionMode: "default",
         env: process.env,
@@ -148,8 +169,18 @@ async function tryProposeWithLLM(opts: {
     for await (const msg of stream) {
       if (msg.type === "result") {
         // Forward whether success or error subtype — the SDK reports cost
-        // for both, and a failed dispatch still consumed tokens.
+        // for both, and a failed dispatch still consumed tokens. The
+        // `total_cost_usd` already reflects cached vs. uncached pricing
+        // (cache reads bill at ~10% of input rate, writes at ~125%), so
+        // the run-level cost line stays accurate without manual math.
         opts.costTracker?.add(msg.total_cost_usd);
+        const usage = msg.usage;
+        if (usage) {
+          cacheCreationInputTokens = usage.cache_creation_input_tokens ?? 0;
+          cacheReadInputTokens = usage.cache_read_input_tokens ?? 0;
+          inputTokens = usage.input_tokens ?? 0;
+          outputTokens = usage.output_tokens ?? 0;
+        }
         if (msg.subtype === "success") raw = msg.result;
         else return { errors: [`Orchestrator query failed: ${msg.subtype}`] };
       }
@@ -159,8 +190,14 @@ async function tryProposeWithLLM(opts: {
   }
 
   opts.logger.info("tick.llm_io", {
-    promptBytes: prompt.length,
+    promptBytes: cacheStablePrefix.length + volatileSuffix.length,
+    cacheStablePrefixBytes: cacheStablePrefix.length,
+    volatileSuffixBytes: volatileSuffix.length,
     responseBytes: raw.length,
+    inputTokens,
+    outputTokens,
+    cacheCreationInputTokens,
+    cacheReadInputTokens,
     response: raw.length > 4000 ? raw.slice(0, 4000) + "..." : raw,
   });
 

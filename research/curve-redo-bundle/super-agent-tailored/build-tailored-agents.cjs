@@ -36,11 +36,10 @@ function parseArgs() {
   return args;
 }
 
-function slugify(heading) {
-  const base = heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  return base.length > 0 ? base : "section";
-}
-
+// Section IDs are opaque, zero-padded ordinals (`s001`..`s122`) — same
+// numbering scheme as `select-rules.cjs::parseSuperAgentSections`. The two
+// parsers MUST agree on the ID-to-section mapping or build-tailored-agents
+// can't resolve the keep-IDs from `selections.json`.
 const SECTION_BOUNDARY =
   /(<!--\s*run:[^\n]*-->)\s*\n##\s+([^\n]+)\n/g;
 
@@ -53,15 +52,12 @@ function parseSuperAgentSections(md) {
     throw new Error("No sentinel-tagged H2 sections found in super-agent file.");
   }
   const sections = [];
-  const taken = new Map();
+  const padWidth = String(matches.length).length;
   for (let i = 0; i < matches.length; i++) {
     const start = matches[i].start;
     const end = i + 1 < matches.length ? matches[i + 1].start : md.length;
     const fullBlock = md.slice(start, end).replace(/\s+$/, "");
-    let id = slugify(matches[i].heading);
-    const seen = taken.get(id) ?? 0;
-    if (seen > 0) id = `${id}-${seen + 1}`;
-    taken.set(slugify(matches[i].heading), seen + 1);
+    const id = `s${String(i + 1).padStart(padWidth, "0")}`;
     sections.push({ id, heading: matches[i].heading, fullBlock });
   }
   return sections;

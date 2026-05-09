@@ -37,28 +37,18 @@ function parseArgs() {
   return args;
 }
 
-// Slugify an H2 heading deterministically. Lowercase ASCII, runs of
-// non-alphanumerics → "-", trim leading/trailing "-". Identical input →
-// identical id. Collisions disambiguated downstream with -2, -3 suffixes.
-//
-// No length cap: 84% of super-agent sections produce slugs > 80 chars,
-// and Opus reconstructs the full slug from the heading rather than echoing
-// the truncated label, causing strict-match validation to reject valid
-// outputs. Full slugs eliminate the choice — the label IS what Opus would
-// generate.
-function slugify(heading) {
-  const base = heading
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return base.length > 0 ? base : "section";
-}
-
 // Parse the super-agent into ordered H2 sections, each carrying its
 // preceding `<!-- run:... -->` sentinel + `## heading` line + body up to
 // the next sentinel. Mirrors `parseClaudeMdSections` in src/agent/split.ts
 // but skips the sentinel coupling — the super-agent file's preamble +
 // section-header structure is what we tokenize against.
+//
+// Section IDs are opaque, zero-padded ordinals (`s001`..`s122`). Slug-from-
+// heading IDs caused two failure modes: (a) Opus reconstructed slugs from
+// headings rather than echoing the truncated label, and (b) Opus also
+// reconstructed unsuffixed slugs when the parser had disambiguated near-
+// duplicate headings with `-2`/`-3` suffixes. Numeric IDs eliminate both
+// classes — the model has nothing semantic to regenerate from.
 //
 // Returns: [{id, heading, sentinel, fullBlock, byteOffset}].
 const SECTION_BOUNDARY =
@@ -75,15 +65,12 @@ function parseSuperAgentSections(md) {
     );
   }
   const sections = [];
-  const taken = new Map(); // slug -> count
+  const padWidth = String(matches.length).length;
   for (let i = 0; i < matches.length; i++) {
     const start = matches[i].start;
     const end = i + 1 < matches.length ? matches[i + 1].start : md.length;
     const fullBlock = md.slice(start, end).trimEnd();
-    let id = slugify(matches[i].heading);
-    const seen = taken.get(id) ?? 0;
-    if (seen > 0) id = `${id}-${seen + 1}`;
-    taken.set(slugify(matches[i].heading), seen + 1);
+    const id = `s${String(i + 1).padStart(padWidth, "0")}`;
     sections.push({
       id,
       heading: matches[i].heading,
@@ -96,8 +83,9 @@ function parseSuperAgentSections(md) {
 }
 
 // Build the cache-stable system prompt. Sections are labeled `### Section
-// <id>: <heading>` (replacing the original `## ` so the LLM's section
-// tokens don't collide with its own JSON output structure).
+// <id> — <heading>` where <id> is an opaque ordinal like `s001`. The em-dash
+// separator and opaque ID prevent the model from regenerating the ID from
+// the heading text — it MUST echo the literal label.
 function buildSystemPrompt(sections) {
   const header = `You are evaluating which lessons from a pooled-knowledge "super-agent" file should be kept for a coding agent assigned to ONE specific GitHub issue. Your job: for each numbered Section below, decide whether keeping that lesson would help the assigned coding agent on THIS specific issue, or whether dropping it makes the per-issue agent's prompt cleaner.
 
@@ -108,15 +96,16 @@ YOUR OUTPUT — strict JSON, no prose around it, no code fences:
 {"selections": [{"sectionId": "<id>", "decision": "keep" | "drop", "reason": "<1 short sentence>"} ... ]}
 
 Rules:
-1. Output one entry per Section in the list below, in the same order. Total entries MUST equal the number of sections in the list.
-2. "decision" is exactly "keep" or "drop". No other strings.
-3. "reason" is one short sentence (≤25 words). For "keep", state why it applies to this issue. For "drop", state why it's off-topic.
+1. The "sectionId" MUST be the literal ordinal (e.g. "s001", "s042") shown in the Section header. Do NOT regenerate or paraphrase the id from the heading text — copy it verbatim.
+2. Output one entry per Section in the list below, in the same order. Total entries MUST equal the number of sections in the list. Each sectionId appears EXACTLY ONCE.
+3. "decision" is exactly "keep" or "drop". No other strings.
+4. "reason" is one short sentence (≤25 words). For "keep", state why it applies to this issue. For "drop", state why it's off-topic.
 
 The Sections (each block is one rule):
 
 `;
-  const blocks = sections.map((s, i) => {
-    return `### Section ${s.id}: ${s.heading}\n\n${s.fullBlock.replace(/^## /m, "## ")}`;
+  const blocks = sections.map((s) => {
+    return `### Section ${s.id} — ${s.heading}\n\n${s.fullBlock}`;
   });
   return header + blocks.join("\n\n") + "\n";
 }
@@ -165,7 +154,6 @@ function parseSelectorOutput(raw, sectionIds) {
   let parsed;
   try { parsed = JSON.parse(candidate); }
   catch {
-    // Try trailing fence stripping.
     const lastBrace = candidate.lastIndexOf("}");
     if (lastBrace < 0) throw new Error("Unbalanced JSON in selector output");
     parsed = JSON.parse(candidate.slice(0, lastBrace + 1));
@@ -176,19 +164,39 @@ function parseSelectorOutput(raw, sectionIds) {
   const expected = new Set(sectionIds);
   const seen = new Set();
   const validated = [];
+  const warnings = [];
+  let unknownCount = 0;
   for (const entry of parsed.selections) {
     if (!entry || typeof entry !== "object") {
-      throw new Error("Selection entry is not an object");
+      warnings.push("non-object entry skipped");
+      continue;
     }
     const { sectionId, decision, reason } = entry;
     if (typeof sectionId !== "string" || !expected.has(sectionId)) {
-      throw new Error(`Unknown sectionId in selector output: ${sectionId}`);
+      // Tolerate up to 5 unknown IDs — model occasionally hallucinates one.
+      // Beyond 5, the output is structurally wrong and must crash.
+      unknownCount++;
+      if (unknownCount > 5) {
+        throw new Error(`Too many unknown sectionIds in selector output (>${unknownCount}); last: ${sectionId}`);
+      }
+      warnings.push(`unknown sectionId skipped: ${sectionId}`);
+      continue;
     }
     if (seen.has(sectionId)) {
-      throw new Error(`Duplicate sectionId in selector output: ${sectionId}`);
+      // Model occasionally repeats a section. First occurrence wins; later
+      // ones are dropped with a warning so the selection set stays unique.
+      warnings.push(`duplicate sectionId ignored: ${sectionId}`);
+      continue;
     }
     if (decision !== "keep" && decision !== "drop") {
-      throw new Error(`Invalid decision for ${sectionId}: ${decision}`);
+      warnings.push(`invalid decision for ${sectionId} (${decision}); defaulting to "keep"`);
+      seen.add(sectionId);
+      validated.push({
+        sectionId,
+        decision: "keep",
+        reason: typeof reason === "string" ? reason.slice(0, 240) : "(invalid decision; defaulted to keep)",
+      });
+      continue;
     }
     seen.add(sectionId);
     validated.push({
@@ -197,16 +205,21 @@ function parseSelectorOutput(raw, sectionIds) {
       reason: typeof reason === "string" ? reason.slice(0, 240) : "",
     });
   }
-  // Allow partial coverage if every entry is valid — but warn loudly.
-  // Any missing section is filled in as `keep` by default (conservative).
+  // Any missing section is filled in as `keep` by default (conservative —
+  // a missing entry indicates the model truncated, not that the section
+  // should be dropped).
   for (const id of sectionIds) {
     if (!seen.has(id)) {
+      warnings.push(`missing from output; defaulted to keep: ${id}`);
       validated.push({
         sectionId: id,
         decision: "keep",
         reason: "(missing from selector output; defaulted to keep)",
       });
     }
+  }
+  if (warnings.length > 0) {
+    process.stderr.write(`  selector warnings (${warnings.length}): ${warnings.slice(0, 5).join(" | ")}${warnings.length > 5 ? ` (+${warnings.length - 5} more)` : ""}\n`);
   }
   return validated;
 }

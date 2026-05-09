@@ -83,3 +83,33 @@ Issue #185 is a vaultpilot-dev-framework open issue not present in the curve-red
 | Error rate | <5% | 3.8% (3/78) | PASS |
 
 Phase C may proceed to leg 2.
+
+## Preliminary error-axis result (legs 1+2 combined)
+
+The combiner now fits an `errorAxis` alongside `qualityAxis` and `costAxis`. Preliminary fit on the 12 trim aggregates available so far (legs 1+2, sizes 0/408/817/1633):
+
+| Form | n | R² | adj-R² | p |
+|---|--:|--:|--:|--:|
+| degree=1, identity | 12 | 0.306 | 0.237 | 0.062 |
+| degree=2, identity | 12 | 0.402 | 0.269 | 0.099 |
+| degree=3, identity | 12 | 0.407 | 0.185 | 0.219 |
+| degree=1, log | 9 | 0.188 | 0.072 | 0.244 |
+
+Winning form: linear (degree=1, identity), AIC=−82.03, slope ≈ −2.5×10⁻⁵ /byte. Sign matches the user's hypothesis (error rate decays with size); p=0.062 is just above the 0.05 threshold at this sample size.
+
+**Leave-out-N-outliers refit**:
+- Drop top-1 residual: p=0.0723, R²=0.315
+- Drop top-2 residuals: **p=0.0325, R²=0.455** — significant at p<0.05
+
+The two absorbing outliers were `agent-super-trim-408-s427` (1 error vs the size-408 cluster's 0/0) and `agent-super-trim-0-s1000022` (0 errors at size-0 vs the cluster's 1/1). They sit on the wrong sides of the trend — surface them in the final writeup once legs 3-6 are in.
+
+**By-size error rates so far**:
+
+| Size (B) | n trims | mean error rate | errors / 39 cells |
+|---:|---:|---:|---:|
+| 0 | 3 | 5.1% | 2 |
+| 408 | 3 | 2.6% | 1 |
+| 817 | 3 | 0% | 0 |
+| 1633 | 3 | 0% | 0 |
+
+Interpretation is preliminary: only 4 distinct sizes resolved so far, error rate likely floors at 0 once size exceeds ~1KB. The full 12-size grid (legs 3-6 add 3266 → 209042B) will reveal whether the curve floors there or if errors creep back in at very large sizes (token-limit cliffs).

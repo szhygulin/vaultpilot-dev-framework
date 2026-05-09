@@ -16,7 +16,16 @@
 //     [--force]                  # re-run even if selections.json exists for an issue
 //     [--max-call-usd 2.00]      # per-call hard cap (exit non-zero if exceeded)
 //     [--max-total-usd 15.00]    # aggregate hard cap
+//     [--parallel 1]             # concurrent issues after warm-up (default sequential)
 //     [--model claude-opus-4-7[1m]]
+//
+// Parallelization: when --parallel > 1, the first issue runs sequentially
+// to warm the prompt cache (super-agent prose is the cache-stable prefix),
+// then the remaining issues run in concurrent batches of `--parallel`.
+// Naive parallel-N would have every call write the cache fresh (~10× cost
+// per call); the warm-up + batched-read pattern preserves the ~10× cache-
+// read discount on calls 2..N. Wall time scales as ~(1 + (N-1)/parallel)
+// × per-call latency.
 //
 // Reads built dist/ — run `npm run build` first.
 
@@ -228,6 +237,7 @@ async function main() {
   const model = args.model ?? "claude-opus-4-7[1m]";
   const maxCallUsd = Number(args["max-call-usd"] ?? 2.0);
   const maxTotalUsd = Number(args["max-total-usd"] ?? 15.0);
+  const parallel = Math.max(1, Math.floor(Number(args.parallel ?? 1)));
 
   const superMd = fs.readFileSync(path.resolve(args["super-agent"]), "utf-8");
   const sections = parseSuperAgentSections(superMd);
@@ -264,19 +274,29 @@ async function main() {
   let totalUsd = 0;
   const newlyProcessed = [];
 
+  // Filter to the issues that need work. Skipped issues never enter the
+  // pipeline so the warm-up / parallel split sees only the live set.
+  const pending = [];
   for (const issue of issues) {
     const issueKey = String(issue.issueId);
     if (allSelections[issueKey] && !args.force) {
       process.stderr.write(`#${issue.issueId}: skip (selections exist)\n`);
-      continue;
+    } else {
+      pending.push(issue);
     }
+  }
 
+  // Per-issue worker. Returns { issueId, costUsd } on success; throws on
+  // hard errors. Mutates `allSelections` in place — concurrent writes are
+  // safe because each issue keys a distinct property of the shared object.
+  // The single point of contention is the `totalUsd` accumulator and the
+  // periodic file write, both serialized between batches below.
+  async function processIssue(issue) {
     process.stderr.write(`#${issue.issueId}: fetching body via gh ${issue.repo}#${issue.issueId}\n`);
     const summary = await getIssue(issue.repo, issue.issueId);
     if (!summary) {
       throw new Error(`gh issue view failed for ${issue.repo}#${issue.issueId}`);
     }
-
     const userPrompt = [
       `# Target issue`,
       `Repository: ${issue.repo}`,
@@ -323,7 +343,7 @@ async function main() {
     const keepCount = selections.filter((s) => s.decision === "keep").length;
     const dropCount = selections.length - keepCount;
 
-    allSelections[issueKey] = {
+    allSelections[String(issue.issueId)] = {
       issueId: issue.issueId,
       repo: issue.repo,
       leg: issue.leg,
@@ -337,21 +357,63 @@ async function main() {
       sectionTotal: sections.length,
       selections,
     };
+    return { issueId: issue.issueId, costUsd, keepCount, dropCount, wallMs };
+  }
 
-    totalUsd += costUsd;
-    newlyProcessed.push(issue.issueId);
-    process.stderr.write(
-      `#${issue.issueId}: keep=${keepCount}/${sections.length} drop=${dropCount} cost=$${costUsd.toFixed(4)} wall=${wallMs}ms total=$${totalUsd.toFixed(4)}\n`,
-    );
-
-    // Incremental save after every issue so a crash doesn't lose work.
+  function persist() {
     fs.writeFileSync(
       selectionsPath,
       JSON.stringify({ generatedAt: new Date().toISOString(), model, sectionTotal: sections.length, byIssueId: allSelections }, null, 2),
     );
+  }
 
+  function recordResult(r) {
+    totalUsd += r.costUsd;
+    newlyProcessed.push(r.issueId);
+    process.stderr.write(
+      `#${r.issueId}: keep=${r.keepCount}/${sections.length} drop=${r.dropCount} cost=$${r.costUsd.toFixed(4)} wall=${r.wallMs}ms total=$${totalUsd.toFixed(4)}\n`,
+    );
     if (totalUsd > maxTotalUsd) {
       throw new Error(`Aggregate selector cost exceeded cap: $${totalUsd.toFixed(4)} > $${maxTotalUsd.toFixed(2)}`);
+    }
+  }
+
+  // Warm-up + parallel batches. Issue 1 runs alone so it pays the cache-
+  // write cost; issues 2..N run in batches of `parallel` and read the
+  // cached prefix. Sequential mode (parallel === 1) collapses to plain
+  // for-loop semantics — cache hits across calls are still in play.
+  if (pending.length > 0) {
+    const head = pending[0];
+    process.stderr.write(
+      parallel > 1
+        ? `Warm-up call (1/${pending.length}) — sequential to seed prompt cache before parallel batch.\n`
+        : `Sequential mode (parallel=1) — ${pending.length} issue(s) one at a time.\n`,
+    );
+    recordResult(await processIssue(head));
+    persist();
+
+    const tail = pending.slice(1);
+    if (parallel > 1 && tail.length > 0) {
+      process.stderr.write(`Parallel batches of ${parallel} for remaining ${tail.length} issue(s).\n`);
+    }
+    for (let i = 0; i < tail.length; i += parallel) {
+      const batch = tail.slice(i, i + parallel);
+      // Promise.allSettled so one failure doesn't tear down the batch's
+      // surviving completions. After settling, surface the first rejection
+      // so the run still aborts, but successful results are recorded and
+      // persisted first — otherwise a flaky 1-of-N batch loses N-1 issues.
+      const results = await Promise.allSettled(batch.map((issue) => processIssue(issue)));
+      const failures = [];
+      for (const r of results) {
+        if (r.status === "fulfilled") recordResult(r.value);
+        else failures.push(r.reason);
+      }
+      persist();
+      if (failures.length > 0) {
+        // Re-throw the first failure with all error messages concatenated.
+        const msg = failures.map((e) => (e && e.message) || String(e)).join("\n---\n");
+        throw new Error(`Parallel batch failed (${failures.length}/${batch.length}):\n${msg}`);
+      }
     }
   }
 

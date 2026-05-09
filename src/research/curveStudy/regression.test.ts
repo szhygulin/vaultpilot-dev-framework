@@ -96,6 +96,22 @@ test("fitPolynomialRegression: degree-2 raw fit recovers a known quadratic", () 
   assert.ok(reg.rSquared > 0.99999);
 });
 
+test("fitPolynomialRegression: degree-3 raw fit recovers a known cubic", () => {
+  // y = 0.1 x³ − 0.5 x² + 2 x + 7 sampled at eight points
+  const f = (x: number): number => 0.1 * x * x * x - 0.5 * x * x + 2 * x + 7;
+  const xs = [1, 3, 6, 10, 15, 21, 28, 36];
+  const samples: CurveSample[] = xs.map((x) => ({ xBytes: x, factor: f(x) }));
+  const reg = fitPolynomialRegression(samples, 3, "identity");
+  for (const s of samples) {
+    const yhat = evaluatePolynomial(reg, s.xBytes);
+    assert.ok(Math.abs(yhat - s.factor) < 1e-6, `at ${s.xBytes}: ${yhat} vs ${s.factor}`);
+  }
+  assert.ok(reg.rSquared > 0.99999);
+  assert.equal(reg.degree, 3);
+  assert.equal(reg.significance.fDfRegression, 3);
+  assert.equal(reg.significance.fDfResidual, samples.length - 4);
+});
+
 test("fitPolynomialRegression: noisy raw data still produces a usable fit", () => {
   // y = x² + small noise; expect monotone-increasing prediction
   const xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];

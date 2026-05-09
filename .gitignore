@@ -1,3 +1,8 @@
+# Issue #264: keep both forms — `node_modules` (no slash) catches a stray
+# symlink (e.g. `node_modules -> ../../../node_modules` for worktree sharing)
+# that the directory-only pattern below would not match; `node_modules/`
+# (with slash) keeps the explicit directory-form ignore for clarity.
+node_modules
 node_modules/
 dist/
 *.log

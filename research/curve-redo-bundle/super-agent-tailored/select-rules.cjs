@@ -40,12 +40,18 @@ function parseArgs() {
 // Slugify an H2 heading deterministically. Lowercase ASCII, runs of
 // non-alphanumerics → "-", trim leading/trailing "-". Identical input →
 // identical id. Collisions disambiguated downstream with -2, -3 suffixes.
+//
+// No length cap: 84% of super-agent sections produce slugs > 80 chars,
+// and Opus reconstructs the full slug from the heading rather than echoing
+// the truncated label, causing strict-match validation to reject valid
+// outputs. Full slugs eliminate the choice — the label IS what Opus would
+// generate.
 function slugify(heading) {
   const base = heading
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return base.length > 0 ? base.slice(0, 80) : "section";
+  return base.length > 0 ? base : "section";
 }
 
 // Parse the super-agent into ordered H2 sections, each carrying its

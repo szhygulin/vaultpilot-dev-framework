@@ -38,7 +38,7 @@ function parseArgs() {
 
 function slugify(heading) {
   const base = heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  return base.length > 0 ? base.slice(0, 80) : "section";
+  return base.length > 0 ? base : "section";
 }
 
 const SECTION_BOUNDARY =

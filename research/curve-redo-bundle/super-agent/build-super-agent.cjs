@@ -56,6 +56,14 @@ const TARGET_AGENT_NAME = "Super";
 const TARGET_AGENT_TAGS = ["super-agent"];
 const MIN_CLUSTER_SIZE = Number(process.env.MIN_CLUSTER_SIZE || 3);
 const DRY_RUN = process.env.DRY_RUN === "1";
+// SKIP_MERGE=1 bypasses the Opus dedup step entirely and writes the pooled
+// sentinel-tagged sections verbatim. Use when the pool is small enough that
+// the deduper underclusters anyway (cross-agent prose has more semantic
+// divergence than within-agent near-duplicates) and the experiment wants a
+// larger S for grid resolution. Trade-off: any genuine cross-agent
+// duplication (e.g. seed-derived summarizer outputs that happen to land
+// identical) carries through to the super-agent's CLAUDE.md.
+const SKIP_MERGE = process.env.SKIP_MERGE === "1";
 
 function requireDist(rel) {
   const p = path.join(DIST, rel);
@@ -75,7 +83,16 @@ function readClaudeMdForAgent(agentId) {
 }
 
 function isEligible(a) {
-  if (a.agentId.startsWith("agent-916a-trim-")) return false;
+  // Exclude every trim-suffix family — `agent-916a-trim-*` is from #179 leg-2,
+  // `agent-super-trim-*` is what build-super-trims.cjs mints AFTER this script
+  // runs once. Re-running Phase A without the broader filter pulls a previous
+  // run's trims back into the pool (their CLAUDE.mds are subsets of the
+  // existing super-agent), producing a near-doubled output dominated by
+  // duplicate sections. Sister exclusion: the previously-minted `agent-super`
+  // itself — its CLAUDE.md is already a deduped union, re-pooling it is the
+  // same self-feed problem.
+  if (/-trim-/.test(a.agentId)) return false;
+  if (a.agentId === "agent-super") return false;
   if (a.agentId === "agent-8274") return false;
   if (a.archived) return false;
   if (a.mergedInto) return false;
@@ -140,7 +157,7 @@ async function main() {
   process.stderr.write(`[build-super-agent] sentinel-tagged sections: ${pooledParsed.length} (sum across contributors: ${totalParsedSections})\n`);
   process.stderr.write(`[build-super-agent] minClusterSize: ${MIN_CLUSTER_SIZE}\n`);
 
-  if (pooledParsed.length < MIN_CLUSTER_SIZE) {
+  if (pooledParsed.length < MIN_CLUSTER_SIZE && !SKIP_MERGE) {
     process.stderr.write(`ERROR: pooled MD has ${pooledParsed.length} attributable sections — below minClusterSize=${MIN_CLUSTER_SIZE}. Compaction would no-op.\n`);
     process.exit(3);
   }
@@ -162,15 +179,28 @@ async function main() {
   };
 
   process.stderr.write(`[build-super-agent] tag union: ${tagsUnion.length} tags\n`);
-  process.stderr.write(`[build-super-agent] dispatching proposeCompaction (model=${process.env.VP_DEV_ORCHESTRATOR_MODEL_SPLIT || "<default opus>"})...\n`);
 
-  const t0 = Date.now();
-  const proposal = await compactMod.proposeCompaction({
-    agent: synthetic,
-    claudeMd: pooled,
-    minClusterSize: MIN_CLUSTER_SIZE,
-  });
-  const elapsedMs = Date.now() - t0;
+  let proposal;
+  let elapsedMs = 0;
+  if (SKIP_MERGE) {
+    process.stderr.write("[build-super-agent] SKIP_MERGE=1 — skipping Opus dedup; pooling raw sentinel sections.\n");
+    proposal = {
+      clusters: [],
+      unclusteredSectionIds: pooledParsed.map((s) => s.sectionId),
+      estimatedBytesSaved: 0,
+      warnings: [],
+      notes: "SKIP_MERGE=1: raw pool (no Opus dedup).",
+    };
+  } else {
+    process.stderr.write(`[build-super-agent] dispatching proposeCompaction (model=${process.env.VP_DEV_ORCHESTRATOR_MODEL_SPLIT || "<default opus>"})...\n`);
+    const t0 = Date.now();
+    proposal = await compactMod.proposeCompaction({
+      agent: synthetic,
+      claudeMd: pooled,
+      minClusterSize: MIN_CLUSTER_SIZE,
+    });
+    elapsedMs = Date.now() - t0;
+  }
 
   process.stderr.write(`[build-super-agent] proposeCompaction returned in ${(elapsedMs/1000).toFixed(1)}s\n`);
   process.stderr.write(`[build-super-agent]   clusters proposed:     ${proposal.clusters.length}\n`);
@@ -251,7 +281,7 @@ Compaction model output: ${proposal.clusters.length} merged clusters, ${proposal
   process.stderr.write(`[build-super-agent] rendered super-agent CLAUDE.md: ${renderedBytes} bytes (${(renderedBytes/1024).toFixed(1)} KB)\n`);
   process.stderr.write(`[build-super-agent] retention vs pooled input: ${retentionPct.toFixed(1)}%\n`);
 
-  if (retentionPct < 25 || retentionPct > 50) {
+  if (!SKIP_MERGE && (retentionPct < 25 || retentionPct > 50)) {
     process.stderr.write(`WARN: retention ${retentionPct.toFixed(1)}% outside acceptance range [25%, 50%]. Plan suggests rerun with MIN_CLUSTER_SIZE=${retentionPct < 25 ? 4 : 2}.\n`);
   }
 

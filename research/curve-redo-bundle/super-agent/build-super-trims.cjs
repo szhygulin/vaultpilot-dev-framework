@@ -70,15 +70,17 @@ function requireDist(rel) {
 }
 
 // Geometric grid `[0, S/512, S/256, S/128, S/64, S/32, S/16, S/8, S/4, S/2, 3S/4, S]`,
-// each non-zero entry rounded to the nearest 1 KB. Drops duplicates (small
-// S can collapse the bottom of the grid into 0 or 1 KB).
+// each entry rounded to the nearest BYTE (not KB). Plan rendered the grid in
+// KB for readability, but KB-rounding collapses the bottom octave when S is
+// modest: at S=137 KB the bottom three fractions all rounded to {0, 1, 1} KB,
+// dropping the trim count from 36 to 30 and leaving poly3 with too little
+// resolution at the small-x end. Byte rounding keeps every fraction distinct
+// for any S ≥ 512 (each fraction differs by ≥1 byte).
 function buildSizeGrid(S) {
   const fractions = [0, 1/512, 1/256, 1/128, 1/64, 1/32, 1/16, 1/8, 1/4, 1/2, 3/4, 1];
   const sizes = [];
   for (const f of fractions) {
-    const raw = f * S;
-    const kb = Math.round(raw / 1024);
-    const bytes = kb * 1024;
+    const bytes = Math.round(f * S);
     if (!sizes.includes(bytes)) sizes.push(bytes);
   }
   return sizes;

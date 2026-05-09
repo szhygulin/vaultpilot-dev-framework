@@ -80,7 +80,7 @@ test("buildTickPrompt: inlines per-agent CLAUDE.md prose verbatim (deduped again
 
   await withTargetRepo(seed, async (targetRepoPath) => {
     await withPerAgentMds({ [agentId]: perAgent }, async () => {
-      const prompt = await buildTickPrompt({
+      const { cacheStablePrefix, volatileSuffix } = await buildTickPrompt({
         idleAgents: [makeAgent({ agentId, tags: ["sdk-binary"] })],
         pendingIssues: [
           makeIssue({ id: 99, title: "preflight", body: "glibc vs musl loader fix" }),
@@ -89,11 +89,81 @@ test("buildTickPrompt: inlines per-agent CLAUDE.md prose verbatim (deduped again
         targetRepoPath,
       });
 
-      assert.match(prompt, /UNIQUE_PROSE_TOKEN_glibc_musl_loader/);
-      assert.doesNotMatch(prompt, /should be deduped/);
-      assert.match(prompt, /Issue #99/);
-      assert.match(prompt, /glibc vs musl loader fix/);
-      assert.match(prompt, /## Agent agent-test-prompt-prose-a/);
+      // Agent prose is in the cache-stable prefix.
+      assert.match(cacheStablePrefix, /UNIQUE_PROSE_TOKEN_glibc_musl_loader/);
+      assert.doesNotMatch(cacheStablePrefix, /should be deduped/);
+      assert.match(cacheStablePrefix, /## Agent agent-test-prompt-prose-a/);
+      // Issue list is in the volatile suffix.
+      assert.match(volatileSuffix, /Issue #99/);
+      assert.match(volatileSuffix, /glibc vs musl loader fix/);
+    });
+  });
+});
+
+test("buildTickPrompt: cache-stable prefix is byte-identical across validation-retry round-trips", async () => {
+  // Issue #268: the prefix MUST be byte-identical between attempt 1 and
+  // attempt 2 within a single dispatch call, otherwise the prompt-cache
+  // hit on retry — the highest-value win — is lost. The only delta
+  // between calls is `errorsFromPrior`; that lives in the volatile
+  // suffix and must NOT appear in the prefix.
+  const seed = `# Project rules\n`;
+  const agentId = "agent-test-prompt-cache-stable";
+  await withTargetRepo(seed, async (targetRepoPath) => {
+    await withPerAgentMds({ [agentId]: "## solo\nminimal\n" }, async () => {
+      const baseInput = {
+        idleAgents: [makeAgent({ agentId })],
+        pendingIssues: [makeIssue({ id: 5, body: "body" })],
+        cap: 1,
+        targetRepoPath,
+      };
+      const attempt1 = await buildTickPrompt(baseInput);
+      const attempt2 = await buildTickPrompt({
+        ...baseInput,
+        errorsFromPrior: ["agentId X is not idle / unknown."],
+      });
+
+      assert.equal(
+        attempt1.cacheStablePrefix,
+        attempt2.cacheStablePrefix,
+        "prefix must be byte-identical between retries",
+      );
+      // Suffix differs: attempt 2 carries the prior-error block.
+      assert.notEqual(attempt1.volatileSuffix, attempt2.volatileSuffix);
+      assert.match(attempt2.volatileSuffix, /PRIOR proposal failed validation/);
+      assert.doesNotMatch(attempt1.volatileSuffix, /PRIOR proposal failed validation/);
+      // Prefix never carries the error block.
+      assert.doesNotMatch(attempt2.cacheStablePrefix, /PRIOR proposal failed validation/);
+    });
+  });
+});
+
+test("buildTickPrompt: cap and pending issues live only in the volatile suffix, not the prefix", async () => {
+  // Issue #268: the cap text is part of the cap-directive line that
+  // moved into the suffix to keep the prefix cap-agnostic, so a tick
+  // where one agent goes busy (cap shrinks) still hits the cache.
+  const seed = `# Project rules\n`;
+  const agentId = "agent-test-prompt-cap-suffix";
+  await withTargetRepo(seed, async (targetRepoPath) => {
+    await withPerAgentMds({ [agentId]: "## solo\nminimal\n" }, async () => {
+      const cap1 = await buildTickPrompt({
+        idleAgents: [makeAgent({ agentId })],
+        pendingIssues: [makeIssue({ id: 1 }), makeIssue({ id: 2 })],
+        cap: 1,
+        targetRepoPath,
+      });
+      const cap2 = await buildTickPrompt({
+        idleAgents: [makeAgent({ agentId })],
+        pendingIssues: [makeIssue({ id: 1 }), makeIssue({ id: 2 })],
+        cap: 2,
+        targetRepoPath,
+      });
+      assert.equal(
+        cap1.cacheStablePrefix,
+        cap2.cacheStablePrefix,
+        "prefix must be cap-agnostic so cross-tick cap shrinkage still hits cache",
+      );
+      assert.match(cap1.volatileSuffix, /cap=1/);
+      assert.match(cap2.volatileSuffix, /cap=2/);
     });
   });
 });
@@ -105,7 +175,7 @@ test("buildTickPrompt: empty issue body renders as (empty), oversized body trunc
   await withTargetRepo(seed, async (targetRepoPath) => {
     await withPerAgentMds({ [agentId]: "## solo\nminimal\n" }, async () => {
       const longBody = "x".repeat(7000);
-      const prompt = await buildTickPrompt({
+      const { volatileSuffix } = await buildTickPrompt({
         idleAgents: [makeAgent({ agentId })],
         pendingIssues: [
           makeIssue({ id: 1, body: "" }),
@@ -115,9 +185,9 @@ test("buildTickPrompt: empty issue body renders as (empty), oversized body trunc
         targetRepoPath,
       });
 
-      assert.match(prompt, /Issue #1[^]*\(empty\)/);
+      assert.match(volatileSuffix, /Issue #1[^]*\(empty\)/);
       // 6000-char cap trims the 7000-char body to 5997 chars + "..."
-      const issue2Match = prompt.match(/Issue #2[^]*?(?=\n\n##|\n\nOutput|$)/);
+      const issue2Match = volatileSuffix.match(/Issue #2[^]*?(?=\n\n##|\n\nEmit|\n\nOutput|$)/);
       assert.ok(issue2Match, "issue 2 block should render");
       assert.ok(
         issue2Match![0].includes("...") && !issue2Match![0].includes("x".repeat(6500)),
@@ -141,7 +211,7 @@ test("buildTickPrompt: byte-budget guard drops oldest agents to tag-only fallbac
     await withPerAgentMds(
       { [recent]: heavyProse, [stale]: heavyProse },
       async () => {
-        const prompt = await buildTickPrompt({
+        const { cacheStablePrefix } = await buildTickPrompt({
           idleAgents: [
             makeAgent({
               agentId: stale,
@@ -161,10 +231,10 @@ test("buildTickPrompt: byte-budget guard drops oldest agents to tag-only fallbac
         });
 
         // Recent agent's heavy prose appears in full.
-        assert.match(prompt, new RegExp(`Agent ${recent}[^]*A{3000,}`));
+        assert.match(cacheStablePrefix, new RegExp(`Agent ${recent}[^]*A{3000,}`));
         // Stale agent gets the tag-only fallback marker.
         assert.match(
-          prompt,
+          cacheStablePrefix,
           new RegExp(
             `Agent ${stale}[^]*CLAUDE\\.md prose omitted under prompt-byte-budget`,
           ),
@@ -180,14 +250,14 @@ test("buildTickPrompt: PROMPT_BYTE_BUDGET is large enough that 1 small agent + 1
   const agentId = "agent-test-prompt-default-d";
   await withTargetRepo(seed, async (targetRepoPath) => {
     await withPerAgentMds({ [agentId]: "## small\nbody\n" }, async () => {
-      const prompt = await buildTickPrompt({
+      const { cacheStablePrefix, volatileSuffix } = await buildTickPrompt({
         idleAgents: [makeAgent({ agentId })],
         pendingIssues: [makeIssue({ id: 1, body: "small body" })],
         cap: 1,
         targetRepoPath,
       });
-      assert.ok(prompt.length < PROMPT_BYTE_BUDGET);
-      assert.match(prompt, /## small/);
+      assert.ok(cacheStablePrefix.length + volatileSuffix.length < PROMPT_BYTE_BUDGET);
+      assert.match(cacheStablePrefix, /## small/);
     });
   });
 });

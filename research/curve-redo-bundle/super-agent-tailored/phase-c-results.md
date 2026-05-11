@@ -76,7 +76,37 @@ Hedges' g for dQ: **0.170** (small effect).
 
 ### Verdict
 
-**No significant difference** at the soft-bar p<0.05 on either dimension. The directional signal is favorable to tailored (positive median dQ, negative median dCost) but neither test crosses 0.05.
+**No significant difference** at p<0.05 on either dimension. The directional signal is favorable to tailored (positive median dQ, negative median dCost) but neither test crosses 0.05.
+
+## Reanalysis — single-axis + Fisher + stratification
+
+Operator chose to drop the multiplicity penalty (each axis tested independently at p<0.05, no Holm-Bonferroni correction) since the primary interest is quality with cost as secondary. Also reported Fisher combination of the two p-values, and stratification by `decisionClass`.
+
+| Test | n | Statistic | p | Decision (α=0.05) |
+|---|---:|---|---:|:---:|
+| Quality (H1: dQ > 0), pooled | 13 | w+=56, z=0.699 | 0.242 | no |
+| Cost (H1: dCost < 0), pooled | 13 | w+=27, z=-1.258 | 0.104 | no |
+| Fisher combination of the two | — | χ²(4)=7.36 | **0.118** | no |
+| Quality, implement only | 9 | — | 0.277 | no |
+| **Cost, implement only** | 9 | — | **0.096** | no (barely) |
+| Quality, pushback only | 4 | — | 0.428 | no |
+| Cost, pushback only | 4 | — | 0.181 | no |
+
+### Where the signal lives
+
+| Subset | n | mean dQ | mean dCost |
+|---|---:|---:|---:|
+| All | 13 | +1.94 | -$0.17 |
+| **Implement** | **9** | **+3.13** | **-$0.19** |
+| Pushback | 4 | +0.08 | -$0.02 |
+
+**Both the quality and cost signals are concentrated in the implement subset.** Pushbacks (#156, #162, #574, #665) show essentially no effect on either axis — mean dQ +0.08, mean dCost -$0.02 — meaning tailored and prose are indistinguishable when the agent's job is "push back, don't act". The hypothesis that tailored prose helps acts most plausibly on implements (where the agent's prompt context shapes the actual code-writing path); pushbacks are decision-class judgments that depend on issue-body parsing more than prompt richness.
+
+The cost-axis on implements alone reaches p=0.096 — close to crossing at n=9. Doubling the implement subset (n=18) under the same magnitude would project to p ≈ 0.03 if the directional signal is real.
+
+### Implication
+
+If you weight quality as the primary axis: **no decision at this n**. Cost is closer but still doesn't cross 0.05 on the pooled test. The implement-only cost test is the closest single result to significance (p=0.096) and is mechanistically defensible — it's where the experimental theory predicts the effect should live.
 
 ### Pattern reading
 

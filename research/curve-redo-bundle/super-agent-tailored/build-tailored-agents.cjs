@@ -28,12 +28,24 @@ function parseArgs() {
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === "--no-mint") { args["no-mint"] = true; continue; }
+    if (k === "--compress") { args["compress"] = true; continue; }
     if (k.startsWith("--") && i + 1 < argv.length) {
       args[k.slice(2)] = argv[i + 1];
       i++;
     }
   }
+  if (!args["agent-prefix"]) args["agent-prefix"] = "agent-super-tailored-";
   return args;
+}
+
+// Strip `<!-- promote-candidate:* -->` annotations and their accompanying
+// paragraphs. The super-agent file has no Past-incident blocks (those were
+// stripped upstream by build-super-agent.cjs); promote-candidate annotations
+// are the structural analog — non-directive meta-content explaining why a
+// section is reusable across issues. Stripping them saves ~16% of the file
+// size with no semantic loss for an executing agent.
+function stripPromoteCandidates(s) {
+  return s.replace(/<!--\s*promote-candidate:[^>]*-->\s*[\s\S]*?(?=<!--\s*run:|$)/g, "");
 }
 
 // Section IDs are opaque, zero-padded ordinals (`s001`..`s122`) — same
@@ -133,10 +145,10 @@ async function main() {
       ``,
     ].join("\n");
 
-    const body = keptInOrder.map((s) => s.fullBlock).join("\n\n");
+    const body = keptInOrder.map((s) => args.compress ? stripPromoteCandidates(s.fullBlock) : s.fullBlock).join("\n\n");
     const claudeMd = keptInOrder.length === 0 ? header + "\n_(All sections dropped by the selector for this issue.)_\n" : `${header}\n${body}\n`;
 
-    renderedByIssueId.set(issueId, { agentId: `agent-super-tailored-${issueId}`, claudeMd, keptInOrder });
+    renderedByIssueId.set(issueId, { agentId: `${args["agent-prefix"]}${issueId}`, claudeMd, keptInOrder });
 
     sizes.push({
       issueId,
@@ -151,7 +163,7 @@ async function main() {
   if (!args["no-mint"]) {
     await mutateRegistry((reg) => {
       for (const issueId of issueIds) {
-        const agentId = `agent-super-tailored-${issueId}`;
+        const agentId = `${args["agent-prefix"]}${issueId}`;
         const rec = ensureAgent(reg, agentId);
         rec.tags = ["super-agent-tailored", `issue-${issueId}`];
         rec.lastActiveAt = new Date().toISOString();

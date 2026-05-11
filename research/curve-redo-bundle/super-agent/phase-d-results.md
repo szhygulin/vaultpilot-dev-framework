@@ -90,6 +90,84 @@ Per the local CLAUDE.md "ΔAIC < 2 indistinguishable → simpler form wins" rule
 
 Q/$ drops monotonically from **56.8 at size=0** to **23.5 at size=209042** — a **2.4× efficiency loss** for using the full super-agent CLAUDE.md vs zero context. The size-0 trim (effectively just the orchestrator's bare system prompt) gives the best quality-per-dollar of any tested size.
 
+## Decomposition: judge vs tests separately
+
+The combined quality formula is `Q = qualityFromAB(A, B)`:
+- **Pushback** cells: `Q = 2A`, where `A` is the judge median (0-50)
+- **Implement** cells: `Q = A + B`, where `B` is the hidden-test pass rate normalized to 0-50
+
+When the two axes are summed, signal on one can be diluted by the other. Decomposing per-cell scores into separate A-only and B-only axes (computing each on a 0-100 scale for direct comparison) reveals structure the combined fit hid.
+
+### Per-size means by axis
+
+| Size (B) | Q(A) judge | sd | Q(B) tests impl-only | sd | Q(AB) combined | sd |
+|---:|--:|--:|--:|--:|--:|--:|
+| 0 | 69.51 | 5.31 | 25.77 | 5.89 | 45.90 | 12.32 |
+| 408 | 70.41 | 4.28 | 19.02 | 1.96 | 37.87 | 1.92 |
+| 817 | 72.10 | 1.95 | 19.42 | 1.85 | 38.60 | 2.25 |
+| 1633 | 74.00 | 2.00 | 20.44 | 9.34 | 43.32 | 13.40 |
+| 3266 | 69.26 | 3.16 | 24.32 | 6.08 | 45.38 | 10.54 |
+| 6533 | 70.26 | 2.54 | 17.09 | 0.30 | 35.61 | 1.18 |
+| 13065 | 73.74 | 2.84 | 23.72 | 7.37 | 44.39 | 13.47 |
+| 26130 | 71.03 | 4.74 | 17.98 | 2.59 | 37.12 | 2.46 |
+| 52261 | 72.00 | 2.72 | 26.22 | 4.99 | 40.98 | 2.66 |
+| 104521 | 73.03 | 3.15 | 24.83 | 5.79 | 46.78 | 10.63 |
+| 156782 | 73.90 | 1.46 | 27.47 | 8.31 | 45.85 | 12.31 |
+| 209042 | 74.00 | 0.31 | 25.42 | 2.13 | 40.44 | 1.85 |
+
+### AIC sweep per axis (n=33 for log-x, n=36 for identity-x)
+
+**Judge axis (A)** — winning form: degree=1 log, R²=0.075, AIC=71.23. Weak monotonic positive trend (74.0 at size=0 vs 74.0 at size=209042 — net 70 → 74 across the range, +6% on the 0-100 scale).
+
+**Tests axis (B, implements only)** — winning form: **degree=1 log, R²=0.179, AIC=111.40, F=6.74, p ≈ 0.009**. Significant positive log trend.
+- Coefficients: `Q(B) = 11.71 + 1.15·log(1+x)`
+- Tests pass rate climbs +1.15 points per log-unit of size
+- Range: ~17 at the dip (size=6533) → ~27 at the peak (size=156782)
+- degree=2 log is competitive (R²=0.192, AIC=112.85, ΔAIC=+1.45) — within indistinguishable range, simpler form wins
+
+**Combined Q(AB)** — winning form: degree=1 log, R²=0.030, p=0.333. Flat-looking.
+
+### Why combined Q masks the tests signal
+
+The combined Q is a sum:
+- For ~75% of cells (implement): Q = A + B
+- For ~23% of cells (pushback): Q = 2A only (B contributes 0)
+
+Two effects dilute the B signal in the combined axis:
+1. **Pushback cells carry zero B**, so the per-trim mean Q is weighted toward judge-only contributions for ~23% of cells.
+2. **Judge A is large and nearly flat** (range 69-74 across all sizes). When added to B (range 17-27), it dominates the sum and masks the B-axis variation.
+
+So the combined R²=0.030 understates the experiment's real findings:
+- **Judge A (reasoning quality): essentially flat across sizes** — pooled CLAUDE.md does not measurably change how the reasoning judge grades agent decisions.
+- **Tests B (hidden test pass rate): significantly improves with log(size), p ≈ 0.009** — more CLAUDE.md content does produce implements that pass more hidden tests, but the effect is small (+5 points on the 0-100 B scale across the full 0-209042B grid).
+- **Cost: linear with size, p < 10⁻¹⁸** — strictly more expensive.
+
+### Updated interpretation
+
+The previous "quality is flat" headline is partially correct but masks the B-axis signal. Restated:
+
+- **Reasoning quality is flat with size.** The judge does not rate agent reasoning meaningfully different across trim sizes. Pooled CLAUDE.md content does not change how the agent thinks about issues.
+- **Hidden test pass rate improves slightly with size.** Bigger CLAUDE.md → bigger fraction of implement diffs that pass the hidden tests. Effect size: ~5 points on the 0-100 B scale. p ≈ 0.009.
+- **Cost grows linearly with size, strongly significant.**
+- **Quality-per-dollar still drops with size**, because the B-axis gain is too small to offset the linear cost rise.
+
+So the super-agent does help — but only on the "did the implement actually pass tests" dimension, and only by a small amount. Whether that small gain is worth the linear cost rise is a deployment decision the writeup should surface explicitly.
+
+### Within-size variance: K=1 limitation
+
+Within each size cluster, B values are dominated by specific-seed effects rather than size effects:
+
+| Size (B) | B values across 3 seeds | spread |
+|---:|---|--:|
+| 1633 | 31.23, 15.00, 15.10 | 16.2 |
+| 3266 | 31.34, 22.97, 20.94 | 10.4 |
+| 13065 | 32.19, 20.19, 18.77 | 13.4 |
+| 52261 | 28.08, 30.02, 20.58 | 9.4 |
+| 104521 | 31.43, 22.50, 22.86 | 8.9 |
+| 156782 | 37.07, 22.95, 22.40 | 14.7 |
+
+In each cluster one seed scores ~10 points above the other two. With K=1 replication, this seed-specific component is not separable from any size effect. K=3 or higher would tighten the size-axis confidence interval substantially. (The current K=1 follows the experiment plan and matches the curve-redo baseline; bumping K is a follow-up consideration.)
+
 ## Interpretation
 
 **The original super-agent hypothesis is refuted** on this 13-issue corpus:

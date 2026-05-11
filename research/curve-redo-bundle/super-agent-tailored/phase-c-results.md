@@ -108,6 +108,41 @@ The cost-axis on implements alone reaches p=0.096 — close to crossing at n=9. 
 
 If you weight quality as the primary axis: **no decision at this n**. Cost is closer but still doesn't cross 0.05 on the pooled test. The implement-only cost test is the closest single result to significance (p=0.096) and is mechanistically defensible — it's where the experimental theory predicts the effect should live.
 
+## Reanalysis II — bootstrap CIs + judge/test agreement
+
+Two free reanalyses on the existing 13 paired observations.
+
+### Bootstrap 95% confidence intervals (B=10,000 resamples, mulberry32 seed)
+
+| Subset | Statistic | Mean | 95% CI | 90% CI | One-sided P(direction) |
+|---|---|---:|---|---|---:|
+| All 13 | mean dQ | +2.20 | [-3.2, +9.2] | [-2.5, +8.0] | P(dQ>0) = 0.738 |
+| All 13 | median dQ | +1.10 | [-1.0, +3.3] | — | — |
+| All 13 | **mean dCost** | **-$0.140** | **[-$0.275, -$0.012]** | [-$0.253, -$0.030] | **P(dC<0) = 0.986** |
+| All 13 | median dCost | -$0.068 | [-$0.432, +$0.023] | — | — |
+| Implement 9 | mean dQ | +3.12 | [-4.1, +12.9] | [-3.2, +11.1] | P(dQ>0) = 0.736 |
+| Implement 9 | **mean dCost** | **-$0.195** | **[-$0.376, -$0.012]** | [-$0.347, -$0.041] | **P(dC<0) = 0.981** |
+
+**The cost signal is stronger under bootstrap than under Wilcoxon.** The 95% CI for mean dCost excludes zero in both the pooled and implement-only subsets. The discrepancy with Wilcoxon (p=0.104 / p=0.096) reflects the test choice: Wilcoxon ranks throw away magnitude, while the bootstrap uses actual dollar amounts — when dCost has high-magnitude wins (#178 -$0.45, #180 -$0.54, #185 -$0.50, #649 -$0.43) clustered against small-magnitude losses (#168 +$0.02, #186 +$0.05), the rank-based test under-counts the asymmetry.
+
+Quality is genuinely uncertain: 95% CI straddles zero in both subsets. The +3.12 implement mean dQ is influenced by #168's +36.83 outlier; trimming the top observation would tighten the CI but also flatten the effect estimate.
+
+### Judge-A vs hidden-tests-B agreement (tailored arm only, implements)
+
+The quality scoring formula is A + B for implements, where A = Opus K=3 judge median (0..50) and B = (passed/total) × 50. The two components measure different things — A captures reasoning quality; B captures executable correctness. Their agreement bounds how much each contributes independent signal.
+
+| Statistic | Value |
+|---|---:|
+| Implement cells | 30 |
+| Cells with both A and B scored | 20 |
+| Pearson r(A, B) | **0.486** |
+| Mean A | 34.85 / 50 (69.7%) |
+| Mean B | 22.63 / 50 (45.3%) |
+
+The judge is **systematically more lenient than hidden tests** by ~24 percentage points. Correlation is moderate (r=0.49) — they're not redundant, but they're not orthogonal either. The judge captures reasoning the tests don't and vice versa.
+
+Methodology implication: an A-only or B-only quality formula would change the per-issue dQ values. Without prose-baseline raw A/B breakdowns (gitignored from #272), can't redo Phase E on a single component, so this remains diagnostic-only for this run. **For any future re-run, preserve per-cell A and B separately** so single-component reanalyses become possible.
+
 ### Pattern reading
 
 - **Cross-cutting wins**: #168 (+36.83 Q, 10 sections kept) is the single largest dQ — tailored handled it dramatically better than prose. Looking at the kept-section list, it grabbed a tightly-relevant cluster.

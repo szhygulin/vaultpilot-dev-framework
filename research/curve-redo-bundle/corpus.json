@@ -1,11 +1,11 @@
 {
-  "_comment": "Curve-redo experiment corpus. 19 issues split across 2 legs (vp-mcp / vp-dev-agents). Each cell runs ISOLATED (no target-repo CLAUDE.md, no user-global CLAUDE.md \u2014 only per-agent CLAUDE.md per the size axis). Closed issues replay-rollback to baseSha (the codebase right before the fix landed). Open issues run against current main. Quality scoring: A (judge, 0-50) + B (test pass rate, 0-50) = 0-100; pushback uses 2A. Original 13 issues from the 2026-04 trim study + 6 enrichment additions (2026-05-12) for n\u219219 power. The new 6 entries do NOT yet have hidden tests authored \u2014 implement-class cells will grade on judge-A only until tests land (a follow-up PR can author them by replaying the closed PRs' diffs for the closed entries and reading the spec for the open ones).",
+  "_comment": "Curve-redo experiment corpus. 19 issues split across 2 legs (vp-mcp / vp-dev-agents). Each cell runs ISOLATED (no target-repo CLAUDE.md, no user-global CLAUDE.md — only per-agent CLAUDE.md per the size axis). Closed issues replay-rollback to baseSha (the codebase right before the fix landed). Open issues run against current main. Quality scoring: A (judge, 0-50) + B (test pass rate, 0-50) = 0-100; pushback uses 2A. Original 13 issues from the 2026-04 trim study + 6 enrichment additions (2026-05-12) for n→19 power. The new 6 entries do NOT yet have hidden tests authored — implement-class cells will grade on judge-A only until tests land (a follow-up PR can author them by replaying the closed PRs' diffs for the closed entries and reading the spec for the open ones).",
   "model": "claude-sonnet-4-6",
   "trims": {
     "agentsSpec": "research/issue-179-leg2-bundle/agents-spec-phase3.json",
     "trimsDir": "research/issue-179-leg2-bundle/trims-phase3",
     "parentSnapshot": "research/issue-179-leg2-bundle/parent-agent-916a-CLAUDE.md",
-    "_comment": "18 trim agents at 6 sizes (~6KB, 14KB, 22KB, 35KB, 50KB, 58KB) \u00d7 3 seeds. Same trims used for #179 K=13 \u2014 direct comparability."
+    "_comment": "18 trim agents at 6 sizes (~6KB, 14KB, 22KB, 35KB, 50KB, 58KB) × 3 seeds. Same trims used for #179 K=13 — direct comparability."
   },
   "issues": [
     {
@@ -15,8 +15,8 @@
       "leg": 1,
       "decisionClass": "pushback",
       "state": "open",
-      "title": "Track MarginFi SDK stale IDL \u2014 second unknown OracleSetup variant (15) observed on mainnet",
-      "_comment": "Pushback-class \u2014 dependency tracker. Agent should defer to upstream fix, not implement."
+      "title": "Track MarginFi SDK stale IDL — second unknown OracleSetup variant (15) observed on mainnet",
+      "_comment": "Pushback-class — dependency tracker. Agent should defer to upstream fix, not implement."
     },
     {
       "issueId": 162,
@@ -25,8 +25,8 @@
       "leg": 1,
       "decisionClass": "pushback",
       "state": "open",
-      "title": "chore(deps): track upstream fix for bigint-buffer toBigIntLE() overflow (GHSA-3gc7-fjrx-p6mg) \u2014 12 transitive high-severity advisories",
-      "_comment": "Pushback-class \u2014 dependency tracker."
+      "title": "chore(deps): track upstream fix for bigint-buffer toBigIntLE() overflow (GHSA-3gc7-fjrx-p6mg) — 12 transitive high-severity advisories",
+      "_comment": "Pushback-class — dependency tracker."
     },
     {
       "issueId": 565,
@@ -35,7 +35,7 @@
       "leg": 1,
       "decisionClass": "implement",
       "state": "open",
-      "title": "MCP/skill: read-only data-plane has no integrity check \u2014 daily briefing, tax stance, market narrative all spoofable"
+      "title": "MCP/skill: read-only data-plane has no integrity check — daily briefing, tax stance, market narrative all spoofable"
     },
     {
       "issueId": 574,
@@ -45,7 +45,7 @@
       "decisionClass": "pushback",
       "state": "open",
       "title": "MCP: resolve_ens_name / reverse_resolve_ens have no agent-side or multi-RPC verification",
-      "_comment": "Pushback-class \u2014 rogue-MCP threat; cross-repo scope split."
+      "_comment": "Pushback-class — rogue-MCP threat; cross-repo scope split."
     },
     {
       "issueId": 649,
@@ -97,7 +97,7 @@
       "state": "closed",
       "closedByPr": 174,
       "baseSha": "22d83f74e891",
-      "title": "feat: vp-dev agents tighten-claude-md \u2014 Phase A advisory (dry-run only)",
+      "title": "feat: vp-dev agents tighten-claude-md — Phase A advisory (dry-run only)",
       "testsDestRelDir": "src/agent"
     },
     {
@@ -109,7 +109,7 @@
       "state": "closed",
       "closedByPr": 184,
       "baseSha": "d383beb10a87",
-      "title": "feat: Phase 1 \u2014 per-section utility-scoring data collection (state + summarizer hook)",
+      "title": "feat: Phase 1 — per-section utility-scoring data collection (state + summarizer hook)",
       "testsDestRelDir": "src/state"
     },
     {
@@ -121,7 +121,7 @@
       "state": "closed",
       "closedByPr": 208,
       "baseSha": "6f2b581db8ba",
-      "title": "feat: Phase 3 \u2014 `vp-dev agents assess-claude-md` advisory output",
+      "title": "feat: Phase 3 — `vp-dev agents assess-claude-md` advisory output",
       "testsDestRelDir": "src/agent"
     },
     {
@@ -133,7 +133,7 @@
       "state": "closed",
       "closedByPr": 211,
       "baseSha": "418faff75f8b",
-      "title": "feat: pre-dispatch dependency check \u2014 defer issues whose body references an open prerequisite",
+      "title": "feat: pre-dispatch dependency check — defer issues whose body references an open prerequisite",
       "testsDestRelDir": "src/orchestrator"
     },
     {
@@ -211,6 +211,97 @@
       "state": "open",
       "title": "feat: vp-dev agents tighten-claude-md — Phase B `--apply` / `--confirm <token>` (destructive)",
       "_comment": "Enrichment-batch (2026-05-12) — open pushback. Body has explicit bake-window: 'do not dispatch until #172 has run for at least one month'. Agent should push back referencing the bake-window rule in CLAUDE.md, not implement."
+    },
+    {
+      "issueId": 119,
+      "repo": "szhygulin/vaultpilot-dev-framework",
+      "framework": "node-test",
+      "leg": 2,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 122,
+      "baseSha": "ceb777f17bdb",
+      "title": "Phase 2: resume-incomplete worktree lifecycle + agent seed (depends on #118)",
+      "testsDestRelDir": "src/agent",
+      "_comment": "Complex-batch (2026-05-12) — multi-file architectural"
+    },
+    {
+      "issueId": 86,
+      "repo": "szhygulin/vaultpilot-dev-framework",
+      "framework": "node-test",
+      "leg": 2,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 113,
+      "baseSha": "a49819399c4c",
+      "title": "Phase 2: cost-ceiling enforcement + aborted-budget terminal state (depends on #85)",
+      "testsDestRelDir": "src/orchestrator",
+      "_comment": "Complex-batch (2026-05-12) — multi-file architectural"
+    },
+    {
+      "issueId": 100,
+      "repo": "szhygulin/vaultpilot-dev-framework",
+      "framework": "node-test",
+      "leg": 2,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 105,
+      "baseSha": "abb442f53bf4",
+      "title": "Fail-fast: post-mortem comment on agent failure + triage gate to prevent re-dispatch loop",
+      "testsDestRelDir": "src/orchestrator",
+      "_comment": "Complex-batch (2026-05-12) — multi-file architectural"
+    },
+    {
+      "issueId": 460,
+      "repo": "szhygulin/vaultpilot-mcp",
+      "framework": "vitest",
+      "leg": 1,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 529,
+      "baseSha": "0b4bbaf4c5c3",
+      "title": "[security] Add Invariant #14 — durable-binding source-of-truth verification (selection-layer attacks)",
+      "testsDestRelDir": "test/",
+      "_comment": "Complex-batch (2026-05-12) — multi-file architectural"
+    },
+    {
+      "issueId": 325,
+      "repo": "szhygulin/vaultpilot-mcp",
+      "framework": "vitest",
+      "leg": 1,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 350,
+      "baseSha": "d1cd946247e8",
+      "title": "feat(security): device-trust verification — SE attestation + firmware/app version pinning + Ledger Live binary signature check",
+      "testsDestRelDir": "test/",
+      "_comment": "Complex-batch (2026-05-12) — multi-file architectural"
+    },
+    {
+      "issueId": 427,
+      "repo": "szhygulin/vaultpilot-mcp",
+      "framework": "vitest",
+      "leg": 1,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 466,
+      "baseSha": "16d37b31eda4",
+      "title": "get_health_alerts is Aave-V3-only despite generic name",
+      "testsDestRelDir": "test/",
+      "_comment": "Complex-batch (2026-05-12) — multi-file architectural"
+    },
+    {
+      "issueId": 308,
+      "repo": "szhygulin/vaultpilot-mcp",
+      "framework": "vitest",
+      "leg": 1,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 324,
+      "baseSha": "dfe571f4c2f1",
+      "title": "compare_yields: Aave V3 adapter dies with viem decode error on getReservesData (ABI drift?)",
+      "testsDestRelDir": "test/",
+      "_comment": "Complex-batch (2026-05-12) — multi-file architectural"
     }
   ]
 }

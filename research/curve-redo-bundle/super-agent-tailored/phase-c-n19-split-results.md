@@ -41,14 +41,47 @@ Neither comes close to rejecting equality. n=3 on B is below the threshold for a
 
 #667 is the only meaningful divergence: tailored all-pushback, prose mixed. The decision-class mismatch dominates the per-issue Q delta on that issue but disappears when you split A and B — within decisions actually made, both arms grade similarly.
 
-## Tailored absolute distributions (n=19)
+## Tailored per-issue (n=19) — full distribution
 
-| Statistic | Value |
-|---|---:|
-| Mean Judge-A across 19 issues | **38.68 / 50** (77.4%) |
-| Mean Tests-B across 13 implement issues | **22.24 / 50** (44.5%) |
+Decision class noted; pushback issues have `n/a` for B (no implement, no test data).
 
-Wide spread on B: from 0 (#180, #186 — diffs apply but most tests fail) to 49 (#157 — near-perfect). On A: 22-44 range, tighter — judge scores are systematically less variable than test scores.
+| Issue | Decision | A | B | Q (A+B or 2A) |
+|---:|---|---:|---:|---:|
+| 156 | pushback | 37.00 | n/a | 74.00 |
+| 157 | implement | 43.33 | 49.00 | 92.33 |
+| 162 | pushback | 42.67 | n/a | 85.33 |
+| 168 | implement | 43.00 | 43.50 | 86.50 |
+| 172 | implement | 42.00 | 15.20 | 19.40 |
+| 173 | pushback | 44.00 | n/a | 88.00 |
+| 178 | implement | 37.00 | 22.27 | 17.42 |
+| 180 | implement | 41.00 | 0.00 | 13.33 |
+| 185 | implement | 40.00 | 16.00 | 18.67 |
+| 186 | implement | 41.67 | 0.00 | 14.00 |
+| 251 | implement | 41.33 | 39.52 | 80.85 |
+| 253 | implement | 42.00 | 19.17 | 61.17 |
+| 565 | implement | 30.67 | 3.00 | 33.67 |
+| 574 | implement | 22.67 | 14.00 | 36.67 |
+| 626 | implement | 40.67 | 43.88 | 84.55 |
+| 649 | implement | 27.67 | 23.56 | 51.22 |
+| 665 | pushback | 41.33 | n/a | 82.67 |
+| 667 | pushback | 35.00 | n/a | 70.00 |
+| 669 | pushback | 42.00 | n/a | 84.00 |
+
+**Note on implement-class Q < 2A:** when an implement cell has B=0 (test apply failed or all tests failed) AND a non-null A, qualityFromAB still returns 0 for that cell because the formula requires BOTH non-null A and non-null B for implements. The per-issue Q values for #172, #178, #180, #185, #186, #565, #574 reflect averages where only some replicates contributed non-zero Q (typically 1 of 3 had clean apply + tests).
+
+### Summary statistics
+
+| Stat | Judge-A (n=19) | Tests-B (n=13 implements) |
+|---|---:|---:|
+| Mean | **38.68 / 50** (77.4%) | **22.24 / 50** (44.5%) |
+| Median | 41.33 | 19.17 |
+| Range | [22.67, 44.00] | [0.00, 49.00] |
+| Top 3 | #173 (44.0), #157 (43.3), #168 (43.0) | #157 (49.0), #626 (43.9), #168 (43.5) |
+| Bottom 3 | #574 (22.7), #649 (27.7), #565 (30.7) | #180 (0.0), #186 (0.0), #565 (3.0) |
+
+**Pattern**: A is tight (22-44 range, σ small), B is wide (0-49 range). Judge scores cluster — even the worst-scoring tailored cells get ≥22 on reasoning. Test scores have the full range because implementation correctness is bimodal: either the diff works (40+) or it doesn't (0-15).
+
+Pushback issues (#156, #162, #173, #665, #667, #669) all scored A ≥ 35; the agent's reasoning when pushing back is grade-able and consistent. The implement-class issues span the full A range; #574 and #649 are where the tailored implementation reasoning was weakest.
 
 ## Interpretation
 

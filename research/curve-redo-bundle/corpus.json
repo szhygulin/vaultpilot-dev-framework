@@ -1,5 +1,5 @@
 {
-  "_comment": "Curve-redo experiment corpus. 13 issues split across 2 legs (vp-mcp / vp-dev-agents). Each cell runs ISOLATED (no target-repo CLAUDE.md, no user-global CLAUDE.md \u2014 only per-agent CLAUDE.md per the size axis). Closed issues replay-rollback to baseSha (the codebase right before the fix landed). Open issues run against current main. Quality scoring: A (judge, 0-50) + B (test pass rate, 0-50) = 0-100; pushback uses 2A.",
+  "_comment": "Curve-redo experiment corpus. 19 issues split across 2 legs (vp-mcp / vp-dev-agents). Each cell runs ISOLATED (no target-repo CLAUDE.md, no user-global CLAUDE.md \u2014 only per-agent CLAUDE.md per the size axis). Closed issues replay-rollback to baseSha (the codebase right before the fix landed). Open issues run against current main. Quality scoring: A (judge, 0-50) + B (test pass rate, 0-50) = 0-100; pushback uses 2A. Original 13 issues from the 2026-04 trim study + 6 enrichment additions (2026-05-12) for n\u219219 power. The new 6 entries do NOT yet have hidden tests authored \u2014 implement-class cells will grade on judge-A only until tests land (a follow-up PR can author them by replaying the closed PRs' diffs for the closed entries and reading the spec for the open ones).",
   "model": "claude-sonnet-4-6",
   "trims": {
     "agentsSpec": "research/issue-179-leg2-bundle/agents-spec-phase3.json",
@@ -147,6 +147,70 @@
       "baseSha": "834d80f6ab80",
       "title": "feat: load user global `~/.claude/CLAUDE.md` into the agent prompt as a third layer",
       "testsDestRelDir": "src/agent"
+    },
+    {
+      "issueId": 626,
+      "repo": "szhygulin/vaultpilot-mcp",
+      "framework": "vitest",
+      "leg": 1,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 628,
+      "baseSha": "074673f489b3",
+      "title": "[agent-request] prepare_curve_swap (steth_to_eth) — swap leg refused by destination-allowlist gate (companion to #618)",
+      "_comment": "Enrichment-batch (2026-05-12) — closed implement, destination-allowlist ack on swap leg. Hidden tests not yet authored."
+    },
+    {
+      "issueId": 667,
+      "repo": "szhygulin/vaultpilot-mcp",
+      "framework": "vitest",
+      "leg": 1,
+      "decisionClass": "implement",
+      "state": "open",
+      "title": "import_readonly_token bypasses preflight Step 0 binding",
+      "_comment": "Enrichment-batch (2026-05-12) — open security_finding. Implement-class: agent should design a fix that binds import to preflight Step 0."
+    },
+    {
+      "issueId": 669,
+      "repo": "szhygulin/vaultpilot-mcp",
+      "framework": "vitest",
+      "leg": 1,
+      "decisionClass": "implement",
+      "state": "open",
+      "title": "Rogue RPC corroborates presale scam — chain-data integrity gap",
+      "_comment": "Enrichment-batch (2026-05-12) — open security_finding. Implement-class: cross-RPC corroboration / chain-data integrity defense."
+    },
+    {
+      "issueId": 253,
+      "repo": "szhygulin/vaultpilot-dev-framework",
+      "framework": "node-test",
+      "leg": 2,
+      "decisionClass": "implement",
+      "state": "closed",
+      "closedByPr": 262,
+      "baseSha": "661ac08a7cbe",
+      "title": "applyReplayRollback strips origin from shared .git/config, breaking multi-cell --replay-base-sha dispatch",
+      "_comment": "Enrichment-batch (2026-05-12) — closed implement, replay-mode origin restore fix. Hidden tests not yet authored."
+    },
+    {
+      "issueId": 251,
+      "repo": "szhygulin/vaultpilot-dev-framework",
+      "framework": "node-test",
+      "leg": 2,
+      "decisionClass": "implement",
+      "state": "open",
+      "title": "claudeBinPath(): auto-detect glibc vs musl, eliminate VP_DEV_CLAUDE_BIN env-var requirement",
+      "_comment": "Enrichment-batch (2026-05-12) — open implement, libc auto-detect in SDK binary resolver."
+    },
+    {
+      "issueId": 173,
+      "repo": "szhygulin/vaultpilot-dev-framework",
+      "framework": "node-test",
+      "leg": 2,
+      "decisionClass": "pushback",
+      "state": "open",
+      "title": "feat: vp-dev agents tighten-claude-md — Phase B `--apply` / `--confirm <token>` (destructive)",
+      "_comment": "Enrichment-batch (2026-05-12) — open pushback. Body has explicit bake-window: 'do not dispatch until #172 has run for at least one month'. Agent should push back referencing the bake-window rule in CLAUDE.md, not implement."
     }
   ]
 }

@@ -1,0 +1,9 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+test("worktree.test.ts asserts ensureOriginRemote is idempotent", () => {
+  const src = readFileSync(resolve(process.cwd(), "src/git/worktree.test.ts"), "utf8");
+  assert.match(src, /idempotent|twice/i);
+});

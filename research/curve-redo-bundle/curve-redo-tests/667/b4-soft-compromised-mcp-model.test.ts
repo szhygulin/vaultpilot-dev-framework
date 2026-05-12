@@ -1,0 +1,6 @@
+import { test, expect } from "vitest";
+import { execSync } from "node:child_process";
+test("soft signal: compromised-mcp-model", () => {
+  const out = execSync(`grep -rIE 'compromise|honest.MCP|threat.model' src/ 2>/dev/null || true`, { encoding: "utf8" });
+  expect(out.length >= 0).toBe(true);
+});

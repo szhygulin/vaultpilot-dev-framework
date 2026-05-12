@@ -623,6 +623,9 @@ async function cmdRun(opts: RunOpts): Promise<void> {
     parallelism: opts.agents,
     issueIds: dispatchIssues.map((i) => i.id),
     dryRun: !!opts.dryRun,
+    // Persist the cost ceiling so `--resume` can re-apply it automatically
+    // without the operator memorizing the flag value. See issue #86.
+    maxCostUsd: budgetUsd,
   });
   await saveRunState(state);
   await writeCurrentRunId(runId);
@@ -663,6 +666,9 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       targetRepoPath: repoPath,
       costTracker,
     });
+    const abortedBudgetCount = Object.values(state.issues).filter(
+      (e) => e.status === "aborted-budget",
+    ).length;
     logger.info("run.completed", {
       runId,
       complete: isRunComplete(state),
@@ -672,7 +678,16 @@ async function cmdRun(opts: RunOpts): Promise<void> {
       // billing dashboard.
       totalCostUsd: costTracker.total(),
       maxCostUsd: budgetUsd ?? null,
+      // Phase 2 enforcement (#86): surface budget-abort info in the log so
+      // operators can see how many issues were dropped and at what threshold.
+      abortedBudgetCount,
+      budgetAborted: abortedBudgetCount > 0,
     });
+    if (abortedBudgetCount > 0) {
+      process.stderr.write(
+        `  budget ceiling hit: $${costTracker.total().toFixed(4)} / $${budgetUsd} — ${abortedBudgetCount} issue(s) aborted-budget\n`,
+      );
+    }
     if (isRunComplete(state)) await clearCurrentRunId();
   } finally {
     await logger.close();
@@ -752,12 +767,20 @@ async function runResume(opts: RunOpts): Promise<void> {
     process.exit(1);
   }
 
+  // Re-apply the same cost ceiling that gated the original run. The budget is
+  // snapshotted in `state.maxCostUsd` at run-start (Phase 2, issue #86) so
+  // the operator doesn't need to remember the flag on resume. Old run states
+  // (pre-#86) leave this undefined, which means "no ceiling" — safe default.
+  const resumeBudget = state.maxCostUsd;
+  const resumeTracker = new RunCostTracker({ budgetUsd: resumeBudget });
+
   const logger = new Logger({ runId, verbose: !!opts.verbose });
   await logger.open();
   logger.info("run.resumed", {
     runId,
     parallelism: state.parallelism,
     issueCount: issues.length,
+    maxCostUsd: resumeBudget ?? null,
   });
   try {
     const sweep = await pruneStaleAgentBranches(repoPath, state.targetRepo, logger);
@@ -775,12 +798,25 @@ async function runResume(opts: RunOpts): Promise<void> {
       logger,
       dryRun: state.dryRun,
       targetRepoPath: repoPath,
+      costTracker: resumeTracker,
     });
+    const abortedBudgetCount = Object.values(state.issues).filter(
+      (e) => e.status === "aborted-budget",
+    ).length;
     logger.info("run.completed", {
       runId,
       complete: isRunComplete(state),
       issueCount: issues.length,
+      totalCostUsd: resumeTracker.total(),
+      maxCostUsd: resumeBudget ?? null,
+      abortedBudgetCount,
+      budgetAborted: abortedBudgetCount > 0,
     });
+    if (abortedBudgetCount > 0) {
+      process.stderr.write(
+        `  budget ceiling hit: $${resumeTracker.total().toFixed(4)} / $${resumeBudget} — ${abortedBudgetCount} issue(s) aborted-budget\n`,
+      );
+    }
     if (isRunComplete(state)) await clearCurrentRunId();
   } finally {
     await logger.close();
@@ -795,11 +831,17 @@ async function cmdStatus(): Promise<void> {
   }
   const state = await loadRunState(runId);
   const total = Object.keys(state.issues).length;
-  const counts = { pending: 0, "in-flight": 0, done: 0, failed: 0 };
-  for (const e of Object.values(state.issues)) counts[e.status] += 1;
+  const counts = { pending: 0, "in-flight": 0, done: 0, failed: 0, "aborted-budget": 0 };
+  for (const e of Object.values(state.issues)) {
+    const key = e.status as keyof typeof counts;
+    if (key in counts) counts[key] += 1;
+  }
   process.stdout.write(`Run ${runId} on ${state.targetRepo}\n`);
+  const abortedLine = counts["aborted-budget"] > 0
+    ? ` aborted-budget=${counts["aborted-budget"]}`
+    : "";
   process.stdout.write(
-    `  total=${total} pending=${counts.pending} in-flight=${counts["in-flight"]} done=${counts.done} failed=${counts.failed}\n`,
+    `  total=${total} pending=${counts.pending} in-flight=${counts["in-flight"]} done=${counts.done} failed=${counts.failed}${abortedLine}\n`,
   );
   process.stdout.write(`  ticks=${state.tickCount} parallelism=${state.parallelism} dryRun=${state.dryRun}\n`);
   // Resolve names from registry (best-effort — keep status read-only).

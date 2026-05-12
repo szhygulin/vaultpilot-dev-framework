@@ -7,7 +7,18 @@ export type IssueRangeSpec =
 
 export type AgentStatus = "idle" | "in-flight";
 
-export type IssueStatus = "pending" | "in-flight" | "done" | "failed";
+// `aborted-budget` is a terminal state distinct from `failed`: not a coding-agent
+// error, an operator policy decision. Set by the orchestrator when the run's
+// accumulated spend crosses `--max-cost-usd` BEFORE the issue was dispatched.
+// In-flight issues complete naturally; only `pending` issues at the moment of
+// the budget-exceeded check are marked `aborted-budget`. The summarizer does
+// NOT write a lesson for these issues (incomplete signal, no run happened).
+export type IssueStatus =
+  | "pending"
+  | "in-flight"
+  | "done"
+  | "failed"
+  | "aborted-budget";
 
 export type AgentDecision = "implement" | "pushback" | "error";
 
@@ -117,6 +128,10 @@ export interface RunState {
   // Populated by the stale-branch sweep at run start. Optional for
   // back-compat with run states written before #63.
   unprunableStaleBranches?: UnprunableStaleBranch[];
+  // Per-run cost ceiling in USD, snapshotted at run start so `vp-dev run
+  // --resume` can re-apply the same budget without the operator memorizing
+  // the flag. Optional for back-compat with runs minted before #86.
+  maxCostUsd?: number;
 }
 
 export const ResultEnvelopeSchema = z.object({

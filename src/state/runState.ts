@@ -63,6 +63,8 @@ export function newRunState(opts: {
   parallelism: number;
   issueIds: number[];
   dryRun: boolean;
+  /** Per-run cost ceiling — persisted so `--resume` re-applies the same cap. */
+  maxCostUsd?: number;
 }): RunState {
   const issues: Record<string, RunIssueEntry> = {};
   for (const id of opts.issueIds) {
@@ -80,14 +82,33 @@ export function newRunState(opts: {
     lastTickAt: now,
     startedAt: now,
     dryRun: opts.dryRun,
+    ...(opts.maxCostUsd !== undefined ? { maxCostUsd: opts.maxCostUsd } : {}),
   };
 }
 
 export function isRunComplete(state: RunState): boolean {
   for (const entry of Object.values(state.issues)) {
-    if (entry.status !== "done" && entry.status !== "failed") return false;
+    // Terminal states: done, failed, aborted-budget. Any other status (pending,
+    // in-flight) means the run is still in progress.
+    if (
+      entry.status !== "done" &&
+      entry.status !== "failed" &&
+      entry.status !== "aborted-budget"
+    )
+      return false;
   }
   return true;
+}
+
+/**
+ * Mark a pending issue as `aborted-budget`. Parallel to `markFailed()` in the
+ * orchestrator. Called when the run's accumulated spend crosses `maxCostUsd`
+ * and the issue was still pending (not yet dispatched). In-flight issues
+ * complete naturally; this function is only called for the pending stragglers.
+ */
+export function markAborted(state: RunState, issueId: number): void {
+  const key = String(issueId);
+  state.issues[key] = { status: "aborted-budget" };
 }
 
 export function pendingIssueIds(state: RunState): number[] {

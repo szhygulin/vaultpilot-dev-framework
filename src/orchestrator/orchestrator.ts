@@ -1,5 +1,6 @@
 import {
   isRunComplete,
+  markAborted,
   pendingIssueIds,
   saveRunState,
 } from "../state/runState.js";
@@ -33,10 +34,15 @@ export interface OrchestratorInput {
   dryRun: boolean;
   targetRepoPath?: string;
   /**
-   * Per-run cost accumulator (issue #85 Phase 1 — measurement only).
-   * Threaded down to the dispatcher (orchestrator-side `query()` cost)
-   * and to each `runIssueCore` → `runCodingAgent` (issue-side cost).
+   * Per-run cost accumulator (issue #85 Phase 1 — measurement; Phase 2 —
+   * enforcement). Threaded down to the dispatcher (orchestrator-side `query()`
+   * cost) and to each `runIssueCore` → `runCodingAgent` (issue-side cost).
    * Optional so the orchestrator can be exercised without one in tests.
+   *
+   * Phase 2 enforcement: after each `Promise.race()` tick, the orchestrator
+   * checks `costTracker.exceedsBudget(state.maxCostUsd)`. On exceed, it stops
+   * dispatching new issues (marks remaining `pending` as `aborted-budget`) and
+   * lets in-flight finish naturally (graceful, not hard-kill). See issue #86.
    */
   costTracker?: RunCostTracker;
 }
@@ -125,6 +131,33 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
       break;
     }
     await Promise.race(inFlight.values());
+
+    // Phase 2 cost-ceiling enforcement (issue #86): after each settled
+    // promise, check whether the accumulated spend has crossed the budget.
+    // Only fires when both a tracker AND a persisted budget are present.
+    // Graceful shutdown: mark remaining `pending` issues `aborted-budget`
+    // and break the dispatch loop — in-flight issues complete naturally via
+    // `Promise.allSettled` below. No hard-kill of running SDK passes.
+    const budget = input.state.maxCostUsd;
+    if (
+      input.costTracker &&
+      budget !== undefined &&
+      input.costTracker.exceedsBudget(budget)
+    ) {
+      const total = input.costTracker.total();
+      input.logger.info("run.budget_exceeded", {
+        totalCostUsd: total,
+        maxCostUsd: budget,
+      });
+      // Mark all still-pending issues as aborted-budget (not dispatched,
+      // so no lesson to extract — the summarizer gate in runIssueCore
+      // skips writing for budget-killed runs).
+      for (const pendingId of pendingIssueIds(input.state)) {
+        markAborted(input.state, pendingId);
+      }
+      await saveRunState(input.state);
+      break;
+    }
   }
 
   await Promise.allSettled(inFlight.values());

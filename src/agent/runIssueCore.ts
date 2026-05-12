@@ -199,9 +199,19 @@ export async function runIssueCore(input: RunIssueCoreInput): Promise<RunIssueCo
 
       // No envelope — the SDK or the agent crashed before emitting one. Fire
       // the failure summarizer unless the cause is an infra flake (transport
-      // error, GitHub 5xx, worktree creation fail) where there's no lesson.
+      // error, GitHub 5xx, worktree creation fail) where there's no lesson,
+      // OR the run was cut off by budget exhaustion (`error_max_budget_usd`):
+      // a budget-killed run produced incomplete signal — writing it as a
+      // failure-lesson would mislead future runs' prompt seeding. See #86.
       if (!input.skipSummary) {
-        if (isInfraFlake(result.errorReason)) {
+        if (result.errorSubtype === "error_max_budget_usd") {
+          summarySkipReason = "budget-exhausted: incomplete signal skipped";
+          input.logger.info("specialization.skipped", {
+            agentId: input.agent.agentId,
+            issueId: input.issue.id,
+            reason: summarySkipReason,
+          });
+        } else if (isInfraFlake(result.errorReason)) {
           summarySkipReason = `infra flake skipped: ${result.errorReason}`;
           input.logger.info("specialization.skipped", {
             agentId: input.agent.agentId,

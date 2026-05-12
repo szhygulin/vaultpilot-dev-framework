@@ -17,3 +17,4 @@ dist/
 # writeups, issue-179-*.md) stay versioned.
 /research/issue-179-data/
 /research/curve-redo-data/
+/tmp-inspect/

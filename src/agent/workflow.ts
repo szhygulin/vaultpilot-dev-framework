@@ -92,7 +92,9 @@ If a \`# Plan for issue #${v.issueId} (from feature-plans/...)\` section appears
 - Typed-Data Signing Discipline applies if the issue touches typed-data signing tools.
 
 ## Step 3 — Decide internally: pushback OR implement
-
+${process.env.VP_DEV_FORCE_IMPLEMENT === "1" ? `
+**FORCE-IMPLEMENT MODE (calibration study)**: For this dispatch only, the **pushback path is DISABLED**. You MUST take the implement path. Even if your judgment suggests pushback (faulty premise, wrong scope, out of bounds), pick the MOST NARROWLY-SCOPED change you would make if forced to interpret the issue charitably. Implement it. Do NOT emit decision="pushback". This override exists specifically to measure logic quality on issues that would otherwise be skipped — your judgment is being trusted to find SOMETHING reasonable to implement, even if the issue is ambiguous.
+` : ""}
 ### Pushback path
 Compose a comment: one mismatch sentence + 2-3 alternatives + a question.
 Write the body to a tmp file using the **\`Write\` tool** (NOT a shell heredoc — \`cat > FILE << EOF ... EOF\` chained with \`gh issue comment\` in one Bash call trips the dry-run gate, since the chained \`gh issue comment\` would actually post in a non-dry-run). Then issue the comment as its OWN top-level Bash invocation:

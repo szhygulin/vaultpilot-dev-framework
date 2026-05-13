@@ -5,6 +5,8 @@ Corpus: the 7 "complex / architectural" issues from [PR #302](https://github.com
 
 ## Headline
 
+> **Follow-up [generalist-vs-all.md](generalist-vs-all.md)**: extends the analysis to include `trim vs generalist` and `tailored vs prose`. Generalist wins or ties every pair on both axes.
+
 The original v3/v4 complex7 conclusion ("no signal between arms") was the right conclusion for the **wrong reasons**. After fixing five distinct methodology bugs, the picture changes materially:
 
 **Generalist beats tailored on judge-A by 12.7 points (mean diff −13.49, bootstrap CI95 [−21.2, −5.9], one-sided p ≈ 0.02) once pushback asymmetry is controlled for.**

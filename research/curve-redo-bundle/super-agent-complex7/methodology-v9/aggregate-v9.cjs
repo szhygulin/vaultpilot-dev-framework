@@ -264,6 +264,8 @@ function runOnce(seed) {
     ["tailored", "trim"],
     ["prose", "generalist"],
     ["prose", "trim"],
+    ["trim", "generalist"],
+    ["tailored", "prose"],
   ];
   const out = { summary, pairs: {} };
   for (const [a, b] of pairs) {

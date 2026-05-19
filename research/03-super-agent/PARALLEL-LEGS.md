@@ -1,6 +1,6 @@
 # Super-agent curve study — parallel leg dispatch
 
-This document is the playbook for running legs of the super-agent curve experiment in parallel agents/worktrees. It complements [`super-agent-curve-experiment-plan.md`](../../../feature-plans/super-agent-curve-experiment-plan.md).
+This document is the playbook for running legs of the super-agent curve experiment in parallel agents/worktrees. It complements [`super-agent-curve-experiment-plan.md`](../../feature-plans/super-agent-curve-experiment-plan.md).
 
 ## Why parallel-by-leg
 

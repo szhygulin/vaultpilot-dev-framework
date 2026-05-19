@@ -1,6 +1,6 @@
 # Phase A — Per-issue rule selection results
 
-Run date: 2026-05-09. Selector: Opus 4.7 (`claude-opus-4-7[1m]`, ~58k-token cached system prompt). Corpus: 13 issues from `corpus.json`. Plan: [`feature-plans/super-agent-tailored-experiment-plan.md`](../../../feature-plans/super-agent-tailored-experiment-plan.md).
+Run date: 2026-05-09. Selector: Opus 4.7 (`claude-opus-4-7[1m]`, ~58k-token cached system prompt). Corpus: 13 issues from `corpus.json`. Plan: [`feature-plans/super-agent-tailored-experiment-plan.md`](../../feature-plans/super-agent-tailored-experiment-plan.md).
 
 Audit data: [`phase-a-results.tar.gz`](phase-a-results.tar.gz) (selections.json + picks-tailored.tsv).
 

@@ -1,6 +1,6 @@
 # Super-agent curve study — Phase D + Phase E results
 
-Phase D (accuracy assessment via hidden-test pass rate + Opus K=3 reasoning judge) for all 6 legs, followed by the multi-axis Phase E combiner (quality + error + cost). See [`super-agent-curve-experiment-plan.md`](../../../feature-plans/super-agent-curve-experiment-plan.md) for context, plus the per-leg PRs ([#275](https://github.com/szhygulin/vaultpilot-dev-framework/pull/275), [#283](https://github.com/szhygulin/vaultpilot-dev-framework/pull/283), [#284](https://github.com/szhygulin/vaultpilot-dev-framework/pull/284), [#285](https://github.com/szhygulin/vaultpilot-dev-framework/pull/285), [#286](https://github.com/szhygulin/vaultpilot-dev-framework/pull/286)).
+Phase D (accuracy assessment via hidden-test pass rate + Opus K=3 reasoning judge) for all 6 legs, followed by the multi-axis Phase E combiner (quality + error + cost). See [`super-agent-curve-experiment-plan.md`](../../feature-plans/super-agent-curve-experiment-plan.md) for context, plus the per-leg PRs ([#275](https://github.com/szhygulin/vaultpilot-dev-framework/pull/275), [#283](https://github.com/szhygulin/vaultpilot-dev-framework/pull/283), [#284](https://github.com/szhygulin/vaultpilot-dev-framework/pull/284), [#285](https://github.com/szhygulin/vaultpilot-dev-framework/pull/285), [#286](https://github.com/szhygulin/vaultpilot-dev-framework/pull/286)).
 
 ## Phase D run
 

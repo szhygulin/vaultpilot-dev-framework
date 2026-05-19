@@ -1,6 +1,6 @@
 # Super-agent curve study — leg 3 results + 3-leg synthesis
 
-Leg 3 of the Phase C dispatch (see [`super-agent-curve-experiment-plan.md`](../../../feature-plans/super-agent-curve-experiment-plan.md)) plus a cross-leg synthesis with legs 1+2. Trim sizes 3266B (3 seeds) + 6533B (3 seeds) × 13 issues × K=1 = 78 cells.
+Leg 3 of the Phase C dispatch (see [`super-agent-curve-experiment-plan.md`](../../feature-plans/super-agent-curve-experiment-plan.md)) plus a cross-leg synthesis with legs 1+2. Trim sizes 3266B (3 seeds) + 6533B (3 seeds) × 13 issues × K=1 = 78 cells.
 
 ## Leg 3 run
 

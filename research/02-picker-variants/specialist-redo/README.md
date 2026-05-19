@@ -1,7 +1,7 @@
 # curve-redo specialist follow-up — operator scripts
 
 Implementation of the experiment plan in
-[`feature-plans/curve-redo-specialist-followup-plan.md`](../../curve-redo-specialist-followup-plan.md)
+[`feature-plans/curve-redo-specialist-followup-plan.md`](../../../feature-plans/curve-redo-specialist-followup-plan.md)
 (merged via [PR #231](https://github.com/szhygulin/vaultpilot-dev-framework/pull/231)).
 
 The four scripts here drive the four execution stages:

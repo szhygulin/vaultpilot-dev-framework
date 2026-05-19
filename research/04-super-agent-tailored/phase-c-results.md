@@ -1,6 +1,6 @@
 # Phase C/D/E — Super-agent-tailored vs prose-baseline
 
-Run date: 2026-05-11. Plan: [`feature-plans/super-agent-tailored-experiment-plan.md`](../../../feature-plans/super-agent-tailored-experiment-plan.md). Phase A: [PR #282](https://github.com/szhygulin/vaultpilot-dev-framework/pull/282). Phase B: [PR #287](https://github.com/szhygulin/vaultpilot-dev-framework/pull/287). Tailored agents minted from Opus 4.7's per-issue selections against the 122-section super-agent file ([PR #276](https://github.com/szhygulin/vaultpilot-dev-framework/pull/276)).
+Run date: 2026-05-11. Plan: [`feature-plans/super-agent-tailored-experiment-plan.md`](../../feature-plans/super-agent-tailored-experiment-plan.md). Phase A: [PR #282](https://github.com/szhygulin/vaultpilot-dev-framework/pull/282). Phase B: [PR #287](https://github.com/szhygulin/vaultpilot-dev-framework/pull/287). Tailored agents minted from Opus 4.7's per-issue selections against the 122-section super-agent file ([PR #276](https://github.com/szhygulin/vaultpilot-dev-framework/pull/276)).
 
 Audit data: [`phase-c-results.tar.gz`](phase-c-results.tar.gz) — logs-leg{1,2}, scores-leg{1,2}, diffs-leg{1,2}, comparison.json.
 
@@ -19,7 +19,7 @@ Audit data: [`phase-c-results.tar.gz`](phase-c-results.tar.gz) — logs-leg{1,2}
 
 ## Phase C — dispatch ($38.43 / 39 cells / 0 errors)
 
-Dispatcher: [`dispatch-tailored-parallel.sh`](dispatch-tailored-parallel.sh) → [`dispatch-specialist-redo-parallel.sh`](../specialist-redo/dispatch-specialist-redo-parallel.sh). K=3 cells per issue, Sonnet 4.6, `--dry-run --no-target-claude-md --skip-summary --no-registry-mutation`, per-cell $10 cap, parallel=4.
+Dispatcher: [`dispatch-tailored-parallel.sh`](dispatch-tailored-parallel.sh) → [`dispatch-specialist-redo-parallel.sh`](../02-picker-variants/specialist-redo/dispatch-specialist-redo-parallel.sh). K=3 cells per issue, Sonnet 4.6, `--dry-run --no-target-claude-md --skip-summary --no-registry-mutation`, per-cell $10 cap, parallel=4.
 
 | Leg | Issues | Cells | Cost | Errors | Wall |
 |---:|---:|---:|---:|---:|---:|

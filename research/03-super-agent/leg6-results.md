@@ -1,6 +1,6 @@
 # Super-agent curve study — leg 6 results + Phase C complete
 
-Final leg of Phase C dispatch (see [`super-agent-curve-experiment-plan.md`](../../../feature-plans/super-agent-curve-experiment-plan.md)). Trim sizes **156782B + 209042B** (full S) × 3 seeds × 13 issues × K=1 = 78 cells. Run with the elevated **`$6`** per-cell cap.
+Final leg of Phase C dispatch (see [`super-agent-curve-experiment-plan.md`](../../feature-plans/super-agent-curve-experiment-plan.md)). Trim sizes **156782B + 209042B** (full S) × 3 seeds × 13 issues × K=1 = 78 cells. Run with the elevated **`$6`** per-cell cap.
 
 ## Run
 

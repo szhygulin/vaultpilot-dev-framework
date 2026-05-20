@@ -1,6 +1,6 @@
 # Phase B — Tailored agent mint results
 
-Run date: 2026-05-11. Minter: [`build-tailored-agents.cjs`](build-tailored-agents.cjs). Source super-agent file: [`agent-super.CLAUDE.md`](../super-agent/agent-super.CLAUDE.md) (122 sections, 209 KB), committed in [PR #276](https://github.com/szhygulin/vaultpilot-dev-framework/pull/276). Selections: [`phase-a-results.tar.gz`](phase-a-results.tar.gz) → `selections.json`. Plan: [`feature-plans/super-agent-tailored-experiment-plan.md`](../../../feature-plans/super-agent-tailored-experiment-plan.md).
+Run date: 2026-05-11. Minter: [`build-tailored-agents.cjs`](build-tailored-agents.cjs). Source super-agent file: [`agent-super.CLAUDE.md`](../03-super-agent/agent-super.CLAUDE.md) (122 sections, 209 KB), committed in [PR #276](https://github.com/szhygulin/vaultpilot-dev-framework/pull/276). Selections: [`phase-a-results.tar.gz`](phase-a-results.tar.gz) → `selections.json`. Plan: [`feature-plans/super-agent-tailored-experiment-plan.md`](../../feature-plans/super-agent-tailored-experiment-plan.md).
 
 Audit data: [`phase-b-results.tar.gz`](phase-b-results.tar.gz) (sizes.json + all 13 minted CLAUDE.mds renamed `issue-N.CLAUDE.md`).
 

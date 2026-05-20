@@ -7,7 +7,7 @@ Picker-routed specialists × K=3 replicates = 39 cells. Compared paired-by-issue
 against the merged trim baseline (232 cells; one cell `error_max_turns` in
 baseline excluded).
 
-Tarball: [`research/curve-redo-bundle/specialist-redo-results.tar.gz`](specialist-redo-results.tar.gz)
+Tarball: [`research/curve-redo-bundle/specialist-redo-results.tar.gz`](../curve-redo-bundle/specialist-redo-results.tar.gz)
 (gitignored at runtime under `research/curve-redo-data/`). Reproducer scripts
 in [`research/curve-redo-bundle/specialist-redo/`](specialist-redo/).
 

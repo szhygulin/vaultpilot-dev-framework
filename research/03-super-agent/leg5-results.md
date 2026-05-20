@@ -1,6 +1,6 @@
 # Super-agent curve study — leg 5 results + 5-leg synthesis
 
-Leg 5 of Phase C (see [`super-agent-curve-experiment-plan.md`](../../../feature-plans/super-agent-curve-experiment-plan.md)). Trim sizes **52261B + 104521B** × 3 seeds × 13 issues × K=1 = 78 cells. Run with the elevated `$4` per-cell cap (same regime as leg 4; legs 1-3 used $2).
+Leg 5 of Phase C (see [`super-agent-curve-experiment-plan.md`](../../feature-plans/super-agent-curve-experiment-plan.md)). Trim sizes **52261B + 104521B** × 3 seeds × 13 issues × K=1 = 78 cells. Run with the elevated `$4` per-cell cap (same regime as leg 4; legs 1-3 used $2).
 
 ## Run
 

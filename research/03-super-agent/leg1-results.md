@@ -1,6 +1,6 @@
 # Super-agent curve study — leg 1 results
 
-Leg 1 of the Phase C dispatch (see [`super-agent-curve-experiment-plan.md`](../../../feature-plans/super-agent-curve-experiment-plan.md)). 6 trim agents × 13 issues × K=1 = 78 cells, parallel-6 dispatch via [`launch-leg-parallel.sh`](./launch-leg-parallel.sh).
+Leg 1 of the Phase C dispatch (see [`super-agent-curve-experiment-plan.md`](../../feature-plans/super-agent-curve-experiment-plan.md)). 6 trim agents × 13 issues × K=1 = 78 cells, parallel-6 dispatch via [`launch-leg-parallel.sh`](./launch-leg-parallel.sh).
 
 ## Run
 

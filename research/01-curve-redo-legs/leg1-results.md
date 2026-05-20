@@ -3,7 +3,7 @@
 Run date: 2026-05-07. Coding cells: Sonnet 4.6. Reasoning judge: Opus 4.7 (K=3 medians).
 Target repo: `szhygulin/vaultpilot-mcp` (vitest). Issues: 6 leg-1 ids × 18 trims = 108 cells.
 
-Tarball: [`research/curve-redo-bundle/leg1-results.tar.gz`](leg1-results.tar.gz) (275 KB,
+Tarball: [`research/curve-redo-bundle/leg1-results.tar.gz`](../curve-redo-bundle/leg1-results.tar.gz) (275 KB,
 gitignored at runtime under `research/curve-redo-data/`). Bundle layout per
 [`README.md`](README.md). Reproducer scripts in `research/curve-redo-data/`.
 

@@ -23,6 +23,7 @@
 // recommend dropping.
 
 import { promises as fs } from "node:fs";
+import crypto from "node:crypto";
 import { agentClaudeMdPath } from "./specialization.js";
 import { parseClaudeMdSections, type ParsedSection } from "./split.js";
 import {
@@ -32,6 +33,11 @@ import {
   type SectionUtilityRecord,
 } from "../state/lessonUtility.js";
 import { contextCostFactor } from "../util/contextCostCurve.js";
+import { withFileLock } from "../state/locks.js";
+import {
+  dropSentinelsByStableId,
+  type SentinelHeader,
+} from "../util/sentinels.js";
 
 // ---------------------------------------------------------------------------
 // Tunables. Defaults are conservative on the "keep" side: this is advisory,
@@ -40,6 +46,14 @@ import { contextCostFactor } from "../util/contextCostCurve.js";
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_KEEP_THRESHOLD = 0.20;
+
+/**
+ * Sections introduced within this many days are protected from `drop` verdicts
+ * at apply time. Too new to have accumulated signal; a fresh summarizer-emitted
+ * lesson hasn't had a chance to be reinforced yet. Operator can override with
+ * `--allow-drop-fresh` (passes `allowDropFresh: true` to `applyAssessment`).
+ */
+export const FRESH_SECTION_DROP_DAYS = 14;
 export const DEFAULT_DROP_THRESHOLD = 0.05;
 /** Days before a `lastReinforcedAt` decays to zero recency. */
 export const DEFAULT_RECENCY_DECAY_DAYS = 60;
@@ -355,6 +369,248 @@ export async function proposeAssessment(
     summary,
     recommendation: composeRecommendation(assessments, summary, totalBytes, ccf),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Internal hash helper — mirrors assessConfirm.computeAssessHash but lives
+// here to avoid a circular import (assessConfirm.ts imports AssessProposal
+// from this module). assessConfirm.ts re-exports the same algorithm for CLI
+// callers that don't import assessClaudeMd directly.
+// ---------------------------------------------------------------------------
+
+function hashFileContent(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * Recompute the assessHash from a proposal + file content.
+ * Used inside `applyAssessment` (under the file lock) to verify no drift
+ * occurred between --apply and --confirm.
+ *
+ * Formula mirrors assessConfirm.computeAssessHash:
+ *   sha256(JSON.stringify(sortedVerdicts) + sha256(currentFile))
+ */
+function recomputeAssessHash(proposal: AssessProposal, currentFile: string): string {
+  const verdicts = proposal.sections
+    .map((s) => ({ stableId: s.stableId, verdict: s.verdict }))
+    .sort((a, b) => (a.stableId ?? "").localeCompare(b.stableId ?? ""));
+  const fileHash = hashFileContent(currentFile);
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(verdicts))
+    .update(fileHash)
+    .digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 (issue #181): destructive applyAssessment — DROP-ONLY.
+//
+// Applies `drop` verdicts from a Phase 3 proposal under `withFileLock`.
+// `trim` verdicts are surfaced in the result but NOT acted on (Phase 4b).
+// `keep` verdicts are silent no-ops.
+//
+// Apply-time invariants (all checked under the lock):
+//   1. assessHash matches (file drifted between --apply and --confirm → reject).
+//   2. Each drop verdict's stableId must resolve to a live section in the
+//      current file. Drift → reject.
+//   3. Hard reject any drop for a section introduced within FRESH_SECTION_DROP_DAYS.
+//      Override: allowDropFresh = true (--allow-drop-fresh CLI flag).
+//   4. Hard reject any drop for a section with crossReferenceCount > 0.
+//      No override — external citations would be orphaned.
+//
+// Verdict computation re-run choice (#181 note): The assessHash already binds
+// to the file bytes AND the verdicts at plan time, so any file change that
+// would alter verdicts also invalidates the hash. We do NOT re-run the full
+// Phase 3 LLM-free scoring here — hash-drift is sufficient as a drift gate,
+// and re-running at confirm time would need the utility file which may itself
+// have drifted. The fresh-section and cross-ref guards run against the live
+// utility file, covering the cases that are orthogonal to file content.
+// ---------------------------------------------------------------------------
+
+export interface ApplyAssessmentInput {
+  agentId: string;
+  /** Proposal from the --apply step. */
+  proposal: AssessProposal;
+  /** assessHash recorded in the confirm token at plan time. */
+  expectedAssessHash: string;
+  /** Override file path for tests; defaults to `agentClaudeMdPath`. */
+  claudeMdPathOverride?: string;
+  /** Override utility file for tests; when omitted, load from disk. */
+  utilityFileOverride?: AgentUtilityFile | null;
+  /** Reference time for the fresh-section guard; defaults to "now". */
+  now?: Date;
+  /**
+   * When true, bypasses the 14-day fresh-section hard reject for drop verdicts.
+   * Operator flag: --allow-drop-fresh. Same shape as compact's --allow-pair-clusters.
+   */
+  allowDropFresh?: boolean;
+}
+
+export type ApplyAssessmentResult =
+  | {
+      kind: "applied";
+      bytesBefore: number;
+      bytesAfter: number;
+      sectionsDropped: number;
+      droppedHeaders: SentinelHeader[];
+      /** Number of sections with trim verdict — surfaced but not acted on. */
+      trimSurfaced: number;
+    }
+  | {
+      kind: "drift-rejected";
+      reason:
+        | "assess-hash"
+        | "missing-file"
+        | "fresh-section"
+        | "cross-ref"
+        | "no-drop-match";
+      details: string;
+    };
+
+/**
+ * Apply a Phase 3 proposal's `drop` verdicts to the agent's CLAUDE.md.
+ * All steps run under `withFileLock` for atomicity.
+ */
+export async function applyAssessment(
+  input: ApplyAssessmentInput,
+): Promise<ApplyAssessmentResult> {
+  const filePath = input.claudeMdPathOverride ?? agentClaudeMdPath(input.agentId);
+  const now = input.now ?? new Date();
+
+  // Pre-check existence before acquiring the lock so withFileLock's ensureDir
+  // call doesn't error on a fully non-existent path.
+  try {
+    await fs.access(filePath);
+  } catch {
+    return {
+      kind: "drift-rejected",
+      reason: "missing-file",
+      details: `agents/${input.agentId}/CLAUDE.md no longer exists; nothing to apply.`,
+    };
+  }
+
+  return withFileLock(filePath, async () => {
+    // Step 1: re-read the live file (file could disappear between access and lock).
+    let currentFile: string;
+    try {
+      currentFile = await fs.readFile(filePath, "utf-8");
+    } catch {
+      return {
+        kind: "drift-rejected",
+        reason: "missing-file",
+        details: `agents/${input.agentId}/CLAUDE.md no longer exists; nothing to apply.`,
+      };
+    }
+
+    // Step 2: recompute assessHash and reject on drift.
+    const computedHash = recomputeAssessHash(input.proposal, currentFile);
+    if (computedHash !== input.expectedAssessHash) {
+      return {
+        kind: "drift-rejected",
+        reason: "assess-hash",
+        details:
+          "CLAUDE.md content changed between --apply and --confirm. Re-run --apply to generate a fresh proposal + token.",
+      };
+    }
+
+    // Step 3: resolve utility file for the fresh-section and cross-ref guards.
+    const utilityFile =
+      input.utilityFileOverride !== undefined
+        ? input.utilityFileOverride
+        : await loadLessonUtility(input.agentId);
+
+    const recordByStableId = new Map<string, SectionUtilityRecord>();
+    if (utilityFile) {
+      for (const r of utilityFile.sections) {
+        recordByStableId.set(r.sectionId, r);
+      }
+    }
+
+    // Step 4: collect drop verdicts and run the hard invariant checks.
+    const dropSections = input.proposal.sections.filter(
+      (s) => s.verdict === "drop" && s.stableId !== null,
+    );
+    const trimSections = input.proposal.sections.filter(
+      (s) => s.verdict === "trim",
+    );
+
+    for (const s of dropSections) {
+      if (s.stableId === null) continue;
+      const record = recordByStableId.get(s.stableId);
+
+      // Fresh-section guard: introduced within FRESH_SECTION_DROP_DAYS.
+      if (!input.allowDropFresh && record?.introducedAt) {
+        const introduced = Date.parse(record.introducedAt);
+        if (Number.isFinite(introduced)) {
+          const daysOld = (now.getTime() - introduced) / (1000 * 60 * 60 * 24);
+          if (daysOld < FRESH_SECTION_DROP_DAYS) {
+            return {
+              kind: "drift-rejected",
+              reason: "fresh-section",
+              details:
+                `Section "${s.heading}" (stableId ${s.stableId.slice(0, 12)}…) ` +
+                `is too new to drop: introduced ${record.introducedAt.slice(0, 10)}, ` +
+                `${daysOld.toFixed(1)} days ago (< ${FRESH_SECTION_DROP_DAYS}-day minimum). ` +
+                `Use --allow-drop-fresh to override.`,
+            };
+          }
+        }
+      }
+
+      // Cross-ref guard: section cited externally — no override flag.
+      const crossRefCount = record?.crossReferenceCount ?? s.crossReferenceCount;
+      if (crossRefCount > 0) {
+        return {
+          kind: "drift-rejected",
+          reason: "cross-ref",
+          details:
+            `Section "${s.heading}" (stableId ${s.stableId.slice(0, 12)}…) ` +
+            `has crossReferenceCount=${crossRefCount} — external citations would be orphaned. ` +
+            `Drop is hard-rejected; remove the cross-references before re-assessing.`,
+        };
+      }
+    }
+
+    // Step 5: If no drops, just report applied with 0 drops (all keep/trim).
+    if (dropSections.length === 0) {
+      return {
+        kind: "applied",
+        bytesBefore: Buffer.byteLength(currentFile, "utf-8"),
+        bytesAfter: Buffer.byteLength(currentFile, "utf-8"),
+        sectionsDropped: 0,
+        droppedHeaders: [],
+        trimSurfaced: trimSections.length,
+      };
+    }
+
+    // Step 6: Splice the file — drop the flagged sentinels by stableId.
+    const dropSet = new Set(
+      dropSections.map((s) => s.stableId).filter((id): id is string => id !== null),
+    );
+
+    const spliceResult = dropSentinelsByStableId(
+      currentFile,
+      dropSet,
+      (header: SentinelHeader) => {
+        const ids = header.issueIds ?? [header.issueId];
+        return deriveStableSectionId(header.runId, ids);
+      },
+    );
+
+    // Step 7: Atomic rename write — same pattern as appendBlock / applyLessonPrune.
+    const tmp = `${filePath}.tmp.${process.pid}`;
+    await fs.writeFile(tmp, spliceResult.content);
+    await fs.rename(tmp, filePath);
+
+    return {
+      kind: "applied",
+      bytesBefore: Buffer.byteLength(currentFile, "utf-8"),
+      bytesAfter: Buffer.byteLength(spliceResult.content, "utf-8"),
+      sectionsDropped: spliceResult.droppedHeaders.length,
+      droppedHeaders: spliceResult.droppedHeaders,
+      trimSurfaced: trimSections.length,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

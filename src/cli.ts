@@ -510,7 +510,7 @@ export function buildCli(): Command {
     .addCommand(
       new Command("assess-claude-md")
         .description(
-          "Phase 3 of #177 (issue #180): per-section verdict (keep / trim / drop) for an agent's CLAUDE.md. Combines #178's per-section utility data (reinforcement, pushback, past-incident, recency, cross-reference) with #179's context-cost curve. Advisory only — destructive --apply path deferred to Phase 4. Composes with compact-claude-md, tighten-claude-md, and prune-lessons.",
+          "Phase 3/4 of #177 (issues #180 / #181): per-section verdict (keep / trim / drop) for an agent's CLAUDE.md. Without --apply: advisory read-only output (Phase 3). With --apply: emit a confirm token (15-min TTL, Phase 4). With --confirm <token>: apply drop verdicts under the per-file lock (Phase 4). Two-step pattern mirrors compact-claude-md. Trim verdicts are surfaced but not acted on (Phase 4b). Composes with compact-claude-md, tighten-claude-md, and prune-lessons.",
         )
         .argument("<agentId>", "Agent to inspect (e.g. agent-916a)")
         .option("--json", "Print machine-readable JSON")
@@ -531,6 +531,18 @@ export function buildCli(): Command {
           "Days after which lastReinforcedAt decays to zero recency (default 60).",
           parsePositive,
           60,
+        )
+        .option(
+          "--apply",
+          "Compute the proposal AND mint a confirm token under state/assess-confirm-<token>.json (15-min TTL). Re-invoke with --confirm <token> to perform the drop rewrite.",
+        )
+        .option(
+          "--confirm <token>",
+          "Apply the drop verdicts from a prior --apply token. Rejects if the file has drifted.",
+        )
+        .option(
+          "--allow-drop-fresh",
+          "Override the 14-day fresh-section hard reject for drop verdicts. Normally sections introduced within 14 days cannot be dropped.",
         )
         .action(async (agentId, opts) => {
           await cmdAgentsAssessClaudeMd(agentId, opts);
@@ -3055,24 +3067,36 @@ interface AgentsAssessClaudeMdOpts {
   keepThreshold: number;
   dropThreshold: number;
   recencyDecayDays: number;
+  apply?: boolean;
+  confirm?: string;
+  allowDropFresh?: boolean;
 }
 
 async function cmdAgentsAssessClaudeMd(
   agentId: string,
   opts: AgentsAssessClaudeMdOpts,
 ): Promise<void> {
-  const reg = await loadRegistry();
-  const agent = reg.agents.find((a) => a.agentId === agentId);
-  if (!agent) {
-    process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
+  // Mutex: --apply and --confirm are mutually exclusive.
+  if (opts.apply && opts.confirm) {
+    process.stderr.write(
+      "ERROR: --apply and --confirm are mutually exclusive. Use --apply first, then --confirm <token>.\n",
+    );
     process.exit(2);
   }
+
+  // --confirm path: apply drop verdicts from a prior --apply token.
+  if (opts.confirm) {
+    await cmdAgentsAssessClaudeMdConfirm(agentId, opts);
+    return;
+  }
+
   if (opts.dropThreshold > opts.keepThreshold) {
     process.stderr.write(
       `ERROR: --drop-threshold (${opts.dropThreshold}) must be ≤ --keep-threshold (${opts.keepThreshold}).\n`,
     );
     process.exit(2);
   }
+
   const { proposeAssessment, formatAssessProposal } = await import(
     "./agent/assessClaudeMd.js"
   );
@@ -3082,11 +3106,151 @@ async function cmdAgentsAssessClaudeMd(
     dropThreshold: opts.dropThreshold,
     recencyDecayDays: opts.recencyDecayDays,
   });
+
+  if (!opts.apply) {
+    // Advisory-only (Phase 3) output.
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(proposal, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write(formatAssessProposal(proposal) + "\n");
+    return;
+  }
+
+  // --apply path: mint a confirm token.
+  // Refuse if there's nothing to act on (no drop verdicts in the proposal).
+  const dropCount = proposal.summary.drop;
+  if (dropCount === 0) {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, proposal, applyRefused: "no-drops" }, null, 2) + "\n",
+      );
+      return;
+    }
+    process.stdout.write(formatAssessProposal(proposal) + "\n");
+    process.stdout.write(
+      "\nNothing to drop — no confirm token minted. " +
+        (proposal.summary.trim > 0
+          ? `${proposal.summary.trim} section(s) recommended for trimming — re-run with \`vp-dev agents tighten-claude-md ${agentId}\` to apply.\n`
+          : "All sections are either kept or missing utility records.\n"),
+    );
+    return;
+  }
+
+  // Read the current file to bind the token hash at plan time.
+  const { agentClaudeMdPath } = await import("./agent/specialization.js");
+  let currentFile = "";
+  try {
+    currentFile = await fs.readFile(agentClaudeMdPath(agentId), "utf-8");
+  } catch {
+    process.stderr.write(
+      `ERROR: agents/${agentId}/CLAUDE.md is missing; cannot mint a token.\n`,
+    );
+    process.exit(2);
+  }
+
+  const {
+    mintToken,
+    computeAssessHash,
+    writeAssessConfirmToken,
+  } = await import("./state/assessConfirm.js");
+
+  const token = mintToken();
+  const assessHash = computeAssessHash(proposal, currentFile);
+  await writeAssessConfirmToken({ token, agentId, proposal, assessHash });
+
   if (opts.json) {
-    process.stdout.write(JSON.stringify(proposal, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify(
+        {
+          agentId,
+          proposal,
+          confirmToken: token,
+          assessHash,
+          confirmCommand: `vp-dev agents assess-claude-md ${agentId} --confirm ${token}`,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
     return;
   }
   process.stdout.write(formatAssessProposal(proposal) + "\n");
+  if (proposal.summary.trim > 0) {
+    process.stdout.write(
+      `\nNote: ${proposal.summary.trim} section(s) recommended for trimming — re-run with \`vp-dev agents tighten-claude-md ${agentId}\` to apply.\n`,
+    );
+  }
+  process.stdout.write(
+    `\nConfirm token: ${token} (15-min TTL, written to state/assess-confirm-${token}.json)\n` +
+      `Apply with:    vp-dev agents assess-claude-md ${agentId} --confirm ${token}\n` +
+      `If the file changes between now and confirm, the token rejects and you'll need to re-run --apply.\n`,
+  );
+}
+
+async function cmdAgentsAssessClaudeMdConfirm(
+  agentId: string,
+  opts: AgentsAssessClaudeMdOpts,
+): Promise<void> {
+  const token = opts.confirm;
+  if (!token) {
+    process.stderr.write("ERROR: --confirm requires a token argument.\n");
+    process.exit(2);
+  }
+
+  const {
+    readAssessConfirmToken,
+    deleteAssessConfirmToken,
+  } = await import("./state/assessConfirm.js");
+  const { applyAssessment } = await import("./agent/assessClaudeMd.js");
+
+  const read = await readAssessConfirmToken(token);
+  if (!read.ok) {
+    process.stderr.write(`ERROR: ${read.message}\n`);
+    process.exit(2);
+  }
+  if (read.record.agentId !== agentId) {
+    process.stderr.write(
+      `ERROR: token ${token} was minted for agent '${read.record.agentId}', not '${agentId}'.\n`,
+    );
+    process.exit(2);
+  }
+
+  const result = await applyAssessment({
+    agentId,
+    proposal: read.record.proposal,
+    expectedAssessHash: read.record.assessHash,
+    allowDropFresh: opts.allowDropFresh,
+  });
+
+  if (result.kind === "drift-rejected") {
+    process.stderr.write(`ERROR: ${result.details}\n`);
+    process.exit(2);
+  }
+
+  // Clean up the token after a successful apply.
+  await deleteAssessConfirmToken(token).catch(() => {});
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify({ agentId, token, result }, null, 2) + "\n",
+    );
+    return;
+  }
+
+  const kbBefore = (result.bytesBefore / 1024).toFixed(1);
+  const kbAfter = (result.bytesAfter / 1024).toFixed(1);
+  process.stdout.write(
+    `Applied assess-claude-md for ${agentId}\n` +
+      `  ${kbBefore}KB → ${kbAfter}KB ` +
+      `(${result.sectionsDropped} section(s) dropped)\n`,
+  );
+  if (result.trimSurfaced > 0) {
+    process.stdout.write(
+      `  ${result.trimSurfaced} section(s) recommended for trimming — ` +
+        `re-run with \`vp-dev agents tighten-claude-md ${agentId}\` to apply.\n`,
+    );
+  }
 }
 
 interface AgentsTightenClaudeMdOpts {

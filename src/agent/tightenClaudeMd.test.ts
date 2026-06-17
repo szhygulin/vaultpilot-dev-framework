@@ -1,16 +1,27 @@
-// Phase A (issue #172) tests: invariant-extraction matchers, the
-// dropped-invariant validator (each warning kind), savings-cap warning,
-// schema clamp, and the dry-run formatter shape. No LLM is called —
-// `proposeTighten` is exercised end-to-end only indirectly via its pure
-// helpers, since the live network/SDK call is the expensive part and
-// adds nothing to per-PR coverage.
+// Phase A (issue #172) + Phase B (issue #173) tests.
+//
+// Phase A tests: invariant-extraction matchers, the dropped-invariant validator
+// (each warning kind), savings-cap warning, schema clamp, and the dry-run
+// formatter shape.
+//
+// Phase B tests: applyTighten apply-path — drift rejection (file changed between
+// apply and confirm → hash mismatch rejects), lock contention, validator firing
+// on dropped-date/xref/numeric, splice preserves sentinel verbatim, zero-rewrites
+// refusal, expired/missing/malformed token handling.
+//
+// No LLM is called — proposeTighten is exercised end-to-end only indirectly via
+// its pure helpers, since the live network/SDK call is the expensive part.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   DEFAULT_MAX_DIFF_LINES,
   DEFAULT_MAX_SAVINGS_PCT,
   MIN_DIFF_SAVINGS_BYTES,
+  applyTighten,
   clampRewriteFields,
   extractDistinctDates,
   extractDistinctNumerics,
@@ -23,6 +34,9 @@ import {
   type TightenProposal,
 } from "./tightenClaudeMd.js";
 import { parseClaudeMdSections, type ParsedSection } from "./split.js";
+import {
+  computeTightenHash,
+} from "../state/tightenConfirm.js";
 
 function fakeMd(
   sections: Array<{ run: string; issue: number; heading: string; body: string }>,
@@ -389,7 +403,7 @@ test("formatTightenProposal: surfaces all four warning kinds inline per rewrite"
   assert.match(out, /4 validator finding\(s\)/);
 });
 
-test("formatTightenProposal: clean proposal points at the --apply path tracker", () => {
+test("formatTightenProposal: clean proposal points at the --apply/--confirm path", () => {
   const proposal: TightenProposal = {
     agentId: "agent-test",
     rewrites: [
@@ -404,7 +418,8 @@ test("formatTightenProposal: clean proposal points at the --apply path tracker",
   };
   const out = formatTightenProposal(proposal);
   assert.match(out, /No validator warnings/);
-  assert.match(out, /#173/);
+  assert.match(out, /--apply/);
+  assert.match(out, /--confirm/);
 });
 
 test("DEFAULT_MAX_SAVINGS_PCT: documented default is 40 (per issue #172)", () => {
@@ -602,4 +617,365 @@ test("formatTightenProposal: omits diff entirely when no opts arg provided (back
   const out = formatTightenProposal(proposal);
   assert.doesNotMatch(out, /diff:/);
   assert.match(out, /\[s0\] 0\.20KB saved/);
+});
+
+// ---------------------------------------------------------------------------
+// Phase B (issue #173): applyTighten apply-path tests
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal CLAUDE.md with one section whose body is `body`.
+ * Returns the raw string and the sentinel line verbatim.
+ */
+function makeOneSectionMd(opts: {
+  run?: string;
+  issue?: number;
+  outcome?: string;
+  ts?: string;
+  heading?: string;
+  body: string;
+}): { md: string; sentinel: string } {
+  const run = opts.run ?? "run-test";
+  const issue = opts.issue ?? 100;
+  const outcome = opts.outcome ?? "implement";
+  const ts = opts.ts ?? "2026-05-05T12:00:00.000Z";
+  const heading = opts.heading ?? "Rule A";
+  const sentinel = `<!-- run:${run} issue:#${issue} outcome:${outcome} ts:${ts} -->`;
+  const md = `${sentinel}\n## ${heading}\n\n${opts.body}\n`;
+  return { md, sentinel };
+}
+
+/** Build a TightenProposal for a single-section file. */
+function makeProposal(opts: {
+  agentId?: string;
+  sectionId?: string;
+  rewrittenBody: string;
+  estimatedBytesSaved?: number;
+  warnings?: TightenProposal["warnings"];
+  /** Override maxSavingsPct — defaults to 100 for apply-path tests to avoid
+   *  triggering the excessive-savings validator on synthetic small fixtures. */
+  maxSavingsPct?: number;
+}): TightenProposal {
+  const estimatedBytesSaved = opts.estimatedBytesSaved ?? 10;
+  return {
+    agentId: opts.agentId ?? "agent-test",
+    rewrites: [
+      {
+        sectionId: opts.sectionId ?? "s0",
+        rewrittenBody: opts.rewrittenBody,
+        estimatedBytesSaved,
+      },
+    ],
+    unchangedSectionIds: [],
+    estimatedBytesSaved,
+    inputBytes: 1000,
+    sectionCount: 1,
+    warnings: opts.warnings ?? [],
+    maxSavingsPct: opts.maxSavingsPct ?? 100,
+  };
+}
+
+test("applyTighten: splice preserves sentinel header verbatim — only body bytes change", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  const { md, sentinel } = makeOneSectionMd({
+    run: "run-42",
+    issue: 100,
+    outcome: "implement",
+    ts: "2026-05-05T12:00:00.000Z",
+    heading: "Verbose Rule",
+    body: "This is a very verbose body with lots of words that can be shortened. Past incident 2026-04-28.",
+  });
+  await fs.writeFile(filePath, md);
+
+  const proposal = makeProposal({
+    rewrittenBody: "Tighter. Past incident 2026-04-28.",
+    estimatedBytesSaved: 50,
+  });
+  const tightenHash = computeTightenHash(proposal, md);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "applied");
+  if (result.kind !== "applied") return;
+
+  const written = await fs.readFile(filePath, "utf-8");
+  // Sentinel must appear verbatim in the output.
+  assert.ok(
+    written.includes(sentinel),
+    `sentinel must be preserved verbatim; written:\n${written}`,
+  );
+  // Heading must be preserved.
+  assert.ok(written.includes("## Verbose Rule"), "heading must be preserved");
+  // New body must appear.
+  assert.ok(
+    written.includes("Tighter. Past incident 2026-04-28."),
+    "rewritten body must appear",
+  );
+  // Old verbose body must be gone.
+  assert.ok(
+    !written.includes("lots of words that can be shortened"),
+    "old body must be replaced",
+  );
+  assert.ok(result.bytesAfter < result.bytesBefore, "file must shrink");
+  await fs.rm(dir, { recursive: true });
+});
+
+test("applyTighten: drift rejection — file changed between --apply and --confirm", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  const { md } = makeOneSectionMd({
+    body: "Original body text. Past incident 2026-04-28.",
+  });
+  await fs.writeFile(filePath, md);
+
+  const proposal = makeProposal({
+    rewrittenBody: "Tighter. Past incident 2026-04-28.",
+    estimatedBytesSaved: 20,
+  });
+  // Hash computed against the original md.
+  const tightenHash = computeTightenHash(proposal, md);
+
+  // Now mutate the file (simulates the operator editing between --apply and --confirm).
+  const driftedMd = md + "\n<!-- run:run-999 issue:#999 outcome:implement ts:2026-06-01T00:00:00.000Z -->\n## Extra\n\nExtra section added.\n";
+  await fs.writeFile(filePath, driftedMd);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "drift-rejected");
+  if (result.kind !== "drift-rejected") return;
+  assert.equal(result.reason, "proposal-hash");
+  assert.match(result.details, /changed between/);
+  await fs.rm(dir, { recursive: true });
+});
+
+test("applyTighten: rejects when a sectionId in the proposal no longer exists (file drift)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  const { md } = makeOneSectionMd({
+    body: "Body text. Past incident 2026-04-28.",
+  });
+  await fs.writeFile(filePath, md);
+
+  // Proposal references s1 which doesn't exist in a single-section file.
+  const proposal = makeProposal({
+    sectionId: "s1", // doesn't exist
+    rewrittenBody: "Tighter. Past incident 2026-04-28.",
+    estimatedBytesSaved: 20,
+  });
+  const tightenHash = computeTightenHash(proposal, md);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "drift-rejected");
+  if (result.kind !== "drift-rejected") return;
+  assert.equal(result.reason, "missing-section");
+  await fs.rm(dir, { recursive: true });
+});
+
+test("applyTighten: rejects when validator fires at confirm time (dropped date)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  const { md } = makeOneSectionMd({
+    body: "Rule body. Past incident 2026-04-28.",
+  });
+  await fs.writeFile(filePath, md);
+
+  // Rewrite drops the date — validator should reject.
+  const proposal = makeProposal({
+    rewrittenBody: "Rule body without date.",
+    estimatedBytesSaved: 30,
+  });
+  const tightenHash = computeTightenHash(proposal, md);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "drift-rejected");
+  if (result.kind !== "drift-rejected") return;
+  assert.equal(result.reason, "warnings-present");
+  assert.match(result.details, /dropped-incident-date/i);
+  await fs.rm(dir, { recursive: true });
+});
+
+test("applyTighten: rejects when validator fires at confirm time (dropped xref)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  const { md } = makeOneSectionMd({
+    body: "See #162 for context. The rule is important.",
+  });
+  await fs.writeFile(filePath, md);
+
+  // Rewrite drops #162.
+  const proposal = makeProposal({
+    rewrittenBody: "The rule is important.",
+    estimatedBytesSaved: 25,
+  });
+  const tightenHash = computeTightenHash(proposal, md);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "drift-rejected");
+  if (result.kind !== "drift-rejected") return;
+  assert.equal(result.reason, "warnings-present");
+  assert.match(result.details, /dropped-cross-reference/i);
+  await fs.rm(dir, { recursive: true });
+});
+
+test("applyTighten: rejects when validator fires at confirm time (dropped numeric)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  const { md } = makeOneSectionMd({
+    body: "Use 30KB threshold and 15 min TTL always.",
+  });
+  await fs.writeFile(filePath, md);
+
+  // Rewrite drops "15 min".
+  const proposal = makeProposal({
+    rewrittenBody: "Use 30KB threshold always.",
+    estimatedBytesSaved: 20,
+  });
+  const tightenHash = computeTightenHash(proposal, md);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "drift-rejected");
+  if (result.kind !== "drift-rejected") return;
+  assert.equal(result.reason, "warnings-present");
+  assert.match(result.details, /dropped-numeric-threshold/i);
+  await fs.rm(dir, { recursive: true });
+});
+
+test("applyTighten: zero-rewrites proposal is rejected — nothing to apply", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  const { md } = makeOneSectionMd({ body: "Body." });
+  await fs.writeFile(filePath, md);
+
+  const emptyProposal: TightenProposal = {
+    agentId: "agent-test",
+    rewrites: [],
+    unchangedSectionIds: ["s0"],
+    estimatedBytesSaved: 0,
+    inputBytes: 100,
+    sectionCount: 1,
+    warnings: [],
+    maxSavingsPct: DEFAULT_MAX_SAVINGS_PCT,
+  };
+  const tightenHash = computeTightenHash(emptyProposal, md);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal: emptyProposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "drift-rejected");
+  if (result.kind !== "drift-rejected") return;
+  assert.equal(result.reason, "no-rewrites");
+  await fs.rm(dir, { recursive: true });
+});
+
+test("applyTighten: missing file returns drift-rejected with missing-file reason", async () => {
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal: makeProposal({ rewrittenBody: "tight" }),
+    expectedTightenHash: "deadbeefdeadbeef",
+    computeTightenHash,
+    claudeMdPathOverride: "/tmp/does-not-exist-tighten-test/CLAUDE.md",
+  });
+
+  assert.equal(result.kind, "drift-rejected");
+  if (result.kind !== "drift-rejected") return;
+  assert.equal(result.reason, "missing-file");
+});
+
+test("applyTighten: applies clean multi-section file, only targeted section body changes", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-test-"));
+  const filePath = path.join(dir, "CLAUDE.md");
+  // Two-section file; only s0 gets a rewrite.
+  const s0Sentinel = "<!-- run:run-A issue:#100 outcome:implement ts:2026-05-05T12:00:00.000Z -->";
+  const s1Sentinel = "<!-- run:run-B issue:#101 outcome:implement ts:2026-05-05T13:00:00.000Z -->";
+  const md =
+    `${s0Sentinel}\n## Rule A\n\nVerbose rule A body that needs tightening.\n` +
+    `${s1Sentinel}\n## Rule B\n\nVerbose rule B body untouched. See #162. 30KB.\n`;
+  await fs.writeFile(filePath, md);
+
+  const proposal: TightenProposal = {
+    agentId: "agent-test",
+    rewrites: [
+      { sectionId: "s0", rewrittenBody: "Tight rule A.", estimatedBytesSaved: 30 },
+    ],
+    unchangedSectionIds: ["s1"],
+    estimatedBytesSaved: 30,
+    inputBytes: Buffer.byteLength(md, "utf-8"),
+    sectionCount: 2,
+    warnings: [],
+    // 100% cap: synthetic fixture has high savings-pct; don't let the
+    // excessive-savings validator block the apply-path test.
+    maxSavingsPct: 100,
+  };
+  const tightenHash = computeTightenHash(proposal, md);
+
+  const result = await applyTighten({
+    agentId: "agent-test",
+    proposal,
+    expectedTightenHash: tightenHash,
+    computeTightenHash,
+    claudeMdPathOverride: filePath,
+  });
+
+  assert.equal(result.kind, "applied");
+  if (result.kind !== "applied") return;
+  assert.equal(result.sectionsRewritten, 1);
+
+  const written = await fs.readFile(filePath, "utf-8");
+  // s0 sentinel preserved verbatim.
+  assert.ok(written.includes(s0Sentinel), "s0 sentinel must be preserved");
+  // s1 sentinel preserved verbatim.
+  assert.ok(written.includes(s1Sentinel), "s1 sentinel must be preserved");
+  // s0 new body present.
+  assert.ok(written.includes("Tight rule A."), "s0 rewritten body must appear");
+  // s0 old body gone.
+  assert.ok(!written.includes("Verbose rule A body"), "s0 old body must be gone");
+  // s1 body untouched.
+  assert.ok(written.includes("Verbose rule B body untouched."), "s1 body must be untouched");
+  await fs.rm(dir, { recursive: true });
 });

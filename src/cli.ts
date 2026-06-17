@@ -93,9 +93,17 @@ import {
 } from "./agent/compactClaudeMd.js";
 import {
   DEFAULT_MAX_SAVINGS_PCT,
+  applyTighten,
   formatTightenProposal,
   proposeTighten,
 } from "./agent/tightenClaudeMd.js";
+import {
+  computeTightenHash,
+  deleteTightenConfirmToken,
+  mintToken as mintTightenToken,
+  readTightenConfirmToken,
+  writeTightenConfirmToken,
+} from "./state/tightenConfirm.js";
 import {
   computeProposalHash,
   deleteCompactConfirmToken,
@@ -377,7 +385,7 @@ export function buildCli(): Command {
     .addCommand(
       new Command("tighten-claude-md")
         .description(
-          "Phase A (#172): propose intra-section prose-tightening rewrites for an agent's CLAUDE.md. Advisory only — no file mutation. The destructive --apply path is tracked at #173.",
+          "Propose intra-section prose-tightening rewrites for an agent's CLAUDE.md (#172 Phase A). With --apply: emit a confirm token (15-min TTL); with --confirm <token>: rewrite the file under the per-file lock (#173 Phase B). Two-step is the human-in-the-loop checkpoint — no single-flag silent bypass.",
         )
         .argument("<agentId>", "Agent to inspect (e.g. agent-916a)")
         .option("--json", "Print machine-readable JSON")
@@ -390,6 +398,14 @@ export function buildCli(): Command {
         .option(
           "--no-diff",
           "Suppress per-rewrite unified diffs in the human-readable output (#176). Falls back to the savings-only single-line summary; --json mode is unaffected (always omits diffs to keep the payload lean).",
+        )
+        .option(
+          "--apply",
+          "Compute the proposal AND mint a confirm token under state/tighten-confirm-<token>.json (15-min TTL). Re-invoke with --confirm <token> to perform the rewrite.",
+        )
+        .option(
+          "--confirm <token>",
+          "Apply the proposal recorded in the named token, after re-validating against the live file content.",
         )
         .action(async (agentId, opts) => {
           await cmdAgentsTightenClaudeMd(agentId, opts);
@@ -3096,12 +3112,28 @@ interface AgentsTightenClaudeMdOpts {
   // true). Naming the option `noDiff` would invert the convention; using
   // `diff` matches Commander's default and keeps the call-site readable.
   diff?: boolean;
+  apply?: boolean;
+  confirm?: string;
 }
 
 async function cmdAgentsTightenClaudeMd(
   agentId: string,
   opts: AgentsTightenClaudeMdOpts,
 ): Promise<void> {
+  // Mutex: --apply and --confirm are mutually exclusive.
+  if (opts.apply && opts.confirm) {
+    process.stderr.write(
+      "ERROR: --apply and --confirm are mutually exclusive. Use --apply first, then --confirm <token>.\n",
+    );
+    process.exit(2);
+  }
+
+  // --confirm path: read and apply the stored token.
+  if (opts.confirm) {
+    await cmdAgentsTightenClaudeMdConfirm(agentId, opts);
+    return;
+  }
+
   const reg = await loadRegistry();
   const agent = reg.agents.find((a) => a.agentId === agentId);
   if (!agent) {
@@ -3131,25 +3163,155 @@ async function cmdAgentsTightenClaudeMd(
     maxSavingsPct: opts.maxSavingsPct,
   });
 
-  if (opts.json) {
-    // JSON mode keeps its lean payload — `rewrittenBody` is already in
-    // each rewrite, so a JSON consumer that wants a diff can derive one
-    // by re-parsing the agent's CLAUDE.md (#176 out of scope: per-rewrite
-    // diff field for --json mode).
-    process.stdout.write(JSON.stringify({ agentId, proposal }, null, 2) + "\n");
+  if (!opts.apply) {
+    if (opts.json) {
+      // JSON mode keeps its lean payload — `rewrittenBody` is already in
+      // each rewrite, so a JSON consumer that wants a diff can derive one
+      // by re-parsing the agent's CLAUDE.md (#176 out of scope: per-rewrite
+      // diff field for --json mode).
+      process.stdout.write(JSON.stringify({ agentId, proposal }, null, 2) + "\n");
+      return;
+    }
+    // Build the source-body lookup from the same MD we just proposed
+    // against. Commander parses `--no-diff` into `opts.diff === false`;
+    // when the flag is absent, `opts.diff` is `undefined` (effectively
+    // true → show diffs by default, per #176).
+    const sections = parseClaudeMdSections(md);
+    const sources = new Map(sections.map((s) => [s.sectionId, s.body]));
+    process.stdout.write(
+      formatTightenProposal(proposal, {
+        showDiffs: opts.diff !== false,
+        sources,
+      }) + "\n",
+    );
     return;
   }
-  // Build the source-body lookup from the same MD we just proposed
-  // against. Commander parses `--no-diff` into `opts.diff === false`;
-  // when the flag is absent, `opts.diff` is `undefined` (effectively
-  // true → show diffs by default, per #176).
+
+  // --apply path: refuse to mint a token if the proposal isn't safe to apply.
+  // Per #173: validator warnings are a hard rejection at apply time. Empty
+  // proposals are also rejected — there's nothing to confirm. NO single-flag
+  // silent bypass — this gate is the human-in-the-loop checkpoint.
+  if (proposal.rewrites.length === 0) {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, proposal, applyRefused: "no-rewrites" }, null, 2) + "\n",
+      );
+      return;
+    }
+    const sections = parseClaudeMdSections(md);
+    const sources = new Map(sections.map((s) => [s.sectionId, s.body]));
+    process.stdout.write(
+      formatTightenProposal(proposal, { showDiffs: opts.diff !== false, sources }) + "\n",
+    );
+    process.stdout.write(
+      "\nERROR: --apply refused; proposal has zero rewrites. Nothing to confirm.\n",
+    );
+    process.exit(2);
+  }
+  if (proposal.warnings.length > 0) {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, proposal, applyRefused: "warnings-present" }, null, 2) + "\n",
+      );
+      return;
+    }
+    const sections = parseClaudeMdSections(md);
+    const sources = new Map(sections.map((s) => [s.sectionId, s.body]));
+    process.stdout.write(
+      formatTightenProposal(proposal, { showDiffs: opts.diff !== false, sources }) + "\n",
+    );
+    process.stdout.write(
+      `\nERROR: --apply refused; ${proposal.warnings.length} validator finding(s) (dropped-incident-date, dropped-cross-reference, dropped-numeric-threshold, or excessive-savings — see proposal output). Re-run after the model emits a clean proposal.\n`,
+    );
+    process.exit(2);
+  }
+
+  const token = mintTightenToken();
+  const tightenHash = computeTightenHash(proposal, md);
+  await writeTightenConfirmToken({ token, agentId, proposal, tightenHash });
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          agentId,
+          proposal,
+          confirmToken: token,
+          tightenHash,
+          confirmCommand: `vp-dev agents tighten-claude-md ${agentId} --confirm ${token}`,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
   const sections = parseClaudeMdSections(md);
   const sources = new Map(sections.map((s) => [s.sectionId, s.body]));
   process.stdout.write(
-    formatTightenProposal(proposal, {
-      showDiffs: opts.diff !== false,
-      sources,
-    }) + "\n",
+    formatTightenProposal(proposal, { showDiffs: opts.diff !== false, sources }) + "\n",
+  );
+  process.stdout.write(
+    `\nConfirm token: ${token} (15-min TTL, written to state/tighten-confirm-${token}.json)\n` +
+      `Apply with:    vp-dev agents tighten-claude-md ${agentId} --confirm ${token}\n` +
+      `If the file changes between now and confirm, the token rejects and you'll need to re-run --apply.\n`,
+  );
+}
+
+async function cmdAgentsTightenClaudeMdConfirm(
+  agentId: string,
+  opts: AgentsTightenClaudeMdOpts,
+): Promise<void> {
+  const token = opts.confirm;
+  if (!token) {
+    process.stderr.write("ERROR: --confirm requires a token argument.\n");
+    process.exit(2);
+  }
+  const read = await readTightenConfirmToken(token);
+  if (!read.ok) {
+    process.stderr.write(`ERROR: ${read.message}\n`);
+    process.exit(2);
+  }
+  if (read.record.agentId !== agentId) {
+    process.stderr.write(
+      `ERROR: token ${token} was minted for agent '${read.record.agentId}', not '${agentId}'.\n`,
+    );
+    process.exit(2);
+  }
+
+  const result = await applyTighten({
+    agentId,
+    proposal: read.record.proposal,
+    expectedTightenHash: read.record.tightenHash,
+    computeTightenHash,
+  });
+
+  if (result.kind === "drift-rejected") {
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, token, result }, null, 2) + "\n",
+      );
+    } else {
+      process.stderr.write(
+        `ERROR: --confirm rejected (${result.reason}): ${result.details}\n`,
+      );
+    }
+    // Don't delete the token on drift — operator may want to re-inspect.
+    process.exit(2);
+  }
+
+  await deleteTightenConfirmToken(token);
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify({ agentId, token, result }, null, 2) + "\n",
+    );
+    return;
+  }
+  process.stdout.write(
+    `Tightened ${agentId}/CLAUDE.md\n` +
+      `  ${(result.bytesBefore / 1024).toFixed(1)}KB -> ${(result.bytesAfter / 1024).toFixed(1)}KB ` +
+      `(${result.sectionsRewritten} section(s) rewritten)\n`,
   );
 }
 

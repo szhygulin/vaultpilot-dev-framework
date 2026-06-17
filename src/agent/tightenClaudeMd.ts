@@ -18,9 +18,12 @@
 // Usage: `vp-dev agents tighten-claude-md <agentId> [--json] [--max-savings-pct N]`.
 
 import { z } from "zod";
+import { promises as fs } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeBinPath } from "./sdkBinary.js";
 import { parseClaudeMdSections, type ParsedSection } from "./split.js";
+import { agentClaudeMdPath } from "./specialization.js";
+import { withFileLock } from "../state/locks.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { ORCHESTRATOR_MODEL_SPLIT } from "../orchestrator/models.js";
 import type { AgentRecord } from "../types.js";
@@ -637,8 +640,281 @@ export function formatTightenProposal(
     );
   } else {
     lines.push(
-      "No validator warnings. Phase A is advisory only; --apply is tracked at #173.",
+      "No validator warnings. Pass --apply to mint a confirm token; --confirm <token> to perform the rewrite.",
     );
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Phase B (issue #173): destructive applyTighten
+// ---------------------------------------------------------------------------
+
+export interface ApplyTightenInput {
+  agentId: string;
+  /** Proposal recorded in the confirm token at plan time. */
+  proposal: TightenProposal;
+  /** Hash recorded in the confirm token: sha256(JSON.stringify(rewrites) + sha256(file@plan)). */
+  expectedTightenHash: string;
+  /** Compute tightenHash from the live file (imported from tightenConfirm to avoid a circular dep). */
+  computeTightenHash: (proposal: TightenProposal, file: string) => string;
+  /** Override file path for tests; defaults to `agentClaudeMdPath`. */
+  claudeMdPathOverride?: string;
+}
+
+export type ApplyTightenResult =
+  | {
+      kind: "applied";
+      bytesBefore: number;
+      bytesAfter: number;
+      sectionsRewritten: number;
+    }
+  | {
+      kind: "drift-rejected";
+      reason:
+        | "proposal-hash"
+        | "missing-section"
+        | "warnings-present"
+        | "no-rewrites"
+        | "missing-file";
+      details: string;
+    };
+
+/**
+ * Apply a Phase A tightening proposal to the agent's CLAUDE.md.
+ *
+ * Steps (all under `withFileLock(filePath)` so the read/validate/rewrite/
+ * rename sequence is atomic against `appendBlock` / `expireSentinels`):
+ *
+ *  1. Re-read the file. Reject if the file no longer exists.
+ *  2. Recompute tightenHash against the live file; reject on mismatch (drift).
+ *  3. Re-parse sections. Reject if any sectionId in the proposal no longer
+ *     exists in the current parse (section removed or file restructured).
+ *  4. Re-run the validator (findDroppedInvariants) — Phase A treats warnings
+ *     as advisory; Phase B treats them as hard rejections.
+ *  5. Splice the file: for each section in file order, keep its sentinel
+ *     header + `## Heading` verbatim and substitute only the body. Sections
+ *     not in the rewrite set are emitted verbatim. Atomic rename.
+ *
+ * CRITICAL splice invariant (from #173 issue spec):
+ *   Tighten PRESERVES the original sentinel header verbatim — only the section
+ *   BODY bytes change. Unlike compact, no new merged sentinel is generated.
+ *   The original `<!-- run:R issue:#N outcome:O ts:T ... -->` line is preserved
+ *   unchanged so a re-parse produces a section with identical provenance and
+ *   outcome — only the body shrinks.
+ */
+export async function applyTighten(
+  input: ApplyTightenInput,
+): Promise<ApplyTightenResult> {
+  if (input.proposal.rewrites.length === 0) {
+    return {
+      kind: "drift-rejected",
+      reason: "no-rewrites",
+      details: "Proposal has zero rewrites; nothing to apply.",
+    };
+  }
+  const filePath =
+    input.claudeMdPathOverride ?? agentClaudeMdPath(input.agentId);
+  return withFileLock(filePath, async () => {
+    let currentFile: string;
+    try {
+      currentFile = await fs.readFile(filePath, "utf-8");
+    } catch {
+      return {
+        kind: "drift-rejected",
+        reason: "missing-file",
+        details: `agents/${input.agentId}/CLAUDE.md no longer exists; nothing to tighten.`,
+      };
+    }
+
+    // Step 2: drift check via tightenHash.
+    const computedHash = input.computeTightenHash(input.proposal, currentFile);
+    if (computedHash !== input.expectedTightenHash) {
+      return {
+        kind: "drift-rejected",
+        reason: "proposal-hash",
+        details:
+          "CLAUDE.md content changed between --apply and --confirm. Re-run --apply to generate a fresh proposal + token.",
+      };
+    }
+
+    // Step 3: re-parse + section-existence check.
+    const sections = parseClaudeMdSectionsWithOffsets(currentFile);
+    const sectionById = new Map(sections.map((s) => [s.sectionId, s]));
+    for (const r of input.proposal.rewrites) {
+      if (!sectionById.has(r.sectionId)) {
+        return {
+          kind: "drift-rejected",
+          reason: "missing-section",
+          details: `Rewrite references sectionId ${r.sectionId} which is not present in the current parse.`,
+        };
+      }
+    }
+
+    // Step 4: re-run validator — hard rejection on any warning.
+    const warnings = findDroppedInvariants({
+      rewrites: input.proposal.rewrites,
+      sections,
+      maxSavingsPct: input.proposal.maxSavingsPct,
+    });
+    if (warnings.length > 0) {
+      const summary = warnings
+        .map((w) => {
+          if (w.kind === "dropped-incident-date") {
+            return `${w.sectionId} dropped-incident-date: ${w.missingDates.join(",")}`;
+          } else if (w.kind === "dropped-cross-reference") {
+            return `${w.sectionId} dropped-cross-reference: ${w.missingRefs.join(",")}`;
+          } else if (w.kind === "dropped-numeric-threshold") {
+            return `${w.sectionId} dropped-numeric-threshold: ${w.missingNumerics.join(",")}`;
+          } else {
+            return `${w.sectionId} excessive-savings: ${w.savingsPct}%`;
+          }
+        })
+        .join("; ");
+      return {
+        kind: "drift-rejected",
+        reason: "warnings-present",
+        details: `Tighten validator flagged the proposal at apply time: ${summary}. Re-run --apply.`,
+      };
+    }
+
+    // Step 5: splice and atomic rename.
+    const rewriteById = new Map(
+      input.proposal.rewrites.map((r) => [r.sectionId, r]),
+    );
+    const rewritten = spliceTightenedSections({
+      currentFile,
+      sections,
+      rewriteById,
+    });
+
+    const tmp = `${filePath}.tmp.${process.pid}`;
+    await fs.writeFile(tmp, rewritten);
+    await fs.rename(tmp, filePath);
+
+    return {
+      kind: "applied",
+      bytesBefore: Buffer.byteLength(currentFile, "utf-8"),
+      bytesAfter: Buffer.byteLength(rewritten, "utf-8"),
+      sectionsRewritten: input.proposal.rewrites.length,
+    };
+  });
+}
+
+// Position-aware section parser used by Phase B's splicer. Parallel sectionId
+// numbering matches what `parseClaudeMdSections` (split.ts) produces so
+// proposal.sectionIds bind correctly across both views.
+interface SectionWithOffset extends ParsedSection {
+  /** Char offset of the first char of `<!--` in the section's sentinel. */
+  fileStart: number;
+  /** Char offset just past the section's body (lookahead position). */
+  fileEnd: number;
+  /**
+   * The raw sentinel line (from `<!--` through `-->` inclusive, no trailing
+   * newline) as it appears verbatim in the file. Preserved during splice.
+   */
+  rawSentinel: string;
+  /**
+   * The raw heading line (from `## ` through end-of-line, no trailing
+   * newline) as it appears verbatim in the file. Preserved during splice.
+   */
+  rawHeading: string;
+}
+
+// Mirrors `SECTION_RE_WITH_OFFSETS` in compactClaudeMd.ts — same regex as
+// `SECTION_RE` in split.ts but with offset tracking added. Captures:
+//   m[1] = runId
+//   m[2] = issueId token
+//   m[3] = outcome
+//   m[4] = heading text
+//   m[5] = body
+// Full match starts at the `<!--` of the sentinel.
+const SECTION_RE_OFFSET =
+  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+(?:\s+tags:\S+)?\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
+
+function parseClaudeMdSectionsWithOffsets(md: string): SectionWithOffset[] {
+  const out: SectionWithOffset[] = [];
+  let i = 0;
+  for (const m of md.matchAll(SECTION_RE_OFFSET)) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    // Extract the raw sentinel line: everything from the match start up to
+    // (but not including) the first `\n` after `-->`.
+    const rawSentinelEnd = m[0].indexOf("\n");
+    const rawSentinel = m[0].slice(0, rawSentinelEnd);
+    // Extract the raw heading line: `## <text>`.
+    const afterSentinel = m[0].slice(rawSentinelEnd + 1);
+    const rawHeadingEnd = afterSentinel.indexOf("\n");
+    const rawHeading = afterSentinel.slice(0, rawHeadingEnd);
+    const issueIds = m[2]
+      .split("+")
+      .map((tok) => Number(tok.replace(/^#/, "")));
+    const section: SectionWithOffset = {
+      sectionId: `s${i++}`,
+      runId: m[1],
+      issueId: issueIds[0],
+      outcome: m[3],
+      heading: m[4].trim(),
+      body: m[5].trim(),
+      fileStart: start,
+      fileEnd: end,
+      rawSentinel,
+      rawHeading,
+    };
+    if (issueIds.length > 1) section.issueIds = issueIds;
+    out.push(section);
+  }
+  return out;
+}
+
+interface SpliceTightenInput {
+  currentFile: string;
+  sections: SectionWithOffset[];
+  rewriteById: Map<string, SectionRewrite>;
+}
+
+/**
+ * Walk sections in file order. For sections not in `rewriteById`, emit their
+ * original bytes verbatim. For each rewritten section, emit:
+ *
+ *   <rawSentinel>\n<rawHeading>\n\n<rewrittenBody>
+ *
+ * The sentinel and heading lines come from the file, not the proposal, so
+ * provenance is preserved byte-for-byte. The body is the only thing that
+ * changes — exactly the invariant the issue spec requires.
+ *
+ * Inter-section separators (the single `\n` between consecutive sections)
+ * follow the same ownership logic as compact's splicer: each section "owns"
+ * the separator that follows it; no extra blank lines accumulate.
+ */
+function spliceTightenedSections(input: SpliceTightenInput): string {
+  if (input.sections.length === 0) return input.currentFile;
+
+  // Prelude = everything before the first section sentinel.
+  let out = input.currentFile.slice(0, input.sections[0].fileStart);
+
+  for (let i = 0; i < input.sections.length; i++) {
+    const sec = input.sections[i];
+    const rewrite = input.rewriteById.get(sec.sectionId);
+    if (rewrite) {
+      // Emit sentinel + heading verbatim, then the new body.
+      out += `${sec.rawSentinel}\n${sec.rawHeading}\n\n${rewrite.rewrittenBody.trim()}`;
+    } else {
+      // Emit the original bytes verbatim.
+      out += input.currentFile.slice(sec.fileStart, sec.fileEnd);
+    }
+
+    if (i < input.sections.length - 1) {
+      // Separator between this section and the next.
+      const sep = input.currentFile.slice(
+        sec.fileEnd,
+        input.sections[i + 1].fileStart,
+      );
+      out += sep;
+    } else {
+      // Last section — emit any trailing content (typically a trailing `\n`).
+      out += input.currentFile.slice(sec.fileEnd);
+    }
+  }
+  return out;
 }

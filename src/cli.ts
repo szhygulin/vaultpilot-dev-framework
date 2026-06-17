@@ -487,7 +487,7 @@ export function buildCli(): Command {
     .addCommand(
       new Command("audit-lessons")
         .description(
-          "Score every section of an agent's CLAUDE.md by intrinsic quality (in vacuum — no run history, no comparison across sections). Per-section sonnet calls rate each lesson on the same 0-1 scale as write-time predictedUtility. Advisory only (Phase 1); destructive --apply / --confirm deferred. Combine with `vp-dev agents prune-lessons` for the historical-reinforcement signal.",
+          "Score every section of an agent's CLAUDE.md by intrinsic quality (in vacuum — no run history, no comparison across sections). Per-section sonnet calls rate each lesson on the same 0-1 scale as write-time predictedUtility. With --apply: re-run scoring, mint a confirm token (15-min TTL) that binds the scores + file content; with --confirm <token>: drop sections below --drop-threshold under the per-file lock. Two-step pattern mirrors compact-claude-md / prune-lessons. Combine with `vp-dev agents prune-lessons` for the historical-reinforcement signal.",
         )
         .argument("<agentId>", "Agent to audit (e.g. agent-916a)")
         .option("--json", "Print machine-readable JSON")
@@ -502,6 +502,20 @@ export function buildCli(): Command {
           "Parallel scoring calls (default 3 — respects Anthropic rate limits while keeping audit walltime bounded).",
           parsePositive,
           3,
+        )
+        .option(
+          "--apply",
+          "Re-run scoring AND mint a confirm token under state/audit-confirm-<token>.json (15-min TTL). Re-invoke with --confirm <token> to perform the destructive rewrite. Mutually exclusive with --confirm.",
+        )
+        .option(
+          "--confirm <token>",
+          "Apply a previously minted audit token: drop sections below --drop-threshold under the per-file lock. Mutually exclusive with --apply.",
+        )
+        .option(
+          "--drop-threshold <n>",
+          "Sections with intrinsicUtility below this value are dropped on --confirm (default 0.3, matching the drop verdict band).",
+          parsePositive,
+          0.3,
         )
         .action(async (agentId, opts) => {
           await cmdAgentsAuditLessons(agentId, opts);
@@ -3025,29 +3039,130 @@ interface AgentsAuditLessonsOpts {
   json?: boolean;
   maxCostUsd: number;
   concurrency: number;
+  apply?: boolean;
+  confirm?: string;
+  dropThreshold: number;
 }
 
 async function cmdAgentsAuditLessons(
   agentId: string,
   opts: AgentsAuditLessonsOpts,
 ): Promise<void> {
+  if (opts.apply && opts.confirm) {
+    process.stderr.write("ERROR: --apply and --confirm are mutually exclusive.\n");
+    process.exit(2);
+  }
+
+  const {
+    proposeAudit,
+    formatAuditProposal,
+    computeAuditHash,
+    applyAudit,
+  } = await import("./agent/auditLessons.js");
+  const {
+    mintToken,
+    writeAuditConfirmToken,
+    readAuditConfirmToken,
+    deleteAuditConfirmToken,
+  } = await import("./state/auditConfirm.js");
+  const { agentClaudeMdPath } = await import("./agent/specialization.js");
+
+  if (opts.confirm) {
+    const tokenResult = await readAuditConfirmToken(opts.confirm);
+    if (!tokenResult.ok) {
+      process.stderr.write(`ERROR: ${tokenResult.message}\n`);
+      process.exit(2);
+    }
+    const { record } = tokenResult;
+    if (record.agentId !== agentId) {
+      process.stderr.write(
+        `ERROR: token ${opts.confirm} is bound to ${record.agentId}, not ${agentId}.\n`,
+      );
+      process.exit(2);
+    }
+    const result = await applyAudit({
+      agentId,
+      scores: record.scores,
+      expectedAuditHash: record.auditHash,
+      dropThreshold: record.dropThreshold,
+    });
+    if (result.kind === "drift-rejected") {
+      process.stderr.write(`ERROR: ${result.details}\n`);
+      process.exit(2);
+    }
+    await deleteAuditConfirmToken(opts.confirm);
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ agentId, token: opts.confirm, result }, null, 2) + "\n",
+      );
+      return;
+    }
+    process.stdout.write(
+      `Audit-dropped ${agentId}/CLAUDE.md\n` +
+        `  ${(result.bytesBefore / 1024).toFixed(1)}KB -> ${(result.bytesAfter / 1024).toFixed(1)}KB ` +
+        `(${result.sectionsDropped} section(s) dropped)\n`,
+    );
+    return;
+  }
+
+  // Advisory (Phase A) — and optionally mint a token (--apply).
   const reg = await loadRegistry();
   const agent = reg.agents.find((a) => a.agentId === agentId);
   if (!agent) {
     process.stderr.write(`ERROR: agent '${agentId}' not found in registry.\n`);
     process.exit(2);
   }
-  const { proposeAudit, formatAuditProposal } = await import("./agent/auditLessons.js");
+
   const proposal = await proposeAudit({
     agentId,
     maxCostUsd: opts.maxCostUsd,
     concurrency: opts.concurrency,
   });
+
   if (opts.json) {
     process.stdout.write(JSON.stringify(proposal, null, 2) + "\n");
     return;
   }
+
   process.stdout.write(formatAuditProposal(proposal) + "\n");
+
+  if (!opts.apply) return;
+
+  const dropCandidates = proposal.scores.filter(
+    (s) => s.intrinsicUtility < opts.dropThreshold,
+  );
+  if (dropCandidates.length === 0) {
+    process.stdout.write(
+      `Nothing to drop (no sections below threshold ${opts.dropThreshold}); no token minted.\n`,
+    );
+    return;
+  }
+
+  // Compute hash from the live file (the audit hash binds plan-time bytes
+  // + the scores; any drift between plan and confirm rejects).
+  let currentFile = "";
+  try {
+    currentFile = await fs.readFile(agentClaudeMdPath(agentId), "utf-8");
+  } catch {
+    process.stderr.write(
+      `ERROR: agents/${agentId}/CLAUDE.md is missing; cannot mint a token.\n`,
+    );
+    process.exit(2);
+  }
+  const auditHash = computeAuditHash(proposal.scores, currentFile);
+  const token = mintToken();
+  await writeAuditConfirmToken({
+    token,
+    agentId,
+    scores: proposal.scores,
+    auditHash,
+    dropThreshold: opts.dropThreshold,
+  });
+  process.stdout.write(
+    `\nConfirm token: ${token} (15-min TTL, written to state/audit-confirm-${token}.json)\n` +
+      `  ${dropCandidates.length} section(s) will be dropped (threshold ${opts.dropThreshold})\n` +
+      `Apply with:    vp-dev agents audit-lessons ${agentId} --confirm ${token}\n`,
+  );
 }
 
 interface AgentsAssessClaudeMdOpts {

@@ -603,3 +603,461 @@ test("formatTightenProposal: omits diff entirely when no opts arg provided (back
   assert.doesNotMatch(out, /diff:/);
   assert.match(out, /\[s0\] 0\.20KB saved/);
 });
+
+// ---------------------------------------------------------------------------
+// Phase B0 (issue #173) tests: STUDY_PENDING const, the offset-aware parser,
+// the body-only splicer, and the applyTighten mechanism (drift rejections +
+// hard-reject validator + sentinel-preserving rewrite under the file lock).
+// applyTighten is exercised end-to-end against a tmp agents-root, mirroring
+// the compact test harness (write the file at the path AGENTS_ROOT already
+// points to; agents/ is gitignored, so it's safe).
+// ---------------------------------------------------------------------------
+
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import {
+  STUDY_PENDING,
+  applyTighten,
+  parseClaudeMdSectionsWithOffsets,
+  spliceTightenedSections,
+} from "./tightenClaudeMd.js";
+import { computeTightenHash } from "../state/tightenConfirm.js";
+import { agentClaudeMdPath } from "./specialization.js";
+
+function fakeMdContent(
+  sections: Array<{ run: string; issue: number; heading: string; body: string }>,
+): string {
+  // Match the on-disk shape `appendBlock` produces: one `\n` separating
+  // blocks, no leading whitespace before the first sentinel.
+  return (
+    sections
+      .map(
+        (s) =>
+          `<!-- run:${s.run} issue:#${s.issue} outcome:implement ts:2026-05-05T12:00:00.000Z -->\n## ${s.heading}\n\n${s.body}`,
+      )
+      .join("\n") + "\n"
+  );
+}
+
+async function withTempAgentDir(
+  fn: (agentId: string, filePath: string) => Promise<void>,
+): Promise<void> {
+  const agentId = `test-tighten-${Math.random().toString(16).slice(2, 10)}`;
+  const filePath = agentClaudeMdPath(agentId);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await fn(agentId, filePath);
+  } finally {
+    await fs.rm(path.dirname(filePath), { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function proposalOf(rewrites: SectionRewrite[]): TightenProposal {
+  return {
+    agentId: "agent-test",
+    rewrites,
+    unchangedSectionIds: [],
+    estimatedBytesSaved: rewrites.reduce((a, r) => a + r.estimatedBytesSaved, 0),
+    inputBytes: 0,
+    sectionCount: rewrites.length,
+    warnings: [],
+    maxSavingsPct: DEFAULT_MAX_SAVINGS_PCT,
+  };
+}
+
+test("STUDY_PENDING: default-true const gates the destructive trigger (#173 Phase B0)", () => {
+  // Documents the shipped default. The mechanism stays implemented + tested
+  // below regardless; only the CLI predicate is gated. Flipping this to
+  // false post-corpus opens the path with zero further code.
+  assert.equal(STUDY_PENDING, true);
+});
+
+test("parseClaudeMdSectionsWithOffsets: body offsets slice exactly the trimmed body", () => {
+  const md = fakeMdContent([
+    { run: "r-a", issue: 100, heading: "Rule A", body: "Body A, #162, 30KB." },
+    { run: "r-b", issue: 101, heading: "Rule B", body: "Body B, 2026-05-05." },
+  ]);
+  const secs = parseClaudeMdSectionsWithOffsets(md);
+  assert.equal(secs.length, 2);
+  for (const s of secs) {
+    assert.equal(md.slice(s.bodyStart, s.bodyEnd), s.body);
+    // Sentinel header sits inside [fileStart, bodyStart) and is preserved.
+    assert.match(md.slice(s.fileStart, s.bodyStart), /<!-- run:/);
+    assert.match(md.slice(s.fileStart, s.bodyStart), /## Rule [AB]/);
+  }
+  // The two sectionIds match parseClaudeMdSections numbering.
+  assert.deepEqual(
+    secs.map((s) => s.sectionId),
+    ["s0", "s1"],
+  );
+});
+
+test("spliceTightenedSections: substitutes only the body bytes, preserves sentinel verbatim", () => {
+  const md = fakeMdContent([
+    { run: "r-a", issue: 100, heading: "Rule A", body: "Verbose body A. #162. 30KB. 2026-05-05." },
+    { run: "r-b", issue: 101, heading: "Rule B", body: "Verbose body B." },
+  ]);
+  const secs = parseClaudeMdSectionsWithOffsets(md);
+  const out = spliceTightenedSections({
+    currentFile: md,
+    sections: secs,
+    rewrites: [
+      { sectionId: "s0", rewrittenBody: "Tight A. #162. 30KB. 2026-05-05.", estimatedBytesSaved: 8 },
+    ],
+  });
+  // Sentinel headers untouched.
+  assert.match(out, /<!-- run:r-a issue:#100 outcome:implement ts:2026-05-05T12:00:00.000Z -->/);
+  assert.match(out, /<!-- run:r-b issue:#101 outcome:implement ts:2026-05-05T12:00:00.000Z -->/);
+  // s0 body replaced; s1 body verbatim.
+  assert.match(out, /Tight A\. #162\. 30KB\. 2026-05-05\./);
+  assert.doesNotMatch(out, /Verbose body A\./);
+  assert.match(out, /Verbose body B\./);
+  // Re-parses cleanly into 2 sections with identical provenance.
+  const reparsed = parseClaudeMdSections(out);
+  assert.equal(reparsed.length, 2);
+  assert.equal(reparsed[0].runId, "r-a");
+  assert.equal(reparsed[0].issueId, 100);
+  assert.equal(reparsed[0].body, "Tight A. #162. 30KB. 2026-05-05.");
+  assert.equal(reparsed[1].body, "Verbose body B.");
+});
+
+test("applyTighten: rewrites file under lock, preserves sentinel, returns applied", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "Verbose body. #162. 30KB. 2026-05-05." },
+      { run: "r-b", issue: 101, heading: "Rule B", body: "Untouched body B." },
+    ]);
+    await fs.writeFile(filePath, md);
+
+    const rewrites: SectionRewrite[] = [
+      { sectionId: "s0", rewrittenBody: "Tight. #162. 30KB. 2026-05-05.", estimatedBytesSaved: 8 },
+    ];
+    const proposal = proposalOf(rewrites);
+    const expectedHash = computeTightenHash(rewrites, md);
+    const result = await applyTighten({
+      agentId,
+      proposal,
+      expectedTightenHash: expectedHash,
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "applied");
+    if (result.kind !== "applied") return;
+    assert.equal(result.rewritesApplied, 1);
+    assert.ok(result.bytesAfter < result.bytesBefore);
+
+    const after = await fs.readFile(filePath, "utf-8");
+    // Sentinel header preserved verbatim — provenance unchanged, no new
+    // merged sentinel minted.
+    assert.match(after, /<!-- run:r-a issue:#100 outcome:implement ts:2026-05-05T12:00:00.000Z -->/);
+    const reparsed = parseClaudeMdSections(after);
+    assert.equal(reparsed.length, 2);
+    assert.equal(reparsed[0].outcome, "implement");
+    assert.equal(reparsed[0].body, "Tight. #162. 30KB. 2026-05-05.");
+    assert.equal(reparsed[1].body, "Untouched body B.");
+  });
+});
+
+test("applyTighten: rejects with tighten-hash drift when file changed between plan and confirm", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const planMd = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "Verbose body. #162. 30KB." },
+    ]);
+    await fs.writeFile(filePath, planMd);
+
+    const rewrites: SectionRewrite[] = [
+      { sectionId: "s0", rewrittenBody: "Tight. #162. 30KB.", estimatedBytesSaved: 8 },
+    ];
+    const planHash = computeTightenHash(rewrites, planMd);
+
+    // File drifts after planning.
+    const driftMd = planMd + "\n<!-- run:r-b issue:#101 outcome:implement ts:2026-05-06T00:00:00.000Z -->\n## Rule B\n\nNew.\n";
+    await fs.writeFile(filePath, driftMd);
+
+    const result = await applyTighten({
+      agentId,
+      proposal: proposalOf(rewrites),
+      expectedTightenHash: planHash,
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "tighten-hash");
+    // File untouched on rejection.
+    assert.equal(await fs.readFile(filePath, "utf-8"), driftMd);
+  });
+});
+
+test("applyTighten: rejects when a rewrite drops a date (hard-reject validator)", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "Past incident 2026-05-05: thing." },
+    ]);
+    await fs.writeFile(filePath, md);
+    const rewrites: SectionRewrite[] = [
+      // Drops the 2026-05-05 date.
+      { sectionId: "s0", rewrittenBody: "Past incident: thing.", estimatedBytesSaved: 10 },
+    ];
+    const result = await applyTighten({
+      agentId,
+      proposal: proposalOf(rewrites),
+      expectedTightenHash: computeTightenHash(rewrites, md),
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "warnings-present");
+    assert.match(result.details, /dropped dates 2026-05-05/);
+    assert.equal(await fs.readFile(filePath, "utf-8"), md, "file untouched on reject");
+  });
+});
+
+test("applyTighten: rejects when a rewrite drops a cross-reference", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "See #162 for the prior fix." },
+    ]);
+    await fs.writeFile(filePath, md);
+    const rewrites: SectionRewrite[] = [
+      { sectionId: "s0", rewrittenBody: "See the prior fix.", estimatedBytesSaved: 6 },
+    ];
+    const result = await applyTighten({
+      agentId,
+      proposal: proposalOf(rewrites),
+      expectedTightenHash: computeTightenHash(rewrites, md),
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "warnings-present");
+    assert.match(result.details, /dropped refs #162/);
+  });
+});
+
+test("applyTighten: rejects when a rewrite drops a numeric threshold", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "Cap CLAUDE.md at 30KB before splitting." },
+    ]);
+    await fs.writeFile(filePath, md);
+    const rewrites: SectionRewrite[] = [
+      { sectionId: "s0", rewrittenBody: "Cap CLAUDE.md before splitting.", estimatedBytesSaved: 5 },
+    ];
+    const result = await applyTighten({
+      agentId,
+      proposal: proposalOf(rewrites),
+      expectedTightenHash: computeTightenHash(rewrites, md),
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "warnings-present");
+    assert.match(result.details, /dropped numerics 30kb/);
+  });
+});
+
+test("applyTighten: excessive-savings (advisory) is NOT a hard reject", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    // Body has no invariants to drop; the rewrite shrinks it >40% (the
+    // soft cap), producing an excessive-savings warning that must NOT block
+    // apply — only date/xref/numeric drops do.
+    const md = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "This is a fairly long verbose body with much filler prose to cut." },
+    ]);
+    await fs.writeFile(filePath, md);
+    const rewrites: SectionRewrite[] = [
+      { sectionId: "s0", rewrittenBody: "Short.", estimatedBytesSaved: 56 },
+    ];
+    const result = await applyTighten({
+      agentId,
+      proposal: proposalOf(rewrites),
+      expectedTightenHash: computeTightenHash(rewrites, md),
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "applied", "excessive-savings is advisory; apply proceeds");
+  });
+});
+
+test("applyTighten: empty rewrites -> no-rewrites rejection (no file touch)", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "Body." },
+    ]);
+    await fs.writeFile(filePath, md);
+    const result = await applyTighten({
+      agentId,
+      proposal: proposalOf([]),
+      expectedTightenHash: "deadbeef",
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "no-rewrites");
+    assert.equal(await fs.readFile(filePath, "utf-8"), md);
+  });
+});
+
+test("applyTighten: rejects when a rewrite references a sectionId not in the live parse", async () => {
+  await withTempAgentDir(async (agentId, filePath) => {
+    const md = fakeMdContent([
+      { run: "r-a", issue: 100, heading: "Rule A", body: "Body A." },
+    ]);
+    await fs.writeFile(filePath, md);
+    const rewrites: SectionRewrite[] = [
+      { sectionId: "s5", rewrittenBody: "Tight.", estimatedBytesSaved: 2 },
+    ];
+    const result = await applyTighten({
+      agentId,
+      proposal: proposalOf(rewrites),
+      expectedTightenHash: computeTightenHash(rewrites, md),
+      computeTightenHash,
+    });
+    assert.equal(result.kind, "drift-rejected");
+    if (result.kind !== "drift-rejected") return;
+    assert.equal(result.reason, "missing-section");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STUDY_PENDING CLI gate (#173 Phase B0). Spawns the built CLI against a
+// throwaway cwd (registry + agent CLAUDE.md fixture) so the full handler —
+// including its process.exit refusal — is exercised. dist/bin/vp-dev.js
+// exists because `npm test` runs `tsc` before node --test. Both --apply and
+// --confirm must refuse + mutate nothing while STUDY_PENDING is true.
+// ---------------------------------------------------------------------------
+
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import os from "node:os";
+
+const execFile = promisify(execFileCb);
+
+// dist/bin/vp-dev.js relative to this compiled test (dist/src/agent/*.js).
+const CLI_JS = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  "../../bin/vp-dev.js",
+);
+
+async function withCliFixture(
+  fn: (dir: string, agentId: string) => Promise<void>,
+): Promise<void> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tighten-cli-"));
+  const agentId = "agent-cli";
+  await fs.mkdir(path.join(dir, "state"), { recursive: true });
+  await fs.mkdir(path.join(dir, "agents", agentId), { recursive: true });
+  const now = new Date().toISOString();
+  const registry = {
+    agents: [
+      {
+        agentId,
+        createdAt: now,
+        tags: ["t"],
+        issuesHandled: 1,
+        implementCount: 1,
+        pushbackCount: 0,
+        errorCount: 0,
+        lastActiveAt: now,
+      },
+    ],
+  };
+  await fs.writeFile(
+    path.join(dir, "state", "agents-registry.json"),
+    JSON.stringify(registry),
+  );
+  // Sectionless CLAUDE.md: no `<!-- run: -->` sentinels means proposeTighten
+  // short-circuits (`sections.length === 0`) with zero LLM calls, so the
+  // STUDY_PENDING --apply gate test stays deterministic + offline.
+  await fs.writeFile(
+    path.join(dir, "agents", agentId, "CLAUDE.md"),
+    "# Seed CLAUDE.md\n\nNo attributable sections — proposeTighten short-circuits.\n",
+  );
+  try {
+    await fn(dir, agentId);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+type ExecErr = Error & { code?: number; stdout?: string; stderr?: string };
+
+// The handler prints a `Generating tighten proposal...` preamble to stdout
+// before the JSON object; extract the JSON starting at the first `{`.
+function parseJsonTail(stdout: string): unknown {
+  const i = stdout.indexOf("{");
+  assert.ok(i >= 0, `expected a JSON object in stdout: ${stdout}`);
+  return JSON.parse(stdout.slice(i));
+}
+
+test("STUDY_PENDING CLI gate: --apply refuses, exits 2, mints no token", async () => {
+  await withCliFixture(async (dir, agentId) => {
+    let err: ExecErr | undefined;
+    let stdout = "";
+    try {
+      const r = await execFile(
+        process.execPath,
+        [CLI_JS, "agents", "tighten-claude-md", agentId, "--apply", "--json"],
+        { cwd: dir },
+      );
+      stdout = r.stdout;
+    } catch (e) {
+      err = e as ExecErr;
+      stdout = err.stdout ?? "";
+    }
+    // Non-zero exit (process.exit(2)).
+    assert.ok(err, "--apply must exit non-zero while STUDY_PENDING");
+    assert.equal(err?.code, 2);
+    // JSON refusal marker.
+    const parsed = parseJsonTail(stdout) as { applyRefused?: string };
+    assert.equal(parsed.applyRefused, "study-pending");
+    // No token file minted.
+    const stateFiles = await fs.readdir(path.join(dir, "state"));
+    assert.ok(
+      !stateFiles.some((f) => f.startsWith("tighten-confirm-")),
+      `no tighten-confirm token should be minted; found: ${stateFiles.join(",")}`,
+    );
+  });
+});
+
+test("STUDY_PENDING CLI gate: --confirm refuses, exits 2, mutates nothing (hand-crafted token)", async () => {
+  await withCliFixture(async (dir, agentId) => {
+    const mdPath = path.join(dir, "agents", agentId, "CLAUDE.md");
+    const before = await fs.readFile(mdPath, "utf-8");
+    let err: ExecErr | undefined;
+    let stdout = "";
+    try {
+      const r = await execFile(
+        process.execPath,
+        [CLI_JS, "agents", "tighten-claude-md", agentId, "--confirm", "deadbeefcafe", "--json"],
+        { cwd: dir },
+      );
+      stdout = r.stdout;
+    } catch (e) {
+      err = e as ExecErr;
+      stdout = err.stdout ?? "";
+    }
+    assert.ok(err, "--confirm must exit non-zero while STUDY_PENDING");
+    assert.equal(err?.code, 2);
+    const parsed = parseJsonTail(stdout) as { confirmRefused?: string };
+    assert.equal(parsed.confirmRefused, "study-pending");
+    // File untouched — defense in depth: a hand-crafted token must not
+    // trigger a mutation while the gate is closed.
+    assert.equal(await fs.readFile(mdPath, "utf-8"), before);
+  });
+});
+
+test("tighten CLI: --apply and --confirm are mutually exclusive", async () => {
+  await withCliFixture(async (dir, agentId) => {
+    let err: ExecErr | undefined;
+    try {
+      await execFile(
+        process.execPath,
+        [CLI_JS, "agents", "tighten-claude-md", agentId, "--apply", "--confirm", "abc123"],
+        { cwd: dir },
+      );
+    } catch (e) {
+      err = e as ExecErr;
+    }
+    assert.ok(err);
+    assert.equal(err?.code, 2);
+    assert.match(err?.stderr ?? "", /mutually exclusive/);
+  });
+});

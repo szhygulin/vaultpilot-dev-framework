@@ -17,13 +17,32 @@
 //
 // Usage: `vp-dev agents tighten-claude-md <agentId> [--json] [--max-savings-pct N]`.
 
+import { promises as fs } from "node:fs";
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeBinPath } from "./sdkBinary.js";
 import { parseClaudeMdSections, type ParsedSection } from "./split.js";
+import { agentClaudeMdPath } from "./specialization.js";
+import { withFileLock } from "../state/locks.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { ORCHESTRATOR_MODEL_SPLIT } from "../orchestrator/models.js";
 import type { AgentRecord } from "../types.js";
+
+// ---------------------------------------------------------------------------
+// Phase B0 (issue #173) — STUDY_PENDING gate.
+//
+// The destructive --apply/--confirm CLI path is gated behind this flag while
+// the bake-window corpus for #173 is not yet available: the framework has not
+// run since 2026-05-09, so no Phase-A tightening-proposal corpus exists to
+// calibrate the validator categories against. Flip to `false` once Phase-A
+// tightening proposals have accumulated AND the validator categories
+// (dropped date / cross-reference / numeric threshold) are calibrated against
+// the observed corpus. With STUDY_PENDING=true the CLI predicate refuses
+// before any mutation (defense in depth: both --apply and --confirm refuse);
+// the applyTighten() mechanism itself stays fully implemented + tested, so
+// flipping the flag enables the path with zero further code.
+// ---------------------------------------------------------------------------
+export const STUDY_PENDING = true;
 
 // Shares compact's tier (opus) — both are full-CLAUDE.md → structured
 // proposal calls and rewrite quality matters more than per-call cost. Env
@@ -641,4 +660,264 @@ export function formatTightenProposal(
     );
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Phase B0 (issue #173): destructive applyTighten mechanism.
+//
+// Mirrors `applyCompaction` (#162) but for intra-section prose tightening:
+// each rewrite replaces ONLY the body bytes of its source section. Unlike
+// compact's splicer — which merges N sections into one block under a freshly
+// minted compound sentinel — tighten PRESERVES the section's sentinel header
+// verbatim (run/issue/outcome/ts unchanged). Tightening edits prose within a
+// single coherent lesson; the provenance is the same lesson, so we must not
+// mint a new merged sentinel.
+//
+// The mechanism is fully implemented + tested here. The destructive trigger
+// is gated at the CLI layer behind `STUDY_PENDING` (see the const above);
+// callers that bypass the CLI (tests) drive applyTighten() directly.
+// ---------------------------------------------------------------------------
+
+// Validator categories that are HARD REJECTIONS at apply time (per #173):
+// a rewrite that drops any date / cross-reference / numeric threshold is
+// refused before the rewrite. `excessive-savings` is advisory-only (a soft
+// cap surfaced as a warning) and is NOT a reject here. This category set is
+// the issue-body default; it is TO BE CALIBRATED against the bake-window
+// corpus once it exists (the same corpus that gates STUDY_PENDING).
+const HARD_REJECT_WARNING_KINDS: ReadonlySet<TightenWarning["kind"]> = new Set([
+  "dropped-incident-date",
+  "dropped-cross-reference",
+  "dropped-numeric-threshold",
+]);
+
+export interface ApplyTightenInput {
+  agentId: string;
+  /** Proposal recorded in the confirm token at plan time. */
+  proposal: TightenProposal;
+  /** Hash recorded in the confirm token: sha256(JSON.stringify(rewrites) + sha256(file@plan)). */
+  expectedTightenHash: string;
+  /** Compute tightenHash from the live file (injected to avoid a cyclical import). */
+  computeTightenHash: (rewrites: SectionRewrite[], file: string) => string;
+}
+
+export type ApplyTightenResult =
+  | {
+      kind: "applied";
+      bytesBefore: number;
+      bytesAfter: number;
+      rewritesApplied: number;
+    }
+  | {
+      kind: "drift-rejected";
+      reason:
+        | "tighten-hash"
+        | "missing-section"
+        | "warnings-present"
+        | "no-rewrites"
+        | "missing-file";
+      details: string;
+    };
+
+/**
+ * Apply a Phase A tighten proposal to the agent's CLAUDE.md.
+ *
+ * Steps (all under `withFileLock(filePath)` so the read/validate/splice/
+ * rename sequence is atomic against `appendBlock` / `expireSentinels`):
+ *
+ *  1. Re-read the file. Reject if the tightenHash recomputed against the
+ *     current bytes doesn't match the stored hash (file drifted between
+ *     plan and confirm — re-propose required).
+ *  2. Re-parse sections. Reject if any rewrite references a sectionId that
+ *     no longer exists.
+ *  3. Re-run the dropped-invariant validators against the live parse. Phase
+ *     A treats them as advisory; Phase B0 treats dropped date / xref /
+ *     numeric as a hard rejection. (excessive-savings stays advisory.)
+ *  4. Splice the file: keep the prelude + every section's sentinel header
+ *     verbatim; for sections with a rewrite, substitute only the body bytes;
+ *     emit via tmp + atomic rename (same write pattern as `appendBlock`).
+ */
+export async function applyTighten(
+  input: ApplyTightenInput,
+): Promise<ApplyTightenResult> {
+  if (input.proposal.rewrites.length === 0) {
+    return {
+      kind: "drift-rejected",
+      reason: "no-rewrites",
+      details: "Proposal has zero rewrites; nothing to apply.",
+    };
+  }
+  const filePath = agentClaudeMdPath(input.agentId);
+  return withFileLock(filePath, async () => {
+    let currentFile: string;
+    try {
+      currentFile = await fs.readFile(filePath, "utf-8");
+    } catch {
+      return {
+        kind: "drift-rejected",
+        reason: "missing-file",
+        details: `agents/${input.agentId}/CLAUDE.md no longer exists; nothing to tighten.`,
+      };
+    }
+
+    const computedHash = input.computeTightenHash(
+      input.proposal.rewrites,
+      currentFile,
+    );
+    if (computedHash !== input.expectedTightenHash) {
+      return {
+        kind: "drift-rejected",
+        reason: "tighten-hash",
+        details:
+          "CLAUDE.md content changed between --apply and --confirm. Re-run --apply to generate a fresh proposal + token.",
+      };
+    }
+
+    const sections = parseClaudeMdSectionsWithOffsets(currentFile);
+    const sectionById = new Map(sections.map((s) => [s.sectionId, s]));
+    for (const r of input.proposal.rewrites) {
+      if (!sectionById.has(r.sectionId)) {
+        return {
+          kind: "drift-rejected",
+          reason: "missing-section",
+          details: `Rewrite references sectionId ${r.sectionId} which is not present in the current parse.`,
+        };
+      }
+    }
+
+    const warnings = findDroppedInvariants({
+      rewrites: input.proposal.rewrites,
+      sections,
+      maxSavingsPct: input.proposal.maxSavingsPct,
+    }).filter((w) => HARD_REJECT_WARNING_KINDS.has(w.kind));
+    if (warnings.length > 0) {
+      const summary = warnings
+        .map((w) => {
+          if (w.kind === "dropped-incident-date") {
+            return `[${w.sectionId}] dropped dates ${w.missingDates.join(",")}`;
+          }
+          if (w.kind === "dropped-cross-reference") {
+            return `[${w.sectionId}] dropped refs ${w.missingRefs.join(",")}`;
+          }
+          if (w.kind === "dropped-numeric-threshold") {
+            return `[${w.sectionId}] dropped numerics ${w.missingNumerics.join(",")}`;
+          }
+          return `[${w.sectionId}] ${w.kind}`;
+        })
+        .join("; ");
+      return {
+        kind: "drift-rejected",
+        reason: "warnings-present",
+        details: `Tighten validator flagged the proposal at apply time: ${summary}. Re-run --apply.`,
+      };
+    }
+
+    const rewritten = spliceTightenedSections({
+      currentFile,
+      sections,
+      rewrites: input.proposal.rewrites,
+    });
+
+    const tmp = `${filePath}.tmp.${process.pid}`;
+    await fs.writeFile(tmp, rewritten);
+    await fs.rename(tmp, filePath);
+
+    return {
+      kind: "applied",
+      bytesBefore: Buffer.byteLength(currentFile, "utf-8"),
+      bytesAfter: Buffer.byteLength(rewritten, "utf-8"),
+      rewritesApplied: input.proposal.rewrites.length,
+    };
+  });
+}
+
+// Position-aware section parser used by Phase B0's splicer. Same regex as
+// `parseClaudeMdSections` (kept in sync with split.ts's `SECTION_RE`) but
+// captures the sentinel/heading/body offsets too. The sectionId numbering
+// matches what `parseClaudeMdSections` produces, so `rewrite.sectionId`
+// (numbered against split.ts's parse) lines up with the offsets here.
+interface SectionWithOffset extends ParsedSection {
+  /** Char offset of the first char of `<!--` in the section's sentinel. */
+  fileStart: number;
+  /** Char offset just past the section's body (lookahead position). */
+  fileEnd: number;
+  /** Char offset of the first char of the body (just after `## heading\n`). */
+  bodyStart: number;
+  /** Char offset just past the trimmed body content within the match. */
+  bodyEnd: number;
+}
+
+const SECTION_RE_WITH_OFFSETS =
+  /<!--\s*run:(\S+)\s+issue:#(\d+(?:\+#\d+)*)\s+outcome:(\S+)\s+ts:\S+(?:\s+tags:\S+)?\s*-->\s*\n##\s+(.+?)\n([\s\S]*?)(?=\n<!--\s*run:|$)/g;
+
+export function parseClaudeMdSectionsWithOffsets(md: string): SectionWithOffset[] {
+  const out: SectionWithOffset[] = [];
+  let i = 0;
+  for (const m of md.matchAll(SECTION_RE_WITH_OFFSETS)) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    const rawBody = m[5];
+    // The body capture (group 5) may carry leading/trailing whitespace that
+    // `ParsedSection.body` trims. Locate the trimmed content's offsets inside
+    // the raw capture so the splicer replaces exactly the body bytes and
+    // preserves the surrounding whitespace (blank line after the heading,
+    // trailing newline before the next sentinel) verbatim.
+    const rawBodyStart = end - rawBody.length;
+    const leading = rawBody.length - rawBody.trimStart().length;
+    const trailing = rawBody.length - rawBody.trimEnd().length;
+    const bodyStart = rawBodyStart + leading;
+    const bodyEnd = end - trailing;
+    const issueIds = m[2]
+      .split("+")
+      .map((tok) => Number(tok.replace(/^#/, "")));
+    const section: SectionWithOffset = {
+      sectionId: `s${i++}`,
+      runId: m[1],
+      issueId: issueIds[0],
+      outcome: m[3],
+      heading: m[4].trim(),
+      body: rawBody.trim(),
+      fileStart: start,
+      fileEnd: end,
+      bodyStart,
+      bodyEnd,
+    };
+    if (issueIds.length > 1) section.issueIds = issueIds;
+    out.push(section);
+  }
+  return out;
+}
+
+interface TightenSpliceInput {
+  currentFile: string;
+  sections: SectionWithOffset[];
+  rewrites: SectionRewrite[];
+}
+
+/**
+ * Walk the file once, substituting only the body bytes of sections that have
+ * a rewrite. Everything else — the prelude, each sentinel header, each
+ * heading, the inter-block whitespace, the trailing newline — is copied
+ * verbatim from `currentFile`. The sentinel header is therefore preserved
+ * exactly (tighten keeps provenance; no new sentinel is minted).
+ */
+export function spliceTightenedSections(input: TightenSpliceInput): string {
+  const rewriteById = new Map(input.rewrites.map((r) => [r.sectionId, r]));
+  // Splice from the end backwards would also work; here we walk forward and
+  // copy ranges. Sections are non-overlapping and in file order.
+  let out = "";
+  let cursor = 0;
+  for (const sec of input.sections) {
+    const r = rewriteById.get(sec.sectionId);
+    if (!r) continue; // untouched section — bytes are copied as part of the next/final span
+    // Copy everything from the cursor up to this section's body start
+    // (sentinel + heading + leading whitespace), then the rewritten body,
+    // then advance the cursor past the original body.
+    out += input.currentFile.slice(cursor, sec.bodyStart);
+    out += r.rewrittenBody;
+    cursor = sec.bodyEnd;
+  }
+  // Copy the remainder (trailing content after the last rewritten body, or
+  // the whole file if no rewrite matched any section).
+  out += input.currentFile.slice(cursor);
+  return out;
 }

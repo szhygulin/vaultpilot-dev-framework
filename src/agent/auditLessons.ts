@@ -1,5 +1,5 @@
 // Per-section intrinsic-quality audit of an agent's CLAUDE.md (Phase 1
-// advisory; destructive Phase 2 deferred to a follow-up issue).
+// advisory; Phase 2 destructive apply path in issue #197).
 //
 // Walks the agent's CLAUDE.md section-by-section. ONE LLM call per section
 // (not batched) — that's what honors the "in vacuum" constraint. If the
@@ -13,9 +13,20 @@
 // The 0.0–1.0 scale is shared with summarizer.ts's write-time
 // predictedUtility (via `src/util/utilityCalibration.ts`) so audit-time
 // scores remain comparable to write-time scores.
+//
+// Two-step destructive apply path (Phase 2, issue #197):
+//   vp-dev agents audit-lessons <agentId> --apply       # re-runs scoring, mints token
+//   vp-dev agents audit-lessons <agentId> --confirm <T> # rewrites under lock
+// The token binds auditHash = sha256(JSON.stringify(scores) + sha256(file))
+// so any drift in the file between --apply and --confirm rejects the confirm.
+// Sections with verdict === "drop" (intrinsicUtility < dropThreshold) are
+// removed via dropSentinelsByStableId. Trust the stored scores at confirm
+// time — no re-scoring, which would double cost and the hash-drift guard
+// already rejects stale file edits.
 
 import { z } from "zod";
 import { promises as fs } from "node:fs";
+import crypto from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeBinPath } from "./sdkBinary.js";
 import { agentClaudeMdPath } from "./specialization.js";
@@ -23,6 +34,12 @@ import { parseClaudeMdSections, type ParsedSection } from "./split.js";
 import { parseJsonEnvelope } from "../util/parseJsonEnvelope.js";
 import { ORCHESTRATOR_MODEL_SUMMARIZER } from "../orchestrator/models.js";
 import { UTILITY_CALIBRATION_ANCHOR } from "../util/utilityCalibration.js";
+import { withFileLock } from "../state/locks.js";
+import {
+  dropSentinelsByStableId,
+  type SentinelHeader,
+} from "../util/sentinels.js";
+import { deriveStableSectionId } from "../state/lessonUtility.js";
 
 export const AUDIT_MODEL = ORCHESTRATOR_MODEL_SUMMARIZER;
 
@@ -33,6 +50,9 @@ export const VERDICT_THRESHOLDS = {
   drop: 0.3, // < drop = "drop"
   keep: 0.6, // >= keep = "keep"; in between = "weak-keep"
 } as const;
+
+/** Default utility threshold below which sections are dropped on --apply. Matches VERDICT_THRESHOLDS.drop. */
+export const DEFAULT_DROP_THRESHOLD = VERDICT_THRESHOLDS.drop;
 
 export type AuditVerdict = "keep" | "weak-keep" | "drop";
 
@@ -238,6 +258,134 @@ export function formatAuditProposal(p: AuditProposal): string {
     lines.push(`    rationale: ${s.rationale}`);
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------
+// Two-step destructive apply path (Phase 2, issue #197)
+// ---------------------------------------------------------------------
+
+export function hashAuditFile(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * auditHash = sha256(JSON.stringify(scores) + sha256(currentFile))
+ * Stable across plan/confirm so long as the scores array and the file bytes
+ * don't change. Same recipe shape as compactConfirm.computeProposalHash.
+ */
+export function computeAuditHash(scores: AuditScore[], currentFile: string): string {
+  const fileHash = hashAuditFile(currentFile);
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(scores))
+    .update(fileHash)
+    .digest("hex");
+}
+
+export interface ApplyAuditInput {
+  agentId: string;
+  /** Scores from Phase A (stored in the token — NOT re-run at confirm time). */
+  scores: AuditScore[];
+  /** auditHash bound into the token at --apply time. */
+  expectedAuditHash: string;
+  /** Sections with intrinsicUtility < dropThreshold are dropped. Default: VERDICT_THRESHOLDS.drop. */
+  dropThreshold?: number;
+  /** Override file path for tests; defaults to agentClaudeMdPath. */
+  claudeMdPathOverride?: string;
+}
+
+export type ApplyAuditResult =
+  | {
+      kind: "applied";
+      bytesBefore: number;
+      bytesAfter: number;
+      sectionsDropped: number;
+      droppedHeaders: SentinelHeader[];
+    }
+  | {
+      kind: "drift-rejected";
+      reason: "audit-hash" | "missing-file" | "no-sections" | "no-match";
+      details: string;
+    };
+
+/**
+ * Destructive apply path. All checks and the rewrite happen under withFileLock.
+ * Drops sections whose intrinsicUtility < dropThreshold by reusing
+ * dropSentinelsByStableId from src/util/sentinels.ts (same mechanism as
+ * prune-lessons's applyLessonPrune).
+ */
+export async function applyAudit(input: ApplyAuditInput): Promise<ApplyAuditResult> {
+  const threshold = input.dropThreshold ?? DEFAULT_DROP_THRESHOLD;
+  const toDrop = input.scores.filter((s) => s.intrinsicUtility < threshold);
+  if (toDrop.length === 0) {
+    return {
+      kind: "drift-rejected",
+      reason: "no-sections",
+      details: `No scores below drop threshold ${threshold}; nothing to apply.`,
+    };
+  }
+  const filePath = input.claudeMdPathOverride ?? agentClaudeMdPath(input.agentId);
+  return withFileLock(filePath, async () => {
+    let current: string;
+    try {
+      current = await fs.readFile(filePath, "utf-8");
+    } catch {
+      return {
+        kind: "drift-rejected",
+        reason: "missing-file",
+        details: `agents/${input.agentId}/CLAUDE.md no longer exists; nothing to audit-drop.`,
+      };
+    }
+    const computed = computeAuditHash(input.scores, current);
+    if (computed !== input.expectedAuditHash) {
+      return {
+        kind: "drift-rejected",
+        reason: "audit-hash",
+        details:
+          "CLAUDE.md content changed between --apply and --confirm. Re-run --apply to generate a fresh audit + token.",
+      };
+    }
+    // Build the drop set of stable IDs from the score's runId/issueId fields.
+    // Sections without a runId or issueId cannot be matched by stable ID — they
+    // were already filtered by proposeAudit's parseClaudeMdSections call, but
+    // guard defensively.
+    const dropSet = new Set<string>();
+    for (const s of toDrop) {
+      if (s.runId && s.issueId !== undefined) {
+        dropSet.add(deriveStableSectionId(s.runId, [s.issueId]));
+      }
+    }
+    if (dropSet.size === 0) {
+      return {
+        kind: "drift-rejected",
+        reason: "no-match",
+        details:
+          "No drop candidates had a resolvable runId/issueId. The file may have been rewritten; re-run --apply.",
+      };
+    }
+    const result = dropSentinelsByStableId(current, dropSet, (header) => {
+      const ids = header.issueIds ?? [header.issueId];
+      return deriveStableSectionId(header.runId, ids);
+    });
+    if (result.droppedHeaders.length === 0) {
+      return {
+        kind: "drift-rejected",
+        reason: "no-match",
+        details:
+          "No sentinel matched any stable ID in the drop set. The file may have been pruned out-of-band; re-run --apply.",
+      };
+    }
+    const tmp = `${filePath}.tmp.${process.pid}`;
+    await fs.writeFile(tmp, result.content);
+    await fs.rename(tmp, filePath);
+    return {
+      kind: "applied",
+      bytesBefore: Buffer.byteLength(current, "utf-8"),
+      bytesAfter: Buffer.byteLength(result.content, "utf-8"),
+      sectionsDropped: result.droppedHeaders.length,
+      droppedHeaders: result.droppedHeaders,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------
